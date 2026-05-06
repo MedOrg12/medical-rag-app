@@ -1,70 +1,17 @@
-# Python
+.git/
+.rag/
+.venv/
+venv/
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+build/
 *.egg-info/
-dist/
-build/
-*.egg
-venv/
-env/
-ENV/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Git
-.git/
-.gitignore
-.gitattributes
-
-# Docker
-.dockerignore
-Dockerfile
-docker-compose.yml
-
-# Build artifacts
-dist/
-build/
-*.spec
-
-# Logs
 logs/
 *.log
-
-# Environment
 .env
-.env.local
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
-# Documentation (already in image if needed)
-*.md
-docs/
-
-# CI/CD
-.github/
-
-# OS
 .DS_Store
-Thumbs.db
-
-# Application data (mounted as volumes)
-vector_db/
-data/
-
-# PyInstaller
-build_macos.spec
-build_windows.spec
-macos_launcher.py
-windows_launcher.py
+old_code/

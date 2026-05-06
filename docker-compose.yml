@@ -1,112 +1,45 @@
 services:
-  # Ollama Service - LLM inference engine
-  ollama:
-    image: ollama/ollama:latest
-    container_name: medical-rag-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      # Persistent volume for AI models (large files)
-      - ollama_data:/root/.ollama
-    environment:
-      - OLLAMA_HOST=0.0.0.0:11434
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 15s
-    # No resource limits - Ollama uses everything Docker Desktop has been
-    # given (Settings > Resources). Inference is the bottleneck, so let it
-    # take whatever it can.
-    #
-    # GPU support (NVIDIA + NVIDIA Container Runtime): add a deploy block:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
-
-  # Medical RAG Application
   medical-rag:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: medical-rag-app
+    container_name: stroke-medical-rag
     ports:
       - "8000:8000"
-    depends_on:
-      ollama:
-        condition: service_healthy
     volumes:
-      # Bind mount for PDFs - allows adding new PDFs without rebuilding.
-      # ':cached' tells Docker Desktop on macOS the host is authoritative,
-      # dramatically speeding up directory scans (no effect on Win/Linux).
       - ./pdfs:/app/pdfs:cached
-      # Bind mount for logs - view logs from host
-      - ./logs:/app/logs:cached
-      # Named volume for ChromaDB vector database - persists between restarts
-      - vector_db:/app/vector_db
-      # Named volume for embeddings cache
-      - data_cache:/app/data
+      - rag_index:/app/.rag
     environment:
-      # Ollama Configuration
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - OLLAMA_MODEL=deepseek-r1:1.5b
-      - OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-
-      # Application Configuration
-      - DOCKER_CONTAINER=true
-      - PYTHONUNBUFFERED=1
-
-      # Vector Database Configuration
-      - VECTOR_DB_PATH=/app/vector_db
-      - VECTOR_DB_TYPE=chroma
-
-      # Paths Configuration
-      - PDF_FOLDER=/app/pdfs
-      - DATA_FOLDER=/app/data
-
-      # Chunking Configuration
-      - CHUNK_SIZE=1000
-      - CHUNK_OVERLAP=200
-
-      # Ingestion Configuration
-      - AUTO_INGEST_ON_STARTUP=true
-      - BATCH_SIZE=10
-
-      # Retrieval Configuration
-      - TOP_K=5
-      - SIMILARITY_THRESHOLD=0.7
-
+      RAG_CORPUS_DIR: /app/pdfs
+      RAG_INDEX_PATH: /app/.rag/index.json
+      RAG_AUTO_INGEST_ON_STARTUP: "true"
+      RAG_EMBEDDING_BACKEND: ${RAG_EMBEDDING_BACKEND:-hash}
+      RAG_GENERATION_BACKEND: ${RAG_GENERATION_BACKEND:-extractive}
+      RAG_OLLAMA_BASE_URL: http://ollama:11434
+      RAG_OLLAMA_EMBEDDING_MODEL: ${RAG_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      RAG_OLLAMA_GENERATION_MODEL: ${RAG_OLLAMA_GENERATION_MODEL:-llama3.1}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s  # Longer start period for model downloads and ingestion
+      start_period: 60s
 
-    # No resource limits - the app uses whatever Docker Desktop allows.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: stroke-medical-rag-ollama
+    profiles:
+      - ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    restart: unless-stopped
 
-# Named volumes for data persistence
 volumes:
-  # Ollama models (4-5 GB per model)
+  rag_index:
   ollama_data:
-    driver: local
-
-  # ChromaDB vector database
-  vector_db:
-    driver: local
-
-  # Embeddings and other cached data
-  data_cache:
-    driver: local
-
-# Networks (optional - using default bridge network)
-networks:
-  default:
-    name: medical-rag-network

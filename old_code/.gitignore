@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+venv/
+env/
+ENV/
+
+# Vector Database
+vector_db/
+
+# Data
+data/
+*.jsonl
+*.json
+parsed_documents.json
+
+# Logs
+logs/
+*.log
+
+# PDFs (optional - uncomment to ignore PDFs)
+# pdfs/*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+
+# Model files (if exporting fine-tuned models)
+*.gguf
+*.bin
+*.safetensors
+outputs/
+
+# Temporary files
+*.tmp
+temp/
+.cache/

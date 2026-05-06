@@ -1,0 +1,41 @@
+# Core dependencies
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.0.0
+
+# PDF Processing
+pymupdf4llm>=0.0.5
+pymupdf>=1.23.0
+
+# Vector Database
+chromadb>=0.4.0
+
+# Ollama integration
+ollama>=0.1.0
+httpx>=0.26.0
+
+# Utilities
+tqdm>=4.66.0
+python-json-logger>=2.0.0
+tiktoken>=0.5.0
+tenacity>=8.2.0
+
+# Web UI
+fastapi[all]>=0.104.0
+python-multipart>=0.0.6
+slowapi>=0.1.9
+
+# Development Tools
+black>=23.0.0
+ruff>=0.1.0
+mypy>=1.7.0
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Optional: Fine-tuning (uncomment if using)
+# unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git
+# torch>=2.1.0
+# transformers>=4.36.0
+# datasets>=2.16.0
+# peft>=0.7.0
+# accelerate>=0.25.0
