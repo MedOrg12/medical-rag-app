@@ -47,7 +47,7 @@ def _load_pdf(path: Path) -> list[PageText]:
     with fitz.open(path) as document:
         title = (document.metadata or {}).get("title") or path.stem
         for page_index, page in enumerate(document, start=1):
-            text = page.get_text("text").strip()
+            text = _extract_page_text(page).strip()
             if not text:
                 continue
             pages.append(
@@ -80,3 +80,10 @@ def _load_text_file(path: Path) -> list[PageText]:
 
 def _source_id(path: Path) -> str:
     return path.name
+
+
+def _extract_page_text(page) -> str:
+    try:
+        return page.get_text("text", sort=True)
+    except TypeError:
+        return page.get_text("text")
