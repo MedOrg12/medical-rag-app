@@ -81,6 +81,7 @@ class Settings:
     ollama_generation_model: str = "llama3.1"
     temperature: float = 0.1
     request_timeout_seconds: float = 20.0
+    embedding_cache_path: Path | None = None
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> "Settings":
@@ -111,6 +112,9 @@ class Settings:
             ),
             temperature=_env_float_compat(0.1, "RAG_TEMPERATURE", "TEMPERATURE"),
             request_timeout_seconds=_env_float("RAG_REQUEST_TIMEOUT_SECONDS", 20.0),
+            embedding_cache_path=_resolve_path(
+                root, os.getenv("RAG_EMBEDDING_CACHE_PATH", ".rag/embedding_cache.json")
+            ) if os.getenv("RAG_EMBEDDING_CACHE_PATH", ".rag/embedding_cache.json") else None,
         )
 
     def with_paths(
@@ -131,4 +135,5 @@ class Settings:
             ollama_generation_model=self.ollama_generation_model,
             temperature=self.temperature,
             request_timeout_seconds=self.request_timeout_seconds,
+            embedding_cache_path=self.embedding_cache_path,
         )

@@ -7,7 +7,8 @@ import re
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from medical_rag.config import Settings
 
@@ -15,7 +16,10 @@ _TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_+-]*|\d+(?:\.\d+)?")
 
 
 class EmbeddingModel(ABC):
-    name: str
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        raise NotImplementedError
 
     @abstractmethod
     def embed(self, texts: list[str]) -> list[list[float]]:
@@ -80,16 +84,83 @@ class OllamaEmbeddingModel(EmbeddingModel):
         return _normalize([float(value) for value in embedding])
 
 
+@dataclass
+class CachedEmbeddingModel(EmbeddingModel):
+    """Transparent disk-backed cache wrapping any EmbeddingModel.
+
+    Cache file format (JSON):
+        {"schema_version": 1, "model_name": "...", "entries": {"<sha256>": [...]}}
+
+    Entries are invalidated when the wrapped model's name changes.
+    """
+
+    inner: EmbeddingModel
+    cache_path: Path
+    _cache: dict[str, list[float]] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._load()
+
+    @property
+    def name(self) -> str:
+        return self.inner.name
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        results: list[list[float] | None] = [None] * len(texts)
+        misses: list[tuple[int, str]] = []
+
+        for i, text in enumerate(texts):
+            cached = self._cache.get(hashlib.sha256(text.encode()).hexdigest())
+            if cached is not None:
+                results[i] = cached
+            else:
+                misses.append((i, text))
+
+        if misses:
+            new_vectors = self.inner.embed([t for _, t in misses])
+            for (i, text), vector in zip(misses, new_vectors):
+                self._cache[hashlib.sha256(text.encode()).hexdigest()] = vector
+                results[i] = vector
+            self._save()
+
+        return results  # type: ignore[return-value]
+
+    def _load(self) -> None:
+        if not self.cache_path.exists():
+            return
+        try:
+            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            if payload.get("model_name") != self.inner.name:
+                return  # model changed → stale, ignore
+            self._cache = payload.get("entries", {})
+        except (json.JSONDecodeError, KeyError, OSError):
+            pass
+
+    def _save(self) -> None:
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": 1,
+            "model_name": self.inner.name,
+            "entries": self._cache,
+        }
+        self.cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def make_embedding_model(settings: Settings) -> EmbeddingModel:
     if settings.embedding_backend == "hash":
-        return HashingEmbeddingModel(dimensions=settings.hash_embedding_dimensions)
-    if settings.embedding_backend == "ollama":
-        return OllamaEmbeddingModel(
+        inner: EmbeddingModel = HashingEmbeddingModel(dimensions=settings.hash_embedding_dimensions)
+    elif settings.embedding_backend == "ollama":
+        inner = OllamaEmbeddingModel(
             base_url=settings.ollama_base_url,
             model=settings.ollama_embedding_model,
             timeout_seconds=settings.request_timeout_seconds,
         )
-    raise ValueError(f"Unsupported embedding backend: {settings.embedding_backend}")
+    else:
+        raise ValueError(f"Unsupported embedding backend: {settings.embedding_backend}")
+
+    if settings.embedding_cache_path is not None:
+        return CachedEmbeddingModel(inner=inner, cache_path=settings.embedding_cache_path)
+    return inner
 
 
 def _tokens(text: str) -> list[str]:
