@@ -35,8 +35,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-    @app.get("/")
-    def root() -> FileResponse | dict[str, str]:
+    @app.get("/", response_model=None)
+    def root() -> Any:
         index_path = static_dir / "index.html"
         if index_path.exists():
             return FileResponse(index_path)

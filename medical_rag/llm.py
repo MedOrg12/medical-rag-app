@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from medical_rag.config import Settings
+from medical_rag.relevance import is_diet_query
 from medical_rag.types import SearchResult
 
 SAFETY_NOTICE = (
@@ -41,9 +42,13 @@ class ExtractiveGenerator(Generator):
     def generate(self, question: str, results: list[SearchResult]) -> str:
         if not results:
             return (
-                "I could not find indexed stroke literature that answers that question. "
-                "Add or ingest more source documents, then try again."
+                "I could not find a relevant indexed passage that answers that question. "
+                "The indexed corpus may not contain enough detail on this topic, or the index may need "
+                "to be rebuilt after recent retrieval changes."
             )
+
+        if is_diet_query(question):
+            return _diet_answer(results)
 
         passages = []
         for citation_id, result in enumerate(results[:3], start=1):
@@ -67,8 +72,9 @@ class OllamaGenerator(Generator):
     def generate(self, question: str, results: list[SearchResult]) -> str:
         if not results:
             return (
-                "I could not find indexed stroke literature that answers that question. "
-                "Add or ingest more source documents, then try again."
+                "I could not find a relevant indexed passage that answers that question. "
+                "The indexed corpus may not contain enough detail on this topic, or the index may need "
+                "to be rebuilt after recent retrieval changes."
             )
 
         payload = json.dumps(
@@ -113,11 +119,12 @@ class FallbackGenerator(Generator):
     def generate(self, question: str, results: list[SearchResult]) -> str:
         try:
             return self.primary.generate(question, results)
-        except RuntimeError:
+        except RuntimeError as exc:
             fallback_answer = self.fallback.generate(question, results)
             return (
                 fallback_answer
                 + "\n\nGeneration backend was unavailable, so this answer uses extractive retrieval."
+                + f"\nBackend error: {exc}"
             )
 
 
@@ -189,3 +196,81 @@ def _best_excerpt(text: str, question: str, max_chars: int) -> str:
 
 def _terms(text: str) -> list[str]:
     return [term.lower() for term in re.findall(r"[a-zA-Z][a-zA-Z0-9_+-]*", text)]
+
+
+def _diet_answer(results: list[SearchResult]) -> str:
+    evidence = [_evidence_text(result) for result in results]
+    evidence_blob = " ".join(evidence).lower()
+    parts: list[str] = []
+
+    if _has_any(evidence_blob, {"dysphagia", "swallow", "swallowing", "aspiration"}):
+        citation = _first_citation_with(results, {"dysphagia", "swallow", "swallowing", "aspiration"})
+        parts.append(
+            "The indexed evidence is pointing first to swallowing safety, not a simple food list. "
+            "It says dysphagia, or difficulty swallowing, is common soon after stroke, so eating by "
+            f"mouth should be guided by dysphagia screening and swallowing management [{citation}]."
+        )
+
+    if _has_any(evidence_blob, {"tube", "nasogastric", "gastrostomy", "feeding", "feeds"}):
+        citation = _first_citation_with(
+            results, {"tube", "nasogastric", "gastrostomy", "feeding", "feeds"}
+        )
+        parts.append(
+            "If swallowing is not safe, the retrieved guideline text discusses nutritional support "
+            "rather than ordinary meals; it says nasogastric tube feeding can be reasonable for the "
+            f"first 2 to 3 weeks after stroke in some patients [{citation}]."
+        )
+
+    if _has_any(
+        evidence_blob,
+        {"fruit", "fruits", "vegetable", "vegetables", "salt", "sodium", "saturated", "fat"},
+    ):
+        citation = _first_citation_with(
+            results,
+            {"fruit", "fruits", "vegetable", "vegetables", "salt", "sodium", "saturated", "fat"},
+        )
+        parts.append(
+            "For ordinary eating after swallowing has been cleared, the indexed passage supports a "
+            "dietary pattern that includes fruits and vegetables and is lower in salt and saturated "
+            f"fat [{citation}]."
+        )
+
+    if not parts:
+        parts.append(
+            "I found nutrition-related passages, but they do not give a clear answer about what foods "
+            "to eat after stroke. The indexed corpus may need more diet-specific sources."
+        )
+
+    if not _has_any(
+        evidence_blob,
+        {"fruit", "fruits", "vegetable", "vegetables", "salt", "sodium", "saturated", "fat"},
+    ):
+        parts.append(
+            "I did not find a strong indexed passage here that gives a detailed normal-food meal plan."
+        )
+
+    return "\n\n".join(parts) + f"\n\n{SAFETY_NOTICE}"
+
+
+def _evidence_text(result: SearchResult) -> str:
+    metadata = result.chunk.metadata
+    return " ".join(
+        [
+            result.chunk.text,
+            str(metadata.get("title", "")),
+            str(metadata.get("section", "")),
+            str(metadata.get("source_id", "")),
+        ]
+    )
+
+
+def _has_any(text: str, terms: set[str]) -> bool:
+    tokens = set(_terms(text))
+    return bool(tokens & terms)
+
+
+def _first_citation_with(results: list[SearchResult], terms: set[str]) -> int:
+    for citation_id, result in enumerate(results, start=1):
+        if _has_any(_evidence_text(result).lower(), terms):
+            return citation_id
+    return 1

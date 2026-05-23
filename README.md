@@ -57,15 +57,52 @@ curl -X POST http://127.0.0.1:8000/ask \
   -d '{"question":"What does the indexed literature say about stroke rehabilitation?"}'
 ```
 
-## Optional Ollama Mode
+## Ollama Generation
 
-Default retrieval uses the built-in hashing vectorizer and default answers are extractive. To use Ollama for generation:
+Default retrieval uses the built-in hashing vectorizer and default answers are extractive. Extractive mode cites retrieved passages, but it does not behave like a full chatbot. Use Ollama generation for synthesized responses grounded in the retrieved PDF chunks.
+
+Install Ollama for macOS from the official download page:
+
+https://docs.ollama.com/macos
+
+After installing, start Ollama:
+
+```bash
+open -a Ollama
+```
+
+Verify that the local Ollama server is running:
+
+```bash
+curl http://localhost:11434/api/tags
+ollama list
+```
+
+Pull the generation model:
+
+```bash
+ollama pull llama3.1
+```
+
+Then run the app with Ollama generation enabled:
 
 ```bash
 export RAG_GENERATION_BACKEND=ollama
+export RAG_OLLAMA_BASE_URL=http://localhost:11434
+export RAG_OLLAMA_GENERATION_MODEL=llama3.1
+python app.py
+```
+
+You can also use the CLI in Ollama mode:
+
+```bash
+export RAG_GENERATION_BACKEND=ollama
+export RAG_OLLAMA_BASE_URL=http://localhost:11434
 export RAG_OLLAMA_GENERATION_MODEL=llama3.1
 python -m medical_rag.cli ask "What does SPAN-100 estimate?"
 ```
+
+If you see `Generation backend was unavailable, so this answer uses extractive retrieval`, the app tried Ollama and fell back because generation failed. Check that `curl http://localhost:11434/api/tags` works, that `ollama list` includes `llama3.1:latest`, and that the app was restarted after setting the environment variables. The fallback message includes a `Backend error:` line with the exact failure.
 
 To use Ollama embeddings, set `RAG_EMBEDDING_BACKEND=ollama` and re-run ingestion so the index matches the embedding model.
 

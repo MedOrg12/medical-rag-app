@@ -7,6 +7,7 @@ from medical_rag.config import Settings
 from medical_rag.documents import load_documents
 from medical_rag.embeddings import EmbeddingModel, make_embedding_model
 from medical_rag.llm import SAFETY_NOTICE, Generator, make_generator
+from medical_rag.relevance import expand_query_for_retrieval, filter_results_for_question
 from medical_rag.types import Citation, IngestionReport, RagAnswer, SearchResult
 from medical_rag.vector_store import VectorStore
 
@@ -69,12 +70,14 @@ class StrokeRAG:
         if limit <= 0:
             raise ValueError("top_k must be greater than zero")
 
+        candidate_limit = min(max(limit * 4, limit), 50)
         results = store.search(
-            query=question,
+            query=expand_query_for_retrieval(question),
             embedding_model=self.embedding_model,
-            top_k=limit,
+            top_k=candidate_limit,
             filters=filters,
         )
+        results = filter_results_for_question(question, results)[:limit]
         answer = self.generator.generate(question, results)
         citations = [_citation(result, citation_id) for citation_id, result in enumerate(results, 1)]
 
