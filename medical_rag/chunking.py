@@ -178,6 +178,9 @@ def _segment_source_pages(pages: list[PageText]) -> list[_SectionSegment]:
         if stop_at_references:
             break
 
+        if page.hierarchy and len(page.hierarchy) > 1:
+            current_section = current_section or page.hierarchy[-1]
+
         for line in _clean_lines(page.text):
             if _is_reference_heading(line):
                 flush()
