@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "question": "What should I eat after a stroke?",
+      "expected_source_hints": ["diet", "nutrition", "eating", "food"],
+      "expected_answer_terms": ["mediterranean", "dash", "sodium", "fruit", "vegetable"],
+      "should_refuse": false
+    },
+    {
+      "id": "q2",
+      "question": "What is dysphagia after stroke?",
+      "expected_source_hints": ["dysphagia", "swallow", "texture", "rehabilitation"],
+      "expected_answer_terms": ["swallow", "dysphagia", "texture", "modified"],
+      "should_refuse": false
+    },
+    {
+      "id": "q3",
+      "question": "What are signs of acute stroke?",
+      "expected_source_hints": ["fast", "acute", "recognition", "sign", "symptom"],
+      "expected_answer_terms": ["face", "arm", "speech", "time", "fast"],
+      "should_refuse": false
+    },
+    {
+      "id": "q4",
+      "question": "When is thrombectomy discussed?",
+      "expected_source_hints": ["thrombectomy", "mechanical", "endovascular", "lvo"],
+      "expected_answer_terms": ["thrombectomy", "occlusion", "eligible", "time"],
+      "should_refuse": false
+    },
+    {
+      "id": "q5",
+      "question": "What does SPAN-100 mean?",
+      "expected_source_hints": ["span", "score", "outcome", "predictor"],
+      "expected_answer_terms": ["span-100", "span", "score", "predictor", "outcome"],
+      "should_refuse": false
+    },
+    {
+      "id": "q6",
+      "question": "What does the corpus say about mobile stroke units?",
+      "expected_source_hints": ["mobile", "msu", "prehospital"],
+      "expected_answer_terms": ["mobile stroke unit", "msu", "prehospital"],
+      "should_refuse": false
+    },
+    {
+      "id": "q7_negative",
+      "question": "What is the capital of France?",
+      "expected_source_hints": [],
+      "expected_answer_terms": [],
+      "should_refuse": true
+    }
+  ]
+}

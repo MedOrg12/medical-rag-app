@@ -165,3 +165,55 @@ Prefer:
 Avoid:
 - Blog posts, news articles, or commercial health websites
 - Sources without named authorship or institutional affiliation
+
+## Evaluation
+
+The eval suite provides a repeatable way to check retrieval quality, citation relevance, and refusal correctness.
+
+### Prerequisites
+
+The server must be running and the index must be built before running evals:
+
+```bash
+source venv/bin/activate
+python app.py &
+# Click Ingest in the UI, or:
+curl -s -X POST http://localhost:8000/ingest -H "Content-Type: application/json" -d '{}'
+```
+
+### Run the CLI runner
+
+```bash
+# Default: hits http://localhost:8000
+python tests/run_eval.py
+
+# Custom server URL or data file
+python tests/run_eval.py --url http://localhost:8000 --data tests/eval_data.json
+```
+
+### Run via pytest
+
+```bash
+# Run eval tests (requires running server)
+pytest tests/test_eval_suite.py -m eval -v
+
+# Skip eval tests (CI without a running server)
+pytest -m "not eval"
+```
+
+### Metrics
+
+| Metric | Description | Pass threshold |
+|--------|-------------|----------------|
+| Retrieval hit rate | Fraction of in-scope questions where ≥1 citation source filename matches expected topic | ≥ 5/6 |
+| Citation relevance | Fraction of citations whose excerpt contains an expected answer term | ≥ 0.60 |
+| Refusal correctness | Out-of-scope questions where the system returns no confident citation | 1/1 |
+
+### Adding new eval questions
+
+Edit `tests/eval_data.json`. Each entry needs:
+- `id` — unique string
+- `question` — the question text
+- `expected_source_hints` — keywords expected in citation source filenames
+- `expected_answer_terms` — keywords expected in citation excerpts
+- `should_refuse` — `true` for out-of-scope questions
