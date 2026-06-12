@@ -73,7 +73,7 @@ class Settings:
     chunk_size_chars: int = 1400
     chunk_overlap_chars: int = 220
     top_k: int = 5
-    embedding_backend: str = "hash"
+    embedding_backend: str = "auto"
     hash_embedding_dimensions: int = 768
     ollama_base_url: str = "http://localhost:11434"
     ollama_embedding_model: str = "nomic-embed-text"
@@ -87,6 +87,9 @@ class Settings:
     extraction_cache_dir: Path | None = None
     pdf_workers: int = 1
     embedding_batch_size: int = 64
+    min_relevance_score: float = 0.0
+    reranker_backend: str = "lexical"
+    hybrid_alpha: float = 0.5
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> "Settings":
@@ -101,7 +104,7 @@ class Settings:
             chunk_size_chars=_env_int_compat(1400, "RAG_CHUNK_SIZE_CHARS", "CHUNK_SIZE"),
             chunk_overlap_chars=_env_int_compat(220, "RAG_CHUNK_OVERLAP_CHARS", "CHUNK_OVERLAP"),
             top_k=_env_int_compat(5, "RAG_TOP_K", "TOP_K"),
-            embedding_backend=os.getenv("RAG_EMBEDDING_BACKEND", "hash").lower(),
+            embedding_backend=os.getenv("RAG_EMBEDDING_BACKEND", "auto").lower(),
             hash_embedding_dimensions=_env_int("RAG_HASH_EMBEDDING_DIMENSIONS", 768),
             ollama_base_url=_first_env(
                 "RAG_OLLAMA_BASE_URL", "OLLAMA_BASE_URL", default="http://localhost:11434"
@@ -129,6 +132,9 @@ class Settings:
             ) if os.getenv("RAG_EXTRACTION_CACHE_DIR", ".rag/extracted") else None,
             pdf_workers=_env_int("RAG_PDF_WORKERS", 1),
             embedding_batch_size=_env_int("RAG_EMBED_BATCH_SIZE", 64),
+            min_relevance_score=_env_float("RAG_MIN_RELEVANCE_SCORE", 0.0),
+            reranker_backend=os.getenv("RAG_RERANKER_BACKEND", "lexical").lower(),
+            hybrid_alpha=_env_float("RAG_HYBRID_ALPHA", 0.5),
         )
 
     def with_paths(
@@ -155,6 +161,9 @@ class Settings:
             extraction_cache_dir=self.extraction_cache_dir,
             pdf_workers=self.pdf_workers,
             embedding_batch_size=self.embedding_batch_size,
+            min_relevance_score=self.min_relevance_score,
+            reranker_backend=self.reranker_backend,
+            hybrid_alpha=self.hybrid_alpha,
         )
 
     def with_ingestion_options(
@@ -182,4 +191,7 @@ class Settings:
             extraction_cache_dir=self.extraction_cache_dir,
             pdf_workers=pdf_workers or self.pdf_workers,
             embedding_batch_size=embedding_batch_size or self.embedding_batch_size,
+            min_relevance_score=self.min_relevance_score,
+            reranker_backend=self.reranker_backend,
+            hybrid_alpha=self.hybrid_alpha,
         )

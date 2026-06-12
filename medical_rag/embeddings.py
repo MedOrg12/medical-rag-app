@@ -175,25 +175,55 @@ class CachedEmbeddingModel(EmbeddingModel):
         self.cache_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def make_embedding_model(settings: Settings) -> EmbeddingModel:
-    if settings.embedding_backend == "hash":
+def _ollama_available(base_url: str, timeout: float = 2.0) -> bool:
+    """Probe Ollama /api/tags endpoint; return True if reachable."""
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{base_url.rstrip('/')}/api/tags"),
+            timeout=timeout,
+        ) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
+    """Return (model, fallback_used).
+
+    fallback_used is True when backend="auto" and Ollama was unreachable,
+    causing automatic fallback to the hash backend.
+    """
+    backend = settings.embedding_backend
+    fallback_used = False
+
+    if backend == "auto":
+        if _ollama_available(settings.ollama_base_url):
+            backend = "ollama"
+        else:
+            backend = "hash"
+            fallback_used = True
+
+    if backend == "hash":
         inner: EmbeddingModel = HashingEmbeddingModel(dimensions=settings.hash_embedding_dimensions)
-    elif settings.embedding_backend == "ollama":
+    elif backend == "ollama":
         inner = OllamaEmbeddingModel(
             base_url=settings.ollama_base_url,
             model=settings.ollama_embedding_model,
             timeout_seconds=settings.request_timeout_seconds,
         )
     else:
-        raise ValueError(f"Unsupported embedding backend: {settings.embedding_backend}")
+        raise ValueError(f"Unsupported embedding backend: {backend!r}")
 
     if settings.embedding_cache_path is not None:
-        return CachedEmbeddingModel(
-            inner=inner,
-            cache_path=settings.embedding_cache_path,
-            batch_size=settings.embedding_batch_size,
+        return (
+            CachedEmbeddingModel(
+                inner=inner,
+                cache_path=settings.embedding_cache_path,
+                batch_size=settings.embedding_batch_size,
+            ),
+            fallback_used,
         )
-    return inner
+    return inner, fallback_used
 
 
 def _batches(items: list[tuple[int, str]], batch_size: int) -> list[list[tuple[int, str]]]:

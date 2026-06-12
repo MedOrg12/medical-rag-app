@@ -298,3 +298,28 @@ Edit `tests/eval_data.json`. Each entry needs:
 - `expected_source_hints` — keywords expected in citation source filenames
 - `expected_answer_terms` — keywords expected in citation excerpts
 - `should_refuse` — `true` for out-of-scope questions
+
+## Switching Embedding Backends
+
+The `RAG_EMBEDDING_BACKEND` setting controls how chunks are embedded:
+
+| Value | Behaviour |
+|-------|-----------|
+| `auto` (default) | Probes Ollama at startup; uses `ollama` if available, falls back to `hash` |
+| `ollama` | Always use Ollama semantic embeddings (requires Ollama running) |
+| `hash` | Bag-of-words hashing — fast, no network, non-semantic |
+
+**Important:** Changing the embedding backend invalidates the existing index. Delete both cache files before re-ingesting:
+
+```bash
+rm -f .rag/index.json .rag/embedding_cache.json
+source venv/bin/activate
+python app.py
+# Then click Ingest in the UI or POST /ingest
+```
+
+The `RAG_HYBRID_ALPHA`, `RAG_MIN_RELEVANCE_SCORE`, and `RAG_RERANKER_BACKEND` settings control retrieval quality:
+
+- `RAG_HYBRID_ALPHA=0.5` — blend weight for hybrid vector+BM25 search (RRF fusion)
+- `RAG_MIN_RELEVANCE_SCORE=0.0` — filter out chunks below this score before generation
+- `RAG_RERANKER_BACKEND=lexical` — post-retrieval reranker (`lexical` or `none`)

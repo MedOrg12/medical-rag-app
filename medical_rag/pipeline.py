@@ -15,6 +15,7 @@ from medical_rag.ingestion import (
 )
 from medical_rag.llm import SAFETY_NOTICE, Generator, make_generator
 from medical_rag.relevance import expand_query_for_retrieval, filter_results_for_question
+from medical_rag.reranker import Reranker, make_reranker
 from medical_rag.types import Chunk, Citation, IngestionReport, RagAnswer, SearchResult
 from medical_rag.vector_store import VectorStore
 
@@ -27,8 +28,13 @@ class StrokeRAG:
         generator: Generator | None = None,
     ) -> None:
         self.settings = settings or Settings.from_env()
-        self.embedding_model = embedding_model or make_embedding_model(self.settings)
+        if embedding_model is not None:
+            self.embedding_model = embedding_model
+            self._fallback_embedding = False
+        else:
+            self.embedding_model, self._fallback_embedding = make_embedding_model(self.settings)
         self.generator = generator or make_generator(self.settings)
+        self._reranker: Reranker = make_reranker(self.settings)
         self._store: VectorStore | None = None
 
     def ingest(
@@ -264,9 +270,14 @@ class StrokeRAG:
             top_k=candidate_limit,
             filters=filters,
         )
-        results = filter_results_for_question(question, results)[:limit]
+        results = filter_results_for_question(question, results)
+        results = [r for r in results if r.score >= self.settings.min_relevance_score]
+        results = self._reranker.rerank(question, results)[:limit]
+
         answer = self.generator.generate(question, results, answer_mode=mode)
         citations = [_citation(result, citation_id) for citation_id, result in enumerate(results, 1)]
+
+        retrieval_mode = "hybrid" if (store._bm25 is not None) else "vector"
 
         return RagAnswer(
             question=question,
@@ -276,6 +287,8 @@ class StrokeRAG:
             generation_model=self.generator.model_name,
             answer_mode=mode,
             safety_notice=SAFETY_NOTICE,
+            retrieval_mode=retrieval_mode,
+            fallback_embedding=self._fallback_embedding,
         )
 
     def sources(self) -> list[dict[str, object]]:
