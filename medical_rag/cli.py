@@ -19,6 +19,12 @@ def main(argv: list[str] | None = None) -> int:
     ask_parser = subparsers.add_parser("ask", help="Ask a question against the indexed corpus.")
     ask_parser.add_argument("question")
     ask_parser.add_argument("--top-k", type=int, default=None)
+    ask_parser.add_argument(
+        "--mode",
+        choices=["patient", "clinician"],
+        default=None,
+        help="Answer style: patient is plain language; clinician is more technical.",
+    )
     ask_parser.add_argument("--json", action="store_true", help="Print the full JSON response.")
 
     serve_parser = subparsers.add_parser("serve", help="Run the FastAPI server.")
@@ -43,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "ask":
-        response = rag.ask(args.question, top_k=args.top_k)
+        response = rag.ask(args.question, top_k=args.top_k, answer_mode=args.mode)
         if args.json:
             print(json.dumps(response.to_dict(), indent=2))
         else:

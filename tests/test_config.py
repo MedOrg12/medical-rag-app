@@ -10,6 +10,7 @@ def test_settings_accept_legacy_docker_environment(monkeypatch, tmp_path) -> Non
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
     monkeypatch.setenv("OLLAMA_MODEL", "llama3.1")
     monkeypatch.setenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
+    monkeypatch.setenv("RAG_ANSWER_MODE", "clinician")
 
     settings = Settings.from_env(tmp_path)
 
@@ -21,3 +22,4 @@ def test_settings_accept_legacy_docker_environment(monkeypatch, tmp_path) -> Non
     assert settings.ollama_base_url == "http://ollama:11434"
     assert settings.ollama_generation_model == "llama3.1"
     assert settings.ollama_embedding_model == "nomic-embed-text"
+    assert settings.answer_mode == "clinician"

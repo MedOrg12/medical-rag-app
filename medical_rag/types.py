@@ -60,6 +60,7 @@ class RagAnswer:
     citations: list[Citation]
     retrieval_model: str
     generation_model: str
+    answer_mode: str
     safety_notice: str
 
     def to_dict(self) -> dict[str, Any]:

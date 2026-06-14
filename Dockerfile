@@ -23,7 +23,8 @@ ENV PYTHONUNBUFFERED=1 \
     RAG_CORPUS_DIR=/app/pdfs \
     RAG_INDEX_PATH=/app/.rag/index.json \
     RAG_EMBEDDING_BACKEND=hash \
-    RAG_GENERATION_BACKEND=extractive
+    RAG_GENERATION_BACKEND=extractive \
+    RAG_ANSWER_MODE=patient
 
 EXPOSE 8000
 

@@ -60,10 +60,12 @@ class StrokeRAG:
         question: str,
         top_k: int | None = None,
         filters: dict[str, str] | None = None,
+        answer_mode: str | None = None,
     ) -> RagAnswer:
         question = question.strip()
         if not question:
             raise ValueError("Question cannot be empty")
+        mode = _normalize_answer_mode(answer_mode or self.settings.answer_mode)
 
         store = self._load_store()
         limit = top_k or self.settings.top_k
@@ -78,7 +80,7 @@ class StrokeRAG:
             filters=filters,
         )
         results = filter_results_for_question(question, results)[:limit]
-        answer = self.generator.generate(question, results)
+        answer = self.generator.generate(question, results, answer_mode=mode)
         citations = [_citation(result, citation_id) for citation_id, result in enumerate(results, 1)]
 
         return RagAnswer(
@@ -87,6 +89,7 @@ class StrokeRAG:
             citations=citations,
             retrieval_model=self.embedding_model.name,
             generation_model=self.generator.model_name,
+            answer_mode=mode,
             safety_notice=SAFETY_NOTICE,
         )
 
@@ -124,3 +127,10 @@ def _excerpt(text: str, max_chars: int) -> str:
     if len(cleaned) <= max_chars:
         return cleaned
     return cleaned[: max_chars - 1].rsplit(" ", 1)[0] + "..."
+
+
+def _normalize_answer_mode(answer_mode: str) -> str:
+    mode = answer_mode.strip().lower()
+    if mode not in {"patient", "clinician"}:
+        raise ValueError("answer_mode must be either 'patient' or 'clinician'")
+    return mode

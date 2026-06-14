@@ -106,6 +106,33 @@ If you see `Generation backend was unavailable, so this answer uses extractive r
 
 To use Ollama embeddings, set `RAG_EMBEDDING_BACKEND=ollama` and re-run ingestion so the index matches the embedding model.
 
+## Answer Modes
+
+The app supports two answer styles:
+
+- `patient`: plain language, practical, and concise. This is the default.
+- `clinician`: more technical and guideline-aware, with clinical caveats when the retrieved passages support them.
+
+The browser UI has a Patient/Clinician dropdown for each question. The API accepts `answer_mode`:
+
+```bash
+curl -X POST http://127.0.0.1:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What is dysphagia after stroke?","answer_mode":"clinician"}'
+```
+
+The CLI supports the same setting:
+
+```bash
+python -m medical_rag.cli ask "What is dysphagia after stroke?" --mode clinician
+```
+
+Set a global default with:
+
+```bash
+export RAG_ANSWER_MODE=clinician
+```
+
 ## Configuration
 
 Environment variables:
@@ -117,6 +144,7 @@ Environment variables:
 - `RAG_TOP_K`: default `5`
 - `RAG_EMBEDDING_BACKEND`: `hash` or `ollama`
 - `RAG_GENERATION_BACKEND`: `extractive` or `ollama`
+- `RAG_ANSWER_MODE`: `patient` or `clinician`
 - `RAG_OLLAMA_BASE_URL`: default `http://localhost:11434`
 - `RAG_OLLAMA_EMBEDDING_MODEL`: default `nomic-embed-text`
 - `RAG_OLLAMA_GENERATION_MODEL`: default `llama3.1`

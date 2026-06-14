@@ -79,6 +79,7 @@ class Settings:
     ollama_embedding_model: str = "nomic-embed-text"
     generation_backend: str = "extractive"
     ollama_generation_model: str = "llama3.1"
+    answer_mode: str = "patient"
     temperature: float = 0.1
     request_timeout_seconds: float = 20.0
     embedding_cache_path: Path | None = None
@@ -110,6 +111,7 @@ class Settings:
             ollama_generation_model=_first_env(
                 "RAG_OLLAMA_GENERATION_MODEL", "OLLAMA_MODEL", default="llama3.1"
             ),
+            answer_mode=os.getenv("RAG_ANSWER_MODE", "patient").lower(),
             temperature=_env_float_compat(0.1, "RAG_TEMPERATURE", "TEMPERATURE"),
             request_timeout_seconds=_env_float("RAG_REQUEST_TIMEOUT_SECONDS", 20.0),
             embedding_cache_path=_resolve_path(
@@ -133,6 +135,7 @@ class Settings:
             ollama_embedding_model=self.ollama_embedding_model,
             generation_backend=self.generation_backend,
             ollama_generation_model=self.ollama_generation_model,
+            answer_mode=self.answer_mode,
             temperature=self.temperature,
             request_timeout_seconds=self.request_timeout_seconds,
             embedding_cache_path=self.embedding_cache_path,
