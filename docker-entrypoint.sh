@@ -24,7 +24,15 @@ fi
 if [ "${RAG_AUTO_INGEST_ON_STARTUP:-true}" = "true" ]; then
     if [ ! -f "${RAG_INDEX_PATH:-/app/.rag/index.json}" ] || [ "${RAG_FORCE_REINGEST:-false}" = "true" ]; then
         echo "Building vector index from ${RAG_CORPUS_DIR:-/app/pdfs}"
-        python3 -m medical_rag.cli ingest --source "${RAG_CORPUS_DIR:-/app/pdfs}" || \
+        FORCE_ARG=""
+        if [ "${RAG_FORCE_REINGEST:-false}" = "true" ]; then
+            FORCE_ARG="--force"
+        fi
+        python3 -m medical_rag.cli ingest \
+            --source "${RAG_CORPUS_DIR:-/app/pdfs}" \
+            --pdf-workers "${RAG_PDF_WORKERS:-1}" \
+            --embed-batch-size "${RAG_EMBED_BATCH_SIZE:-64}" \
+            ${FORCE_ARG} || \
             echo "Initial ingestion failed. The server will start so ingestion can be retried from the UI or API."
     else
         echo "Vector index already exists at ${RAG_INDEX_PATH:-/app/.rag/index.json}"

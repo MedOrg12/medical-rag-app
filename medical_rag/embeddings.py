@@ -62,7 +62,34 @@ class OllamaEmbeddingModel(EmbeddingModel):
         return f"ollama:{self.model}"
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        return [self._embed_one(text) for text in texts]
+        if not texts:
+            return []
+        if len(texts) == 1:
+            return [self._embed_one(texts[0])]
+
+        try:
+            return self._embed_batch(texts)
+        except RuntimeError:
+            return [self._embed_one(text) for text in texts]
+
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        payload = json.dumps({"model": self.model, "input": texts}).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url.rstrip('/')}/api/embed",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(f"Could not get Ollama batch embeddings from {self.base_url}") from exc
+
+        embeddings = data.get("embeddings")
+        if not isinstance(embeddings, list) or len(embeddings) != len(texts):
+            raise RuntimeError("Ollama batch embedding response did not include expected embeddings")
+        return [_normalize([float(value) for value in embedding]) for embedding in embeddings]
 
     def _embed_one(self, text: str) -> list[float]:
         payload = json.dumps({"model": self.model, "prompt": text}).encode("utf-8")
@@ -96,6 +123,7 @@ class CachedEmbeddingModel(EmbeddingModel):
 
     inner: EmbeddingModel
     cache_path: Path
+    batch_size: int = 64
     _cache: dict[str, list[float]] = field(default_factory=dict, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -117,10 +145,11 @@ class CachedEmbeddingModel(EmbeddingModel):
                 misses.append((i, text))
 
         if misses:
-            new_vectors = self.inner.embed([t for _, t in misses])
-            for (i, text), vector in zip(misses, new_vectors):
-                self._cache[hashlib.sha256(text.encode()).hexdigest()] = vector
-                results[i] = vector
+            for batch in _batches(misses, max(1, self.batch_size)):
+                new_vectors = self.inner.embed([t for _, t in batch])
+                for (i, text), vector in zip(batch, new_vectors):
+                    self._cache[hashlib.sha256(text.encode()).hexdigest()] = vector
+                    results[i] = vector
             self._save()
 
         return results  # type: ignore[return-value]
@@ -159,8 +188,16 @@ def make_embedding_model(settings: Settings) -> EmbeddingModel:
         raise ValueError(f"Unsupported embedding backend: {settings.embedding_backend}")
 
     if settings.embedding_cache_path is not None:
-        return CachedEmbeddingModel(inner=inner, cache_path=settings.embedding_cache_path)
+        return CachedEmbeddingModel(
+            inner=inner,
+            cache_path=settings.embedding_cache_path,
+            batch_size=settings.embedding_batch_size,
+        )
     return inner
+
+
+def _batches(items: list[tuple[int, str]], batch_size: int) -> list[list[tuple[int, str]]]:
+    return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
 
 
 def _tokens(text: str) -> list[str]:

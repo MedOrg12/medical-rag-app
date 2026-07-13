@@ -82,6 +82,10 @@ class Settings:
     temperature: float = 0.1
     request_timeout_seconds: float = 20.0
     embedding_cache_path: Path | None = None
+    manifest_path: Path | None = None
+    extraction_cache_dir: Path | None = None
+    pdf_workers: int = 1
+    embedding_batch_size: int = 64
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> "Settings":
@@ -115,6 +119,14 @@ class Settings:
             embedding_cache_path=_resolve_path(
                 root, os.getenv("RAG_EMBEDDING_CACHE_PATH", ".rag/embedding_cache.json")
             ) if os.getenv("RAG_EMBEDDING_CACHE_PATH", ".rag/embedding_cache.json") else None,
+            manifest_path=_resolve_path(
+                root, os.getenv("RAG_MANIFEST_PATH", ".rag/manifest.sqlite")
+            ) if os.getenv("RAG_MANIFEST_PATH", ".rag/manifest.sqlite") else None,
+            extraction_cache_dir=_resolve_path(
+                root, os.getenv("RAG_EXTRACTION_CACHE_DIR", ".rag/extracted")
+            ) if os.getenv("RAG_EXTRACTION_CACHE_DIR", ".rag/extracted") else None,
+            pdf_workers=_env_int("RAG_PDF_WORKERS", 1),
+            embedding_batch_size=_env_int("RAG_EMBED_BATCH_SIZE", 64),
         )
 
     def with_paths(
@@ -136,4 +148,35 @@ class Settings:
             temperature=self.temperature,
             request_timeout_seconds=self.request_timeout_seconds,
             embedding_cache_path=self.embedding_cache_path,
+            manifest_path=self.manifest_path,
+            extraction_cache_dir=self.extraction_cache_dir,
+            pdf_workers=self.pdf_workers,
+            embedding_batch_size=self.embedding_batch_size,
+        )
+
+    def with_ingestion_options(
+        self,
+        pdf_workers: int | None = None,
+        embedding_batch_size: int | None = None,
+    ) -> "Settings":
+        return Settings(
+            root_dir=self.root_dir,
+            corpus_dir=self.corpus_dir,
+            index_path=self.index_path,
+            chunk_size_chars=self.chunk_size_chars,
+            chunk_overlap_chars=self.chunk_overlap_chars,
+            top_k=self.top_k,
+            embedding_backend=self.embedding_backend,
+            hash_embedding_dimensions=self.hash_embedding_dimensions,
+            ollama_base_url=self.ollama_base_url,
+            ollama_embedding_model=self.ollama_embedding_model,
+            generation_backend=self.generation_backend,
+            ollama_generation_model=self.ollama_generation_model,
+            temperature=self.temperature,
+            request_timeout_seconds=self.request_timeout_seconds,
+            embedding_cache_path=self.embedding_cache_path,
+            manifest_path=self.manifest_path,
+            extraction_cache_dir=self.extraction_cache_dir,
+            pdf_workers=pdf_workers or self.pdf_workers,
+            embedding_batch_size=embedding_batch_size or self.embedding_batch_size,
         )
