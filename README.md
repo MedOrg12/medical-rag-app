@@ -133,3 +133,35 @@ The previous UI has been preserved as `static/legacy-index.html` for reference, 
 ## Medical Safety
 
 This project is for literature retrieval, research support, and education. It should not be used as a standalone diagnostic, treatment, or emergency decision system. Possible acute stroke symptoms require emergency medical services.
+
+## Corpus Coverage
+
+Answer quality is directly tied to what has been indexed. The system can only cite evidence that exists in the `pdfs/` folder.
+
+### Adding new PDFs
+
+1. Copy PDF files into `pdfs/`
+2. Delete the stale index:
+   ```bash
+   rm -f .rag/index.json .rag/embedding_cache.json
+   ```
+3. Restart and re-ingest via the UI or `POST /ingest`
+
+### Diet & nutrition coverage
+
+The default corpus covers stroke systems of care, clinical trials, rehabilitation, and prevention guidelines. It contains limited diet and nutrition content. To improve answers for questions like *"What should I eat after a stroke?"*, download the sources listed in `pdfs/SOURCES.md` and re-ingest.
+
+### Coverage gaps
+
+If the system gives vague or unhelpful answers on a topic, the most likely cause is that no relevant source has been indexed. Add a credible PDF on that topic and re-ingest.
+
+### Source quality preferences
+
+Prefer:
+- Clinical practice guidelines (AHA/ASA, Stroke Foundation, SIGN, ESPEN)
+- Peer-reviewed systematic reviews and meta-analyses
+- Public health / hospital patient education materials from named institutions
+
+Avoid:
+- Blog posts, news articles, or commercial health websites
+- Sources without named authorship or institutional affiliation
