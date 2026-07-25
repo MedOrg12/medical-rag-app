@@ -3,7 +3,9 @@ name: CI and production deployment
 on:
   pull_request:
   push:
-    branches: [main]
+    branches:
+      - main
+      - test/prod-deploy
 
 concurrency:
   group: medical-rag-production
@@ -60,6 +62,10 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      (github.ref == 'refs/heads/test/prod-deploy' &&
+      contains(github.event.head_commit.message, '[deploy-test]'))
     needs: publish
     runs-on: ubuntu-latest
     environment:
