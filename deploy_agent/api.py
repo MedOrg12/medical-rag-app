@@ -67,6 +67,18 @@ class GitHubOidcValidator:
     def validate(self, token: str) -> dict[str, Any]:
         try:
             key = self.jwks.get_signing_key_from_jwt(token).key
+        except jwt.exceptions.PyJWKClientConnectionError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Deployment identity provider is unavailable",
+            ) from exc
+        except jwt.PyJWTError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid deployment identity",
+            ) from exc
+
+        try:
             claims = jwt.decode(
                 token,
                 key,
@@ -152,7 +164,7 @@ def create_app(
 ) -> FastAPI:
     app_settings = settings or DeployApiSettings.from_env()
     token_validator = validator or GitHubOidcValidator(app_settings)
-    for directory in ("pending", "processing", "status"):
+    for directory in ("pending", "processing", "receipts", "status"):
         (app_settings.state_dir / directory).mkdir(parents=True, exist_ok=True)
     app = FastAPI(
         title="Medical RAG Deployment Agent",
@@ -205,28 +217,40 @@ def create_app(
         }
         pending_path = app_settings.state_dir / "pending" / f"{deployment_id}.json"
         status_path = app_settings.state_dir / "status" / f"{deployment_id}.json"
-        created = _atomic_json_create(pending_path, payload)
-        if not created:
+        receipt_path = app_settings.state_dir / "receipts" / f"{deployment_id}.json"
+        receipt_created = _atomic_json_create(
+            receipt_path,
+            {"deployment_id": deployment_id, "digest": request.digest},
+        )
+        if not receipt_created:
+            try:
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, json.JSONDecodeError) as exc:
+                raise HTTPException(
+                    status_code=409, detail="Deployment request already used"
+                ) from exc
+            if receipt.get("digest") != request.digest:
+                raise HTTPException(status_code=409, detail="Deployment identity already used")
             candidates = (
-                (pending_path, "queued"),
-                (app_settings.state_dir / "processing" / pending_path.name, "deploying"),
                 (status_path, None),
+                (app_settings.state_dir / "processing" / pending_path.name, "deploying"),
+                (pending_path, "queued"),
             )
             existing = next((item for item in candidates if item[0].exists()), None)
             if existing is None:
-                raise HTTPException(status_code=409, detail="Deployment request already used")
+                return DeployResponse(deployment_id=deployment_id, state="unknown")
             try:
                 recorded = json.loads(existing[0].read_text(encoding="utf-8"))
             except (FileNotFoundError, json.JSONDecodeError) as exc:
                 raise HTTPException(
                     status_code=409, detail="Deployment request already used"
                 ) from exc
-            if recorded.get("digest") != request.digest:
-                raise HTTPException(status_code=409, detail="Deployment identity already used")
             return DeployResponse(
                 deployment_id=deployment_id,
-                state=str(recorded.get("state") or existing[1]),
+                state=str(recorded.get("state") or existing[1] or "unknown"),
             )
+        if not _atomic_json_create(pending_path, payload):
+            raise HTTPException(status_code=500, detail="Unable to queue deployment")
         return DeployResponse(deployment_id=deployment_id, state="queued")
 
     @app.get("/deploy/{deployment_id}", response_model=DeployResponse)
@@ -242,15 +266,16 @@ def create_app(
             ("pending", "queued"),
         ):
             path = app_settings.state_dir / directory / f"{deployment_id}.json"
-            if path.exists():
-                try:
-                    payload = json.loads(path.read_text(encoding="utf-8"))
-                except json.JSONDecodeError as exc:
-                    raise HTTPException(status_code=500, detail="Invalid deployment state") from exc
-                return DeployResponse(
-                    deployment_id=deployment_id,
-                    state=str(payload.get("state") or default_state),
-                )
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                continue
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=500, detail="Invalid deployment state") from exc
+            return DeployResponse(
+                deployment_id=deployment_id,
+                state=str(payload.get("state") or default_state or "unknown"),
+            )
         raise HTTPException(status_code=404, detail="Deployment not found")
 
     return app
