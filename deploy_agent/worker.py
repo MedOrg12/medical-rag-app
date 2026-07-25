@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from fastapi import HTTPException, status
+
 from deploy_agent.api import DeployApiSettings, GitHubOidcValidator
 
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -150,7 +152,7 @@ def process_request(settings: WorkerSettings, pending_path: Path) -> None:
     os.replace(pending_path, processing_path)
     request = json.loads(processing_path.read_text(encoding="utf-8"))
     digest = str(request.get("digest", ""))
-    token = request.pop("oidc_token", None)
+    token = request.get("oidc_token")
     try:
         if not DIGEST_RE.fullmatch(digest):
             raise ValueError("queued request contains an invalid digest")
@@ -164,7 +166,21 @@ def process_request(settings: WorkerSettings, pending_path: Path) -> None:
             raise ValueError("deployment identity has no valid commit SHA")
         if request.get("github", {}).get("sha") != expected_revision:
             raise ValueError("queued commit does not match deployment identity")
-    except Exception as validation_error:
+    except HTTPException as validation_error:
+        if validation_error.status_code not in (
+            status.HTTP_401_UNAUTHORIZED,
+            status.HTTP_403_FORBIDDEN,
+        ):
+            raise
+        request.pop("oidc_token", None)
+        request["state"] = "rejected"
+        request["error"] = str(validation_error.detail)[:1000]
+        request["finished_at"] = int(time.time())
+        _write_json(status_path, request)
+        processing_path.unlink(missing_ok=True)
+        return
+    except ValueError as validation_error:
+        request.pop("oidc_token", None)
         request["state"] = "rejected"
         request["error"] = str(validation_error)[:1000] or type(validation_error).__name__
         request["finished_at"] = int(time.time())
@@ -192,9 +208,42 @@ def process_request(settings: WorkerSettings, pending_path: Path) -> None:
         else:
             request["state"] = "failed"
     finally:
+        request.pop("oidc_token", None)
         request["finished_at"] = int(time.time())
         _write_json(status_path, request)
         processing_path.unlink(missing_ok=True)
+
+
+def _requeue_orphaned_requests(settings: WorkerSettings) -> int:
+    processing_dir = settings.state_dir / "processing"
+    pending_dir = settings.state_dir / "pending"
+    processing_dir.mkdir(parents=True, exist_ok=True)
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    errors = 0
+    for processing_path in sorted(processing_dir.glob("*.json")):
+        pending_path = pending_dir / processing_path.name
+        try:
+            os.link(processing_path, pending_path)
+        except FileExistsError:
+            try:
+                same_request = processing_path.read_bytes() == pending_path.read_bytes()
+            except OSError as exc:
+                print(f"failed to reconcile {processing_path.name}: {exc}", file=sys.stderr)
+                errors += 1
+                continue
+            if not same_request:
+                print(
+                    f"refusing to overwrite conflicting request {processing_path.name}",
+                    file=sys.stderr,
+                )
+                errors += 1
+                continue
+        except OSError as exc:
+            print(f"failed to requeue {processing_path.name}: {exc}", file=sys.stderr)
+            errors += 1
+            continue
+        processing_path.unlink()
+    return errors
 
 
 def main() -> int:
@@ -208,7 +257,7 @@ def main() -> int:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 0
-        exit_code = 0
+        exit_code = 1 if _requeue_orphaned_requests(settings) else 0
         for pending_path in sorted(pending_dir.glob("*.json")):
             try:
                 process_request(settings, pending_path)

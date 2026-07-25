@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 
 from deploy_agent import worker
 from deploy_agent.worker import WorkerSettings
@@ -21,6 +22,14 @@ class FakeValidator:
     def validate(self, token: str) -> dict[str, str]:
         assert token == "oidc-token"
         return {"sha": SHA}
+
+
+class UnavailableValidator:
+    def __init__(self, _settings: Any) -> None:
+        pass
+
+    def validate(self, _token: str) -> dict[str, str]:
+        raise HTTPException(status_code=503, detail="offline")
 
 
 def settings(tmp_path: Path) -> WorkerSettings:
@@ -95,3 +104,34 @@ def test_readiness_failure_rolls_back_previous_digest(
     result = json.loads((config.state_dir / "status" / "deployment.json").read_text())
     assert result["state"] == "rolled_back"
     assert result["rolled_back_to"] == PREVIOUS_DIGEST
+
+
+def test_transient_identity_failure_leaves_request_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = settings(tmp_path)
+    pending = queue_request(config)
+    monkeypatch.setattr(worker, "GitHubOidcValidator", UnavailableValidator)
+    monkeypatch.setattr(worker.DeployApiSettings, "from_env", lambda: object())
+
+    with pytest.raises(HTTPException):
+        worker.process_request(config, pending)
+
+    processing = config.state_dir / "processing" / pending.name
+    assert processing.exists()
+    assert not (config.state_dir / "status" / pending.name).exists()
+    assert worker._requeue_orphaned_requests(config) == 0
+    assert pending.exists()
+    assert not processing.exists()
+
+
+def test_orphan_requeue_does_not_overwrite_conflicting_request(tmp_path: Path) -> None:
+    config = settings(tmp_path)
+    pending = queue_request(config)
+    processing = config.state_dir / "processing" / pending.name
+    processing.parent.mkdir(parents=True)
+    processing.write_text('{"different":true}\n')
+
+    assert worker._requeue_orphaned_requests(config) == 1
+    assert json.loads(pending.read_text())["digest"] == DIGEST
+    assert processing.exists()

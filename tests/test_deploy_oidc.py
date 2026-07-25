@@ -18,6 +18,11 @@ class StaticJwks:
         return self.Key()
 
 
+class UnavailableJwks:
+    def get_signing_key_from_jwt(self, _token: str) -> None:
+        raise jwt.exceptions.PyJWKClientConnectionError("offline")
+
+
 def settings(tmp_path: Path) -> DeployApiSettings:
     return DeployApiSettings(
         state_dir=tmp_path,
@@ -73,6 +78,16 @@ def test_oidc_claims_are_checked_after_signature_validation(
     )
     claims = validator(tmp_path).validate("opaque")
     assert claims["repository_id"] == "123"
+
+
+def test_oidc_provider_outage_is_transient(tmp_path: Path) -> None:
+    result = validator(tmp_path)
+    result.jwks = UnavailableJwks()  # type: ignore[assignment]
+
+    with pytest.raises(HTTPException) as error:
+        result.validate("opaque")
+
+    assert error.value.status_code == 503
 
 
 @pytest.mark.parametrize(

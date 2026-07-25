@@ -111,3 +111,19 @@ def test_status_is_authenticated(tmp_path: Path) -> None:
         headers={"Authorization": "Bearer token"},
     )
     assert response.json()["state"] == "queued"
+
+
+def test_duplicate_completed_request_without_state_returns_unknown(tmp_path: Path) -> None:
+    client = TestClient(create_app(settings(tmp_path), FakeValidator()))
+    headers = {"Authorization": "Bearer token"}
+    first = client.post("/deploy", headers=headers, json={"digest": DIGEST}).json()
+    pending = tmp_path / "pending" / f"{first['deployment_id']}.json"
+    payload = json.loads(pending.read_text())
+    pending.unlink()
+    status_path = tmp_path / "status" / pending.name
+    status_path.write_text(json.dumps(payload))
+
+    duplicate = client.post("/deploy", headers=headers, json={"digest": DIGEST})
+
+    assert duplicate.status_code == 202
+    assert duplicate.json()["state"] == "unknown"
