@@ -1,4 +1,5 @@
 .git/
+.github
 .rag/
 .venv/
 venv/
@@ -15,3 +16,7 @@ logs/
 .env
 .DS_Store
 old_code/
+pdfs/*.pdf
+tests
+deploy
+deploy_agent

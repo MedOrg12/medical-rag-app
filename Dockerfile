@@ -14,7 +14,10 @@ COPY static/ ./static/
 COPY app.py README.md .env.example ./
 COPY pdfs/ ./pdfs/
 
-RUN mkdir -p /app/.rag /app/pdfs && chmod -R 777 /app/.rag /app/pdfs
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app/.rag /app/pdfs \
+    && chown -R app:app /app/.rag
 
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
@@ -28,6 +31,7 @@ ENV PYTHONUNBUFFERED=1 \
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:8000/ready || exit 1
 
+USER app
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
