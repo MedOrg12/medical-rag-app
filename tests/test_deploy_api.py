@@ -15,10 +15,10 @@ class FakeValidator:
     def __init__(self, claims: dict[str, Any] | None = None) -> None:
         self.claims = claims or {
             "jti": "unique-token-id",
-            "repository": "MoCode98/medical-rag-app",
+            "repository": "MedOrg12/medical-rag-app",
             "sha": "b" * 40,
             "workflow_ref": (
-                "MoCode98/medical-rag-app/.github/workflows/ci-cd.yml@refs/heads/main"
+                "MedOrg12/medical-rag-app/.github/workflows/ci-cd.yml@refs/heads/main"
             ),
         }
 
@@ -30,11 +30,11 @@ def settings(tmp_path: Path) -> DeployApiSettings:
     return DeployApiSettings(
         state_dir=tmp_path,
         audience="https://example.test/internal/deploy",
-        repository="MoCode98/medical-rag-app",
+        repository="MedOrg12/medical-rag-app",
         repository_id="123",
         ref="refs/heads/main",
         environment="production",
-        workflow_ref="MoCode98/medical-rag-app/.github/workflows/ci-cd.yml@refs/heads/main",
+        workflow_ref="MedOrg12/medical-rag-app/.github/workflows/ci-cd.yml@refs/heads/main",
         event_name="push",
     )
 

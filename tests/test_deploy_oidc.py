@@ -27,11 +27,11 @@ def settings(tmp_path: Path) -> DeployApiSettings:
     return DeployApiSettings(
         state_dir=tmp_path,
         audience="https://example.test/internal/deploy",
-        repository="MoCode98/medical-rag-app",
+        repository="MedOrg12/medical-rag-app",
         repository_id="123",
         ref="refs/heads/main",
         environment="production",
-        workflow_ref="MoCode98/medical-rag-app/.github/workflows/ci-cd.yml@refs/heads/main",
+        workflow_ref="MedOrg12/medical-rag-app/.github/workflows/ci-cd.yml@refs/heads/main",
         event_name="push",
     )
 
@@ -41,15 +41,15 @@ def token(overrides: dict[str, object] | None = None) -> str:
     claims: dict[str, object] = {
         "iss": "https://token.actions.githubusercontent.com",
         "aud": "https://example.test/internal/deploy",
-        "sub": "repo:MoCode98/medical-rag-app:environment:production",
+        "sub": "repo:MedOrg12/medical-rag-app:environment:production",
         "exp": now + 300,
         "iat": now,
         "jti": "token-id",
-        "repository": "MoCode98/medical-rag-app",
+        "repository": "MedOrg12/medical-rag-app",
         "repository_id": "123",
         "ref": "refs/heads/main",
         "environment": "production",
-        "workflow_ref": ("MoCode98/medical-rag-app/.github/workflows/ci-cd.yml@refs/heads/main"),
+        "workflow_ref": ("MedOrg12/medical-rag-app/.github/workflows/ci-cd.yml@refs/heads/main"),
         "event_name": "push",
     }
     claims.update(overrides or {})

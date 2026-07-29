@@ -1,6 +1,6 @@
 services:
   medical-rag:
-    image: ${IMAGE_REPOSITORY:-ghcr.io/mocode98/medical-rag-app}@${IMAGE_DIGEST}
+    image: ${IMAGE_REPOSITORY:-ghcr.io/medorg12/medical-rag-app}@${IMAGE_DIGEST}
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
