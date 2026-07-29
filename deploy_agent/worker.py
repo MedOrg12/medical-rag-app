@@ -46,7 +46,7 @@ class WorkerSettings:
             service=os.getenv("DEPLOY_COMPOSE_SERVICE", "medical-rag"),
             image_repository=os.getenv(
                 "DEPLOY_IMAGE_REPOSITORY",
-                "ghcr.io/mocode98/medical-rag-app",
+                "ghcr.io/medorg12/medical-rag-app",
             ),
             readiness_url=os.getenv("DEPLOY_READINESS_URL", "http://127.0.0.1:8000/health"),
             readiness_timeout_seconds=int(os.getenv("DEPLOY_READINESS_TIMEOUT_SECONDS", "180")),

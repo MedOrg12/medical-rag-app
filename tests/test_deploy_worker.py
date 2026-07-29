@@ -38,7 +38,7 @@ def settings(tmp_path: Path) -> WorkerSettings:
         compose_file=tmp_path / "compose.yaml",
         compose_env_file=tmp_path / ".deploy.env",
         service="medical-rag",
-        image_repository="ghcr.io/mocode98/medical-rag-app",
+        image_repository="ghcr.io/medorg12/medical-rag-app",
         readiness_url="http://127.0.0.1:8000/ready",
         readiness_timeout_seconds=1,
     )
