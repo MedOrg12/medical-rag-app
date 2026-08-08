@@ -17,6 +17,9 @@ stroke-rag = "medical_rag.cli:main"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 pythonpath = ["."]
+markers = [
+  "eval: live-server evaluation tests (require running server + ingested index)",
+]
 
 [tool.ruff]
 line-length = 100
