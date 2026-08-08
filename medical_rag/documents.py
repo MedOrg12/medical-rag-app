@@ -28,14 +28,18 @@ def iter_source_files(path: Path) -> list[Path]:
 def load_documents(path: Path) -> list[PageText]:
     pages: list[PageText] = []
     for source_file in iter_source_files(path):
-        if source_file.suffix.lower() == ".pdf":
-            pages.extend(_load_pdf(source_file))
-        else:
-            pages.extend(_load_text_file(source_file))
+        file_pages, _ = load_source_file(source_file)
+        pages.extend(file_pages)
     return pages
 
 
-def _load_pdf(path: Path) -> list[PageText]:
+def load_source_file(path: Path, ocr_scanned: bool = False) -> tuple[list[PageText], int]:
+    if path.suffix.lower() == ".pdf":
+        return _load_pdf(path, ocr_scanned=ocr_scanned)
+    return _load_text_file(path), 0
+
+
+def _load_pdf(path: Path, ocr_scanned: bool = False) -> tuple[list[PageText], int]:
     try:
         import fitz
     except ImportError as exc:
@@ -44,11 +48,17 @@ def _load_pdf(path: Path) -> list[PageText]:
         ) from exc
 
     pages: list[PageText] = []
+    scanned_pages = 0
     with fitz.open(path) as document:
         title = (document.metadata or {}).get("title") or path.stem
         for page_index, page in enumerate(document, start=1):
             text = _extract_page_text(page).strip()
             if not text:
+                scanned_pages += 1
+                if ocr_scanned:
+                    # OCR is intentionally opt-in and requires a future backend.
+                    # For now we mark scanned pages so ingestion can continue quickly.
+                    pass
                 continue
             pages.append(
                 PageText(
@@ -59,7 +69,7 @@ def _load_pdf(path: Path) -> list[PageText]:
                     text=text,
                 )
             )
-    return pages
+    return pages, scanned_pages
 
 
 def _load_text_file(path: Path) -> list[PageText]:

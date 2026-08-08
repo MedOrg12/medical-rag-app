@@ -45,6 +45,54 @@ RAG_GENERATION_BACKEND=ollama docker compose --profile ollama up --build
 
 The default Docker path still works without Ollama by using local hashing retrieval and extractive answers.
 
+## Large Corpus Ingestion
+
+The ingestion pipeline is designed to handle larger corpora without reprocessing every PDF on every run. It keeps a SQLite manifest, an extracted-text cache, and an embedding cache under `.rag/`.
+
+```bash
+python -m medical_rag.cli ingest --source pdfs
+```
+
+Useful flags:
+
+```bash
+python -m medical_rag.cli ingest --source pdfs --pdf-workers 4
+python -m medical_rag.cli ingest --source pdfs --failed-only
+python -m medical_rag.cli ingest --source pdfs --force
+python -m medical_rag.cli ingest --source pdfs --no-resume
+```
+
+What this does:
+
+- Skips the whole run quickly when the corpus and index are unchanged.
+- Tracks file status in `.rag/manifest.sqlite`.
+- Caches extracted text in `.rag/extracted/`.
+- Caches embeddings in `.rag/embedding_cache.json`.
+- Deduplicates identical files by SHA-256.
+- Records failed files so they can be retried with `--failed-only`.
+- Detects scanned PDF pages and records them without running slow OCR by default.
+- Reports per-stage timings in the ingestion response.
+
+The API also supports background ingestion:
+
+```bash
+curl -X POST http://127.0.0.1:8000/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"source_path":"pdfs","background":true,"pdf_workers":4}'
+
+curl http://127.0.0.1:8000/ingest/status
+```
+
+Tuning knobs:
+
+- `RAG_PDF_WORKERS`: parallel PDF extraction workers. Start with `2` to `4`.
+- `RAG_EMBED_BATCH_SIZE`: embedding batch size for cache misses. Start with `64`.
+- `RAG_MANIFEST_PATH`: manifest SQLite path.
+- `RAG_EXTRACTION_CACHE_DIR`: extracted text cache directory.
+- `RAG_EMBEDDING_CACHE_PATH`: embedding cache path.
+
+Keep embedding workers conservative with local Ollama. PDF parsing can be parallelized, but local model embedding usually benefits more from batching than from high concurrency.
+
 ## API
 
 ```bash
@@ -115,6 +163,11 @@ Environment variables:
 - `RAG_CHUNK_SIZE_CHARS`: default `1400`
 - `RAG_CHUNK_OVERLAP_CHARS`: default `220`
 - `RAG_TOP_K`: default `5`
+- `RAG_PDF_WORKERS`: default `1`
+- `RAG_EMBED_BATCH_SIZE`: default `64`
+- `RAG_MANIFEST_PATH`: default `.rag/manifest.sqlite`
+- `RAG_EXTRACTION_CACHE_DIR`: default `.rag/extracted`
+- `RAG_EMBEDDING_CACHE_PATH`: default `.rag/embedding_cache.json`
 - `RAG_EMBEDDING_BACKEND`: `hash` or `ollama`
 - `RAG_GENERATION_BACKEND`: `extractive` or `ollama`
 - `RAG_OLLAMA_BASE_URL`: default `http://localhost:11434`

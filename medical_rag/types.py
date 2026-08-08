@@ -48,6 +48,18 @@ class IngestionReport:
     chunks: int
     index_path: str
     embedding_model: str
+    files_discovered: int = 0
+    files_changed: int = 0
+    files_processed: int = 0
+    files_from_cache: int = 0
+    files_failed: int = 0
+    duplicate_files: int = 0
+    deleted_files: int = 0
+    scanned_pages: int = 0
+    skipped_unchanged: bool = False
+    manifest_path: str | None = None
+    extraction_cache_dir: str | None = None
+    timings: dict[str, float] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
