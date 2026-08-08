@@ -26,12 +26,29 @@ If a user describes possible acute stroke symptoms or asks what to do during an 
 call emergency medical services immediately. {SAFETY_NOTICE}
 """
 
+_ANSWER_MODE_INSTRUCTIONS = {
+    "patient": """Answer mode: patient.
+
+Use plain language for a patient or caregiver. Keep the answer practical and concise. Define medical
+terms the first time you use them. Avoid guideline jargon, study-design detail, and long caveats unless
+they change what the person should do. If the evidence does not answer the exact question, say that
+clearly and briefly.""",
+    "clinician": """Answer mode: clinician.
+
+Use a clinical, guideline-aware style. Include relevant technical terms, eligibility/contraindication
+caveats when present in the retrieved passages, and note evidence limitations. Distinguish guideline
+recommendations, trial findings, observational evidence, and rehabilitation guidance when the retrieved
+passages make that clear.""",
+}
+
 
 class Generator(ABC):
     model_name: str
 
     @abstractmethod
-    def generate(self, question: str, results: list[SearchResult]) -> str:
+    def generate(
+        self, question: str, results: list[SearchResult], answer_mode: str = "patient"
+    ) -> str:
         raise NotImplementedError
 
 
@@ -39,7 +56,9 @@ class Generator(ABC):
 class ExtractiveGenerator(Generator):
     model_name: str = "extractive"
 
-    def generate(self, question: str, results: list[SearchResult]) -> str:
+    def generate(
+        self, question: str, results: list[SearchResult], answer_mode: str = "patient"
+    ) -> str:
         if not results:
             return (
                 "I could not find a relevant indexed passage that answers that question. "
@@ -48,15 +67,21 @@ class ExtractiveGenerator(Generator):
             )
 
         if is_diet_query(question):
-            return _diet_answer(results)
+            return _diet_answer(results, answer_mode)
 
         passages = []
         for citation_id, result in enumerate(results[:3], start=1):
             excerpt = _best_excerpt(result.chunk.text, question, max_chars=520)
             passages.append(f"{excerpt} [{citation_id}]")
 
+        opener = (
+            "I found these relevant points in the indexed stroke literature:"
+            if answer_mode == "patient"
+            else "Retrieved evidence from the indexed stroke literature:"
+        )
         return (
-            "The most relevant indexed passages say:\n\n"
+            opener
+            + "\n\n"
             + "\n\n".join(passages)
             + f"\n\n{SAFETY_NOTICE}"
         )
@@ -69,7 +94,9 @@ class OllamaGenerator(Generator):
     temperature: float = 0.1
     timeout_seconds: float = 20.0
 
-    def generate(self, question: str, results: list[SearchResult]) -> str:
+    def generate(
+        self, question: str, results: list[SearchResult], answer_mode: str = "patient"
+    ) -> str:
         if not results:
             return (
                 "I could not find a relevant indexed passage that answers that question. "
@@ -82,8 +109,8 @@ class OllamaGenerator(Generator):
                 "model": self.model_name,
                 "stream": False,
                 "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": _user_prompt(question, results)},
+                    {"role": "system", "content": _system_prompt(answer_mode)},
+                    {"role": "user", "content": _user_prompt(question, results, answer_mode)},
                 ],
                 "options": {"temperature": self.temperature},
             }
@@ -116,11 +143,13 @@ class FallbackGenerator(Generator):
     def model_name(self) -> str:
         return self.primary.model_name
 
-    def generate(self, question: str, results: list[SearchResult]) -> str:
+    def generate(
+        self, question: str, results: list[SearchResult], answer_mode: str = "patient"
+    ) -> str:
         try:
-            return self.primary.generate(question, results)
+            return self.primary.generate(question, results, answer_mode=answer_mode)
         except RuntimeError as exc:
-            fallback_answer = self.fallback.generate(question, results)
+            fallback_answer = self.fallback.generate(question, results, answer_mode=answer_mode)
             return (
                 fallback_answer
                 + "\n\nGeneration backend was unavailable, so this answer uses extractive retrieval."
@@ -145,7 +174,13 @@ def make_generator(settings: Settings) -> Generator:
     raise ValueError(f"Unsupported generation backend: {settings.generation_backend}")
 
 
-def _user_prompt(question: str, results: list[SearchResult]) -> str:
+def _system_prompt(answer_mode: str) -> str:
+    return SYSTEM_PROMPT + "\n\n" + _ANSWER_MODE_INSTRUCTIONS.get(
+        answer_mode, _ANSWER_MODE_INSTRUCTIONS["patient"]
+    )
+
+
+def _user_prompt(question: str, results: list[SearchResult], answer_mode: str) -> str:
     passages = []
     for citation_id, result in enumerate(results, start=1):
         metadata = result.chunk.metadata
@@ -158,7 +193,8 @@ def _user_prompt(question: str, results: list[SearchResult]) -> str:
 
     return (
         "Answer the question using the retrieved passages below. Cite every sourced claim with the "
-        "matching bracketed number. If the passages do not answer the question, say that plainly.\n\n"
+        "matching bracketed number. If the passages do not answer the question, say that plainly. "
+        f"Use {answer_mode} answer mode.\n\n"
         f"Question: {question}\n\nRetrieved passages:\n\n" + "\n\n".join(passages)
     )
 
@@ -198,28 +234,44 @@ def _terms(text: str) -> list[str]:
     return [term.lower() for term in re.findall(r"[a-zA-Z][a-zA-Z0-9_+-]*", text)]
 
 
-def _diet_answer(results: list[SearchResult]) -> str:
+def _diet_answer(results: list[SearchResult], answer_mode: str) -> str:
     evidence = [_evidence_text(result) for result in results]
     evidence_blob = " ".join(evidence).lower()
     parts: list[str] = []
 
+    clinician = answer_mode == "clinician"
     if _has_any(evidence_blob, {"dysphagia", "swallow", "swallowing", "aspiration"}):
         citation = _first_citation_with(results, {"dysphagia", "swallow", "swallowing", "aspiration"})
-        parts.append(
-            "The indexed evidence is pointing first to swallowing safety, not a simple food list. "
-            "It says dysphagia, or difficulty swallowing, is common soon after stroke, so eating by "
-            f"mouth should be guided by dysphagia screening and swallowing management [{citation}]."
-        )
+        if clinician:
+            parts.append(
+                "The retrieved rehabilitation guideline material prioritizes dysphagia screening and "
+                "swallowing management before oral intake. It reports dysphagia is common early after "
+                f"stroke, so diet recommendations should be conditioned on swallow safety and aspiration "
+                f"risk [{citation}]."
+            )
+        else:
+            parts.append(
+                "The indexed evidence points first to swallowing safety, not a simple food list. "
+                "Dysphagia means difficulty swallowing, and it is common soon after stroke. Eating by "
+                f"mouth should be guided by swallowing screening and management [{citation}]."
+            )
 
     if _has_any(evidence_blob, {"tube", "nasogastric", "gastrostomy", "feeding", "feeds"}):
         citation = _first_citation_with(
             results, {"tube", "nasogastric", "gastrostomy", "feeding", "feeds"}
         )
-        parts.append(
-            "If swallowing is not safe, the retrieved guideline text discusses nutritional support "
-            "rather than ordinary meals; it says nasogastric tube feeding can be reasonable for the "
-            f"first 2 to 3 weeks after stroke in some patients [{citation}]."
-        )
+        if clinician:
+            parts.append(
+                "When oral intake is unsafe or inadequate, the retrieved guideline text supports "
+                "enteral nutritional support; nasogastric tube feeding is described as reasonable for "
+                f"the first 2 to 3 weeks after stroke in selected patients [{citation}]."
+            )
+        else:
+            parts.append(
+                "If swallowing is not safe, the sources discuss nutritional support instead of regular "
+                "meals. In some patients, a nasogastric feeding tube can be reasonable for the first "
+                f"2 to 3 weeks after stroke [{citation}]."
+            )
 
     if _has_any(
         evidence_blob,
@@ -229,11 +281,17 @@ def _diet_answer(results: list[SearchResult]) -> str:
             results,
             {"fruit", "fruits", "vegetable", "vegetables", "salt", "sodium", "saturated", "fat"},
         )
-        parts.append(
-            "For ordinary eating after swallowing has been cleared, the indexed passage supports a "
-            "dietary pattern that includes fruits and vegetables and is lower in salt and saturated "
-            f"fat [{citation}]."
-        )
+        if clinician:
+            parts.append(
+                "For patients cleared for oral intake, the retrieved diet-related material supports a "
+                "secondary-prevention dietary pattern emphasizing fruits and vegetables and lower salt "
+                f"and saturated fat intake [{citation}]."
+            )
+        else:
+            parts.append(
+                "If swallowing has been cleared, the indexed passage supports eating more fruits and "
+                f"vegetables and choosing foods lower in salt and saturated fat [{citation}]."
+            )
 
     if not parts:
         parts.append(

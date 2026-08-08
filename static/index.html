@@ -108,12 +108,13 @@
         border-top: 1px solid var(--line);
         padding: 14px;
         display: grid;
-        grid-template-columns: 1fr auto;
+        grid-template-columns: minmax(0, 1fr) 156px auto;
         gap: 12px;
       }
 
       textarea,
-      input {
+      input,
+      select {
         width: 100%;
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -215,6 +216,14 @@
         .workspace {
           min-height: 58vh;
         }
+
+        form {
+          grid-template-columns: 1fr;
+        }
+
+        button {
+          min-height: 42px;
+        }
       }
     </style>
   </head>
@@ -234,6 +243,10 @@
         </div>
         <form id="ask-form">
           <textarea id="question" name="question" placeholder="Ask about stroke diagnosis, prevention, rehabilitation, systems of care..." required></textarea>
+          <select id="answer-mode" name="answer-mode" aria-label="Answer mode">
+            <option value="patient">Patient</option>
+            <option value="clinician">Clinician</option>
+          </select>
           <button id="ask-button" type="submit">Ask</button>
         </form>
       </section>
@@ -320,9 +333,10 @@
         citations.hidden = true;
         try {
           const question = document.querySelector("#question").value.trim();
+          const answerMode = document.querySelector("#answer-mode").value;
           const payload = await requestJson("/ask", {
             method: "POST",
-            body: JSON.stringify({ question }),
+            body: JSON.stringify({ question, answer_mode: answerMode }),
           });
           answer.textContent = payload.answer;
           citations.innerHTML = payload.citations

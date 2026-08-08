@@ -23,6 +23,7 @@ def test_pipeline_ingests_text_and_answers(tmp_path) -> None:
     response = rag.ask("What are stroke symptoms?", top_k=1)
 
     assert report.chunks == 1
+    assert response.answer_mode == "patient"
     assert "face drooping" in response.answer
     assert response.citations[0].source == "stroke_notes.txt"
 
@@ -104,6 +105,51 @@ def test_diet_question_synthesizes_dysphagia_evidence(tmp_path) -> None:
     response = rag.ask("What should I eat after a stroke?", top_k=3)
 
     assert "swallowing safety" in response.answer
-    assert "nasogastric tube feeding" in response.answer
+    assert "nasogastric feeding tube" in response.answer
     assert "detailed normal-food meal plan" in response.answer
     assert "The most relevant indexed passages say" not in response.answer
+
+
+def test_pipeline_accepts_clinician_answer_mode(tmp_path) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "rehab_guideline.txt").write_text(
+        "Dysphagia is common after stroke. Tube feeds via nasogastric route are reasonable "
+        "for the first 2 to 3 weeks after stroke.",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=corpus,
+        index_path=tmp_path / ".rag" / "index.json",
+        chunk_size_chars=400,
+        chunk_overlap_chars=40,
+    )
+    rag = StrokeRAG(settings)
+
+    rag.ingest()
+    response = rag.ask("What should I eat after a stroke?", top_k=3, answer_mode="clinician")
+
+    assert response.answer_mode == "clinician"
+    assert "aspiration risk" in response.answer
+
+
+def test_pipeline_rejects_unknown_answer_mode(tmp_path) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "stroke_notes.txt").write_text("Stroke symptoms can include arm weakness.")
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=corpus,
+        index_path=tmp_path / ".rag" / "index.json",
+    )
+    rag = StrokeRAG(settings)
+
+    rag.ingest()
+
+    try:
+        rag.ask("What are stroke symptoms?", answer_mode="research")
+    except ValueError as exc:
+        assert "answer_mode" in str(exc)
+    else:
+        raise AssertionError("Expected invalid answer mode to raise ValueError")

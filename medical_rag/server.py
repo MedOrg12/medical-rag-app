@@ -4,7 +4,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -19,6 +19,7 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     top_k: int | None = Field(default=None, ge=1, le=20)
     filters: dict[str, str] | None = None
+    answer_mode: Literal["patient", "clinician"] | None = None
 
 
 class IngestRequest(BaseModel):
@@ -143,6 +144,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 question=request.question,
                 top_k=request.top_k,
                 filters=request.filters,
+                answer_mode=request.answer_mode,
             ).to_dict()
         except FileNotFoundError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
