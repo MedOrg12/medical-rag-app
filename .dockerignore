@@ -1,5 +1,7 @@
 .git/
 .rag/
+.rag_*/
+.rag_benchmark*/
 .venv/
 venv/
 __pycache__/

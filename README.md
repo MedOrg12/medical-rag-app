@@ -37,10 +37,43 @@ docker compose up --build
 
 The container mounts `./pdfs` into `/app/pdfs`, stores the generated vector index in a named volume, and auto-ingests on first startup. The app is available at `http://127.0.0.1:8000`.
 
-To run with Ollama generation:
+To run with Ollama generation using the Ollama app already running on your Mac:
 
 ```bash
-RAG_GENERATION_BACKEND=ollama docker compose --profile ollama up --build
+open -a Ollama
+curl http://localhost:11434/api/tags
+
+RAG_GENERATION_BACKEND=ollama \
+RAG_EMBEDDING_BACKEND=hash \
+RAG_OLLAMA_BASE_URL=http://host.docker.internal:11434 \
+docker compose up -d --build medical-rag
+```
+
+Inside Docker, `localhost` means the app container, not your Mac. Use
+`http://host.docker.internal:11434` when the Ollama desktop app is running on the host.
+
+To run Ollama as a Docker Compose service instead:
+
+```bash
+docker compose --profile ollama up -d ollama
+docker exec -it stroke-medical-rag-ollama ollama pull llama3.1
+
+RAG_GENERATION_BACKEND=ollama \
+RAG_EMBEDDING_BACKEND=hash \
+RAG_OLLAMA_BASE_URL=http://ollama:11434 \
+docker compose --profile ollama up -d --build medical-rag
+```
+
+For semantic Ollama embeddings, also pull the embedding model and rebuild the index:
+
+```bash
+docker exec -it stroke-medical-rag-ollama ollama pull nomic-embed-text
+
+RAG_GENERATION_BACKEND=ollama \
+RAG_EMBEDDING_BACKEND=ollama \
+RAG_OLLAMA_BASE_URL=http://ollama:11434 \
+RAG_FORCE_REINGEST=true \
+docker compose --profile ollama up -d --build medical-rag
 ```
 
 The default Docker path still works without Ollama by using local hashing retrieval and extractive answers.

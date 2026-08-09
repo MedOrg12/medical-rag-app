@@ -1,0 +1,442 @@
+{
+  "created_at": "2026-07-17T23:47:18.340079+00:00",
+  "workspace": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b",
+  "source": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+  "source_files": [
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Adelaide Stroke Incidence Study_Declining Stroke Rates but Many Preventable Cardioembolic Strokes.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Comparison of Mobile Stroke Unit With Usual Care.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Design and Validation of a Prehospital Scale to Predict Stroke Severity_Cincinnati Prehospital Stroke Severity Scale.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/ESO-EAN Joint Guidelines on Post-Stroke Cognitive Impairment.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Factor XIa Inhibition With Asundexian After Acute Ischaemic Stroke - PACIFIC-Stroke Trial.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Feasibility of an Ambulance-Based Stroke Trial, and Safety of Glyceryl Trinitrate in Ultra-Acute Stroke_The Rapid Intervention With Glyceryl Trinitrate in Hypertensive Stroke Trial (RIGHT, ISRCTN66434824).pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Functional Recovery After Ischemic Stroke - A Matter of Age.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Guidelines for Adult Stroke Rehabilitation and Recovery_A Guideline for Healthcare Professionals From the American Heart Association_American Stroke Association.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Guidelines for the Prevention of Stroke in Patients With Stroke or Transient Ischemic Attack_A Guideline for Healthcare Professionals From the American Heart Association_American Stroke Association.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Ischemic Stroke - Mechanisms Presentation and Management.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Left Atrial Mechanical Dysfunction and the Risk for Ischemic Stroke.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Prehospital Stroke Management Optimized by Use of Clinical Scoring.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Randomized Trials of Endovascular Therapy for Stroke.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Recommendations for the Establishment of Stroke Systems of Care_ A 2019 Update A Policy Statement From the American Stroke Association.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Sex Differences in Stroke Care and Outcome 2005\u20132018_Observations From the Swedish Stroke Register.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/SOURCES.md",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Stroke - Diagnosis Reperfusion and Prevention - Campbell Khatri 2020.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Stroke Incidence Is Decreasing in Whites But Not in Blacks_A Population-Based Estimate of Temporal Trends in Stroke Incidence From the Greater Cincinnati_Northern Kentucky Stroke Study.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Stroke Prognostication Using Age and NIH Stroke Scale - SPAN-100.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Stroke Rehabilitation - The Lancet.pdf",
+    "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs/Systemic Inflammation After Stroke - Implications for Post-Stroke Comorbidities.pdf"
+  ],
+  "args": {
+    "runs": 3,
+    "max_files": null,
+    "skip_cached_rebuild": false
+  },
+  "settings": {
+    "chunk_size_chars": 1400,
+    "chunk_overlap_chars": 220,
+    "embedding_backend": "hash",
+    "hash_embedding_dimensions": 768,
+    "ollama_base_url": "http://localhost:11434",
+    "ollama_embedding_model": "nomic-embed-text",
+    "pdf_workers": 4,
+    "embedding_batch_size": 64
+  },
+  "summary": [
+    {
+      "scenario": "legacy_full_ingest",
+      "runs": 3,
+      "mean_seconds": 14.056636,
+      "median_seconds": 13.867406,
+      "min_seconds": 13.859974,
+      "max_seconds": 14.442529,
+      "documents": 21,
+      "pages": 336,
+      "chunks": 2028
+    },
+    {
+      "scenario": "incremental_cold_ingest",
+      "runs": 3,
+      "mean_seconds": 5.673349,
+      "median_seconds": 5.695651,
+      "min_seconds": 5.603191,
+      "max_seconds": 5.721205,
+      "documents": 21,
+      "pages": 336,
+      "chunks": 2028
+    },
+    {
+      "scenario": "incremental_resume_noop",
+      "runs": 3,
+      "mean_seconds": 0.337262,
+      "median_seconds": 0.336118,
+      "min_seconds": 0.334766,
+      "max_seconds": 0.340903,
+      "documents": 21,
+      "pages": 0,
+      "chunks": 2028
+    },
+    {
+      "scenario": "incremental_cached_rebuild",
+      "runs": 3,
+      "mean_seconds": 1.331026,
+      "median_seconds": 1.33568,
+      "min_seconds": 1.264326,
+      "max_seconds": 1.393073,
+      "documents": 21,
+      "pages": 336,
+      "chunks": 2028
+    }
+  ],
+  "results": [
+    {
+      "scenario": "legacy_full_ingest",
+      "run": 1,
+      "wall_seconds": 14.442529,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 336,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-1/legacy-full/.rag/index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 0,
+        "files_changed": 0,
+        "files_processed": 0,
+        "files_from_cache": 0,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": false,
+        "manifest_path": null,
+        "extraction_cache_dir": null,
+        "timings": null
+      }
+    },
+    {
+      "scenario": "incremental_cold_ingest",
+      "run": 1,
+      "wall_seconds": 5.695651,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 336,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-1/incremental/.rag/index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 21,
+        "files_changed": 21,
+        "files_processed": 21,
+        "files_from_cache": 0,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": false,
+        "manifest_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-1/incremental/.rag/manifest.sqlite",
+        "extraction_cache_dir": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-1/incremental/.rag/extracted",
+        "timings": {
+          "discovery_seconds": 0.018,
+          "extraction_seconds": 3.6969,
+          "chunking_seconds": 0.4714,
+          "embedding_seconds": 0.8016,
+          "index_write_seconds": 0.6889,
+          "total_seconds": 5.683
+        }
+      }
+    },
+    {
+      "scenario": "incremental_resume_noop",
+      "run": 1,
+      "wall_seconds": 0.340903,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 0,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-1/incremental/.rag/index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 21,
+        "files_changed": 0,
+        "files_processed": 0,
+        "files_from_cache": 0,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": true,
+        "manifest_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-1/incremental/.rag/manifest.sqlite",
+        "extraction_cache_dir": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-1/incremental/.rag/extracted",
+        "timings": {
+          "discovery_seconds": 0.0158,
+          "total_seconds": 0.2128
+        }
+      }
+    },
+    {
+      "scenario": "incremental_cached_rebuild",
+      "run": 1,
+      "wall_seconds": 1.33568,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 336,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-1/incremental/.rag/rebuilt-from-cache-index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 21,
+        "files_changed": 0,
+        "files_processed": 0,
+        "files_from_cache": 21,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": false,
+        "manifest_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-1/incremental/.rag/manifest.sqlite",
+        "extraction_cache_dir": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-1/incremental/.rag/extracted",
+        "timings": {
+          "discovery_seconds": 0.0148,
+          "extraction_seconds": 0.0064,
+          "chunking_seconds": 0.4791,
+          "embedding_seconds": 0.0032,
+          "index_write_seconds": 0.6901,
+          "total_seconds": 1.1985
+        }
+      }
+    },
+    {
+      "scenario": "legacy_full_ingest",
+      "run": 2,
+      "wall_seconds": 13.859974,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 336,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-2/legacy-full/.rag/index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 0,
+        "files_changed": 0,
+        "files_processed": 0,
+        "files_from_cache": 0,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": false,
+        "manifest_path": null,
+        "extraction_cache_dir": null,
+        "timings": null
+      }
+    },
+    {
+      "scenario": "incremental_cold_ingest",
+      "run": 2,
+      "wall_seconds": 5.721205,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 336,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-2/incremental/.rag/index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 21,
+        "files_changed": 21,
+        "files_processed": 21,
+        "files_from_cache": 0,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": false,
+        "manifest_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-2/incremental/.rag/manifest.sqlite",
+        "extraction_cache_dir": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-2/incremental/.rag/extracted",
+        "timings": {
+          "discovery_seconds": 0.0168,
+          "extraction_seconds": 3.7231,
+          "chunking_seconds": 0.4192,
+          "embedding_seconds": 0.8026,
+          "index_write_seconds": 0.7438,
+          "total_seconds": 5.7105
+        }
+      }
+    },
+    {
+      "scenario": "incremental_resume_noop",
+      "run": 2,
+      "wall_seconds": 0.336118,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 0,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-2/incremental/.rag/index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 21,
+        "files_changed": 0,
+        "files_processed": 0,
+        "files_from_cache": 0,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": true,
+        "manifest_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-2/incremental/.rag/manifest.sqlite",
+        "extraction_cache_dir": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-2/incremental/.rag/extracted",
+        "timings": {
+          "discovery_seconds": 0.0151,
+          "total_seconds": 0.2072
+        }
+      }
+    },
+    {
+      "scenario": "incremental_cached_rebuild",
+      "run": 2,
+      "wall_seconds": 1.264326,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 336,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-2/incremental/.rag/rebuilt-from-cache-index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 21,
+        "files_changed": 0,
+        "files_processed": 0,
+        "files_from_cache": 21,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": false,
+        "manifest_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-2/incremental/.rag/manifest.sqlite",
+        "extraction_cache_dir": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-2/incremental/.rag/extracted",
+        "timings": {
+          "discovery_seconds": 0.0146,
+          "extraction_seconds": 0.0069,
+          "chunking_seconds": 0.4257,
+          "embedding_seconds": 0.0036,
+          "index_write_seconds": 0.6766,
+          "total_seconds": 1.1318
+        }
+      }
+    },
+    {
+      "scenario": "legacy_full_ingest",
+      "run": 3,
+      "wall_seconds": 13.867406,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 336,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-3/legacy-full/.rag/index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 0,
+        "files_changed": 0,
+        "files_processed": 0,
+        "files_from_cache": 0,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": false,
+        "manifest_path": null,
+        "extraction_cache_dir": null,
+        "timings": null
+      }
+    },
+    {
+      "scenario": "incremental_cold_ingest",
+      "run": 3,
+      "wall_seconds": 5.603191,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 336,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-3/incremental/.rag/index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 21,
+        "files_changed": 21,
+        "files_processed": 21,
+        "files_from_cache": 0,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": false,
+        "manifest_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-3/incremental/.rag/manifest.sqlite",
+        "extraction_cache_dir": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-3/incremental/.rag/extracted",
+        "timings": {
+          "discovery_seconds": 0.0138,
+          "extraction_seconds": 3.6077,
+          "chunking_seconds": 0.4197,
+          "embedding_seconds": 0.8024,
+          "index_write_seconds": 0.744,
+          "total_seconds": 5.5923
+        }
+      }
+    },
+    {
+      "scenario": "incremental_resume_noop",
+      "run": 3,
+      "wall_seconds": 0.334766,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 0,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-3/incremental/.rag/index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 21,
+        "files_changed": 0,
+        "files_processed": 0,
+        "files_from_cache": 0,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": true,
+        "manifest_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-3/incremental/.rag/manifest.sqlite",
+        "extraction_cache_dir": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-3/incremental/.rag/extracted",
+        "timings": {
+          "discovery_seconds": 0.0155,
+          "total_seconds": 0.2075
+        }
+      }
+    },
+    {
+      "scenario": "incremental_cached_rebuild",
+      "run": 3,
+      "wall_seconds": 1.393073,
+      "report": {
+        "source_path": "/Users/devshah/Documents/WorkSpace/Research/medical-rag/medical-rag-app/pdfs",
+        "documents": 21,
+        "pages": 336,
+        "chunks": 2028,
+        "index_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-3/incremental/.rag/rebuilt-from-cache-index.json",
+        "embedding_model": "hashing-bow-768",
+        "files_discovered": 21,
+        "files_changed": 0,
+        "files_processed": 0,
+        "files_from_cache": 21,
+        "files_failed": 0,
+        "duplicate_files": 0,
+        "deleted_files": 0,
+        "scanned_pages": 0,
+        "skipped_unchanged": false,
+        "manifest_path": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-3/incremental/.rag/manifest.sqlite",
+        "extraction_cache_dir": "/var/folders/x_/qkd8hs9148b8542nqxc89qpc0000gn/T/medical-rag-ingestion-benchmark-1uaswx5b/run-3/incremental/.rag/extracted",
+        "timings": {
+          "discovery_seconds": 0.015,
+          "extraction_seconds": 0.0063,
+          "chunking_seconds": 0.4233,
+          "embedding_seconds": 0.0036,
+          "index_write_seconds": 0.8108,
+          "total_seconds": 1.2633
+        }
+      }
+    }
+  ]
+}
