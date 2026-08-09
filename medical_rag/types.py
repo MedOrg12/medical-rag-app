@@ -74,6 +74,8 @@ class RagAnswer:
     generation_model: str
     answer_mode: str
     safety_notice: str
+    retrieval_mode: str = "vector"
+    fallback_embedding: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

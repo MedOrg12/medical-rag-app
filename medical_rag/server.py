@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from medical_rag.config import Settings
+from medical_rag.embeddings import _ollama_available
 from medical_rag.pipeline import StrokeRAG
 
 
@@ -99,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "corpus_dir": str(app_settings.corpus_dir),
             "embedding_backend": app_settings.embedding_backend,
             "generation_backend": app_settings.generation_backend,
+            "ollama_available": _ollama_available(app_settings.ollama_base_url),
         }
 
     @app.post("/ingest")
