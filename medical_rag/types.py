@@ -11,6 +11,8 @@ class PageText:
     title: str
     page_number: int | None
     text: str
+    hierarchy: list[str] | None = None
+    layout_hints: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
