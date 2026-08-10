@@ -13,6 +13,11 @@ Clean stroke-focused retrieval-augmented generation system. The previous reposit
 - CLI commands for ingesting and asking questions
 - Focused tests for the core RAG path
 
+## Versioning
+
+The current application version is `0.1.0`. See `CHANGELOG.md` for release notes and
+`docs/RELEASE_PROCESS.md` for the release checklist.
+
 ## Quick Start
 
 ```bash

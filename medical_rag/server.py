@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from medical_rag import __version__
 from medical_rag.config import Settings
 from medical_rag.embeddings import _ollama_available
 from medical_rag.pipeline import StrokeRAG
@@ -48,7 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="Stroke Medical RAG",
         description="Stroke-focused retrieval-augmented generation API.",
-        version="0.1.0",
+        version=__version__,
     )
 
     static_dir = app_settings.root_dir / "static"
