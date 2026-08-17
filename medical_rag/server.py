@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -103,6 +103,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "generation_backend": app_settings.generation_backend,
             "ollama_available": _ollama_available(app_settings.ollama_base_url),
         }
+
+    @app.get("/ready")
+    def ready(response: Response) -> dict[str, Any]:
+        index_exists = rag.index_exists()
+        if not index_exists:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "ok" if index_exists else "not_ready", "index_exists": index_exists}
 
     @app.post("/ingest")
     def ingest(request: IngestRequest) -> dict[str, Any]:

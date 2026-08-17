@@ -1,0 +1,27 @@
+services:
+  medical-rag:
+    image: ${IMAGE_REPOSITORY:-ghcr.io/medorg12/medical-rag-app}@${IMAGE_DIGEST}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./corpus:/app/pdfs:ro
+      - rag_index:/app/.rag
+    environment:
+      RAG_CORPUS_DIR: /app/pdfs
+      RAG_INDEX_PATH: /app/.rag/index.json
+      RAG_AUTO_INGEST_ON_STARTUP: "true"
+      RAG_EMBEDDING_BACKEND: ${RAG_EMBEDDING_BACKEND:-hash}
+      RAG_GENERATION_BACKEND: ${RAG_GENERATION_BACKEND:-extractive}
+      RAG_OLLAMA_BASE_URL: http://ollama:11434
+      RAG_OLLAMA_EMBEDDING_MODEL: ${RAG_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}
+      RAG_OLLAMA_GENERATION_MODEL: ${RAG_OLLAMA_GENERATION_MODEL:-llama3.1}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 90s
+volumes:
+  rag_index:

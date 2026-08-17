@@ -361,3 +361,83 @@ The `RAG_HYBRID_ALPHA`, `RAG_MIN_RELEVANCE_SCORE`, and `RAG_RERANKER_BACKEND` se
 - `RAG_HYBRID_ALPHA=0.5` — blend weight for hybrid vector+BM25 search (RRF fusion)
 - `RAG_MIN_RELEVANCE_SCORE=0.0` — filter out chunks below this score before generation
 - `RAG_RERANKER_BACKEND=lexical` — post-retrieval reranker (`lexical` or `none`)
+
+## Production deployment
+
+Production deployment uses an outbound-only image pull plus an authenticated HTTPS trigger:
+
+1. GitHub Actions tests the application.
+2. A successful push to `main` publishes an immutable image to GHCR.
+3. The production job obtains a short-lived GitHub OIDC identity and sends the image digest to
+   `POST /internal/deploy`.
+4. An unprivileged admission service validates the identity and queues the request.
+5. A separate systemd worker validates the identity again, verifies that the image's
+   `org.opencontainers.image.revision` label matches the authorized commit, deploys it, checks
+   `/ready`, and rolls back to the previous digest on failure.
+
+No public SSH access or inbound deploy-agent port is required. Nginx exposes only the controlled
+HTTPS routes; the API, deploy agent, and Docker application port bind to loopback.
+
+Deployment files:
+
+- `compose.production.yaml`
+- `deploy/medical-rag-app.conf`
+- `deploy/deploy-agent.env.example`
+- `deploy/systemd/`
+- `.github/workflows/ci-cd.yml`
+
+### One-time VM setup
+
+The examples assume the checked-out deployment source is `/opt/medical-rag/source` and production
+state is under `/opt/medical-rag`. Run the administrative commands through the site's approved
+privilege-elevation process.
+
+```bash
+useradd --system --home /nonexistent --shell /usr/sbin/nologin medical-rag-deploy
+install -d -o root -g root -m 0755 /opt/medical-rag/source /opt/medical-rag/corpus
+install -d -o root -g medical-rag-deploy -m 0750 /etc/medical-rag
+install -d -o root -g medical-rag-deploy -m 0750 /etc/medical-rag/docker
+
+python3 -m venv /opt/medical-rag/deploy-venv
+/opt/medical-rag/deploy-venv/bin/pip install -r requirements-deploy.txt
+
+install -o root -g medical-rag-deploy -m 0640 \
+  deploy/deploy-agent.env.example /etc/medical-rag/deploy-agent.env
+install -o root -g root -m 0644 compose.production.yaml /opt/medical-rag/compose.production.yaml
+install -o root -g root -m 0644 deploy/systemd/*.service deploy/systemd/*.path \
+  /etc/systemd/system/
+install -o root -g root -m 0644 deploy/medical-rag-app.conf \
+  /etc/nginx/conf.d/medical-rag-app.conf
+```
+
+Copy the `deploy_agent` package into `/opt/medical-rag/source`, then edit
+`/etc/medical-rag/deploy-agent.env`. `DEPLOY_GITHUB_REPOSITORY_ID` must be the repository's numeric,
+immutable GitHub ID. Update the temporary hostname, certificate paths, OIDC audience, and GitHub
+`DEPLOY_URL` variable together when the domain changes.
+
+Authenticate the VM to GHCR with a read-only package token using the worker's isolated Docker
+configuration:
+
+```bash
+DOCKER_CONFIG=/etc/medical-rag/docker docker login ghcr.io
+```
+
+Validate and start the services:
+
+```bash
+nginx -t
+systemctl daemon-reload
+systemctl enable --now medical-rag-deploy-api.service
+systemctl enable --now medical-rag-deploy-worker.path
+systemctl reload nginx
+```
+
+In the GitHub `production` environment, configure:
+
+- Variable `DEPLOY_URL`: `https://web1-rag.efeyzee.dev/internal/deploy`
+- Variable `APPLICATION_URL`: the public application URL
+- Deployment branch restriction: `main`
+- A required reviewer, if supported by the repository plan
+
+The supplied domain is intentionally treated as temporary. The permanent Nginx filename remains
+`medical-rag-app.conf`.
