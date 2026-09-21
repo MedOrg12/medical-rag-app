@@ -17,7 +17,12 @@ from medical_rag.llm import SAFETY_NOTICE, Generator, make_generator
 from medical_rag.relevance import expand_query_for_retrieval, filter_results_for_question
 from medical_rag.reranker import Reranker, make_reranker
 from medical_rag.types import Chunk, Citation, IngestionReport, RagAnswer, SearchResult
-from medical_rag.vector_store import VectorStore
+from medical_rag.vector_store import (
+    VectorStoreBackend,
+    build_vector_store,
+    load_vector_store,
+    vector_store_exists,
+)
 
 
 class StrokeRAG:
@@ -35,7 +40,7 @@ class StrokeRAG:
             self.embedding_model, self._fallback_embedding = make_embedding_model(self.settings)
         self.generator = generator or make_generator(self.settings)
         self._reranker: Reranker = make_reranker(self.settings)
-        self._store: VectorStore | None = None
+        self._store: VectorStoreBackend | None = None
 
     def ingest(
         self,
@@ -69,11 +74,7 @@ class StrokeRAG:
         if not chunks:
             raise ValueError(f"No chunks could be created from {source}")
 
-        store = VectorStore.build(
-            path=self.settings.index_path,
-            chunks=chunks,
-            embedding_model=self.embedding_model,
-        )
+        store = build_vector_store(self.settings, chunks, self.embedding_model)
         store.save()
         self._store = store
 
@@ -125,8 +126,8 @@ class StrokeRAG:
             failed_only=failed_only,
         )
 
-        if not changed_files and not deleted_paths and self.settings.index_path.exists():
-            store = VectorStore.load(self.settings.index_path)
+        if not changed_files and not deleted_paths and vector_store_exists(self.settings):
+            store = load_vector_store(self.settings)
             total_seconds = round(time.perf_counter() - started, 4)
             timings["total_seconds"] = total_seconds
             return IngestionReport(
@@ -195,11 +196,7 @@ class StrokeRAG:
             raise ValueError(f"No chunks could be created from {source}")
 
         embedding_start = time.perf_counter()
-        store = VectorStore.build(
-            path=self.settings.index_path,
-            chunks=chunks,
-            embedding_model=self.embedding_model,
-        )
+        store = build_vector_store(self.settings, chunks, self.embedding_model)
         timings["embedding_seconds"] = round(time.perf_counter() - embedding_start, 4)
 
         save_start = time.perf_counter()
@@ -277,8 +274,6 @@ class StrokeRAG:
         answer = self.generator.generate(question, results, answer_mode=mode)
         citations = [_citation(result, citation_id) for citation_id, result in enumerate(results, 1)]
 
-        retrieval_mode = "hybrid" if (store._bm25 is not None) else "vector"
-
         return RagAnswer(
             question=question,
             answer=answer,
@@ -287,7 +282,7 @@ class StrokeRAG:
             generation_model=self.generator.model_name,
             answer_mode=mode,
             safety_notice=SAFETY_NOTICE,
-            retrieval_mode=retrieval_mode,
+            retrieval_mode=store.retrieval_mode,
             fallback_embedding=self._fallback_embedding,
         )
 
@@ -295,19 +290,19 @@ class StrokeRAG:
         return self._load_store().source_summaries()
 
     def index_exists(self) -> bool:
-        return self.settings.index_path.exists()
+        return vector_store_exists(self.settings)
 
     def fallback_embedding_used(self) -> bool:
         return self._fallback_embedding
 
-    def _load_store(self) -> VectorStore:
+    def _load_store(self) -> VectorStoreBackend:
         if self._store is not None:
             return self._store
-        if not self.settings.index_path.exists():
+        if not vector_store_exists(self.settings):
             raise FileNotFoundError(
                 f"Vector index not found at {self.settings.index_path}. Run ingestion first."
             )
-        self._store = VectorStore.load(self.settings.index_path)
+        self._store = load_vector_store(self.settings)
         return self._store
 
 

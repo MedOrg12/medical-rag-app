@@ -152,6 +152,8 @@ Tuning knobs:
 
 Keep embedding workers conservative with local Ollama. PDF parsing can be parallelized, but local model embedding usually benefits more from batching than from high concurrency.
 
+For GPU-cluster ingestion into Qdrant, see `docs/SLURM_INGESTION.md` and the Slurm template at `scripts/slurm_ingest_qdrant.sbatch`.
+
 ## API
 
 ```bash
@@ -290,6 +292,12 @@ Environment variables:
 - `RAG_API_KEY`: API key for hosted OpenAI-compatible generation or embeddings; `OPENAI_API_KEY` is also accepted
 - `RAG_API_GENERATION_MODEL`: default `gpt-4o-mini`
 - `RAG_API_EMBEDDING_MODEL`: default `text-embedding-3-small`
+- `RAG_VECTOR_STORE`: `json` or `qdrant`
+- `RAG_QDRANT_URL`: default `http://localhost:6333`
+- `RAG_QDRANT_API_KEY`: optional Qdrant API key
+- `RAG_QDRANT_COLLECTION`: default `stroke_chunks`
+- `RAG_QDRANT_BATCH_SIZE`: default `128`
+- `RAG_QDRANT_RECREATE_COLLECTION`: default `true`
 
 Legacy Docker variables from the previous app are also accepted where they map cleanly:
 `PDF_FOLDER`, `VECTOR_DB_PATH`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `OLLAMA_BASE_URL`,

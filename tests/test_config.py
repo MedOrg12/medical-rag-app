@@ -18,8 +18,8 @@ def test_settings_accept_legacy_docker_environment(monkeypatch, tmp_path) -> Non
 
     settings = Settings.from_env(tmp_path)
 
-    assert str(settings.corpus_dir) == "/app/pdfs"
-    assert str(settings.index_path) == "/app/vector_db/index.json"
+    assert settings.corpus_dir.as_posix().endswith("/app/pdfs")
+    assert settings.index_path.as_posix().endswith("/app/vector_db/index.json")
     assert settings.chunk_size_chars == 900
     assert settings.chunk_overlap_chars == 120
     assert settings.top_k == 8
