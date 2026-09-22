@@ -8,7 +8,7 @@ Use `scripts/slurm_ingest_qdrant.sbatch` to run corpus ingestion as an offline S
 - A Python virtual environment with `pip install -r requirements.txt`.
 - The PDF corpus on storage visible from the compute node.
 - SSH access from the compute node to `134.87.8.87`; the batch job opens a local tunnel to Qdrant by default.
-- An embedding service reachable from the compute node. The template is set up for Ollama embeddings by default.
+- An embedding service reachable from the compute node. The template is set up for Ollama embeddings by default, and opens an Ollama tunnel through the same SSH host when `RAG_OLLAMA_BASE_URL` is not provided.
 
 ## Submit
 
@@ -16,7 +16,7 @@ Use `scripts/slurm_ingest_qdrant.sbatch` to run corpus ingestion as an offline S
 cd /shared/projects/medical-rag-app
 
 sbatch \
-  --export=ALL,PROJECT_DIR=/shared/projects/medical-rag-app,RAG_CORPUS_DIR=/shared/data/stroke-pdfs,RAG_OLLAMA_BASE_URL=http://ollama.internal:11434 \
+  --export=ALL,PROJECT_DIR=/shared/projects/medical-rag-app,RAG_CORPUS_DIR=/shared/data/stroke-pdfs \
   scripts/slurm_ingest_qdrant.sbatch
 ```
 
@@ -39,6 +39,10 @@ Set `RAG_QDRANT_SSH_USER` if the SSH username for `134.87.8.87` differs from the
 - `RAG_QDRANT_COLLECTION`: target collection. Defaults to `stroke_chunks`.
 - `RAG_QDRANT_RECREATE_COLLECTION`: `true` rebuilds the collection for a clean ingestion run.
 - `RAG_OLLAMA_BASE_URL`: embedding service endpoint.
+- `RAG_OLLAMA_SSH_TUNNEL`: open an Ollama SSH tunnel when `RAG_OLLAMA_BASE_URL` is unset. Defaults to `true`.
+- `RAG_OLLAMA_LOCAL_PORT`: local forwarded Ollama port. Defaults to `11434`.
+- `RAG_OLLAMA_REMOTE_HOST`: host visible from the SSH server. Defaults to `127.0.0.1`.
+- `RAG_OLLAMA_REMOTE_PORT`: remote Ollama port. Defaults to `11434`.
 - `RAG_PDF_WORKERS`: PDF extraction workers. Defaults to `SLURM_CPUS_PER_TASK`.
 - `RAG_EMBED_BATCH_SIZE`: embedding batch size.
 
