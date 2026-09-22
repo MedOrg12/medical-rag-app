@@ -45,3 +45,15 @@ def test_with_ingestion_options_preserves_answer_mode(tmp_path) -> None:
 
     assert updated.pdf_workers == 4
     assert updated.answer_mode == "clinician"
+def test_settings_accept_sentence_transformers_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_BACKEND", "sentence-transformers")
+    monkeypatch.setenv("RAG_SENTENCE_TRANSFORMERS_MODEL", "intfloat/e5-base-v2")
+    monkeypatch.setenv("RAG_SENTENCE_TRANSFORMERS_DEVICE", "cuda")
+    monkeypatch.setenv("RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE", "32")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.embedding_backend == "sentence-transformers"
+    assert settings.sentence_transformers_model == "intfloat/e5-base-v2"
+    assert settings.sentence_transformers_device == "cuda"
+    assert settings.sentence_transformers_batch_size == 32

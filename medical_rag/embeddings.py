@@ -162,6 +162,46 @@ class ApiEmbeddingModel(EmbeddingModel):
 
 
 @dataclass
+class SentenceTransformersEmbeddingModel(EmbeddingModel):
+    model_name: str
+    device: str = "auto"
+    batch_size: int = 64
+    _model: object | None = field(default=None, init=False, repr=False)
+
+    @property
+    def name(self) -> str:
+        return f"sentence-transformers:{self.model_name}"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        model = self._load_model()
+        vectors = model.encode(
+            texts,
+            batch_size=max(1, self.batch_size),
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        return [[float(value) for value in vector] for vector in vectors.tolist()]
+
+    def _load_model(self):
+        if self._model is not None:
+            return self._model
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise RuntimeError(
+                "sentence-transformers is required for "
+                "RAG_EMBEDDING_BACKEND=sentence-transformers"
+            ) from exc
+
+        device = None if self.device == "auto" else self.device
+        self._model = SentenceTransformer(self.model_name, device=device)
+        return self._model
+
+
+@dataclass
 class CachedEmbeddingModel(EmbeddingModel):
     """Transparent disk-backed cache wrapping any EmbeddingModel.
 
@@ -304,6 +344,12 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
             api_key=settings.api_key,
             model=settings.api_embedding_model,
             timeout_seconds=settings.request_timeout_seconds,
+        )
+    elif backend in {"sentence-transformers", "sentence_transformers", "st"}:
+        inner = SentenceTransformersEmbeddingModel(
+            model_name=settings.sentence_transformers_model,
+            device=settings.sentence_transformers_device,
+            batch_size=settings.sentence_transformers_batch_size,
         )
     else:
         raise ValueError(f"Unsupported embedding backend: {backend!r}")

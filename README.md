@@ -8,6 +8,7 @@ Clean stroke-focused retrieval-augmented generation system. The previous reposit
 - Page-aware chunking with stable chunk IDs
 - Local deterministic vector retrieval with no external service required
 - Optional Ollama or OpenAI-compatible API embeddings and chat generation
+- Optional Ollama or sentence-transformers embeddings, plus Ollama chat generation
 - JSON vector index stored at `.rag/index.json`
 - FastAPI API and a browser RAG workbench
 - CLI commands for ingesting and asking questions
@@ -284,6 +285,11 @@ Environment variables:
 - `RAG_EMBEDDING_CACHE_PATH`: default `.rag/embedding_cache.json`
 - `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, or `api`
 - `RAG_GENERATION_BACKEND`: `extractive`, `ollama`, or `api`
+- `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, or `sentence-transformers`
+- `RAG_SENTENCE_TRANSFORMERS_MODEL`: default `BAAI/bge-base-en-v1.5`
+- `RAG_SENTENCE_TRANSFORMERS_DEVICE`: default `auto`; use `cuda` on GPU nodes
+- `RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE`: default `64`
+- `RAG_GENERATION_BACKEND`: `extractive` or `ollama`
 - `RAG_ANSWER_MODE`: `patient` or `clinician`
 - `RAG_OLLAMA_BASE_URL`: default `http://localhost:11434`
 - `RAG_OLLAMA_EMBEDDING_MODEL`: default `nomic-embed-text`
@@ -428,6 +434,7 @@ The `RAG_EMBEDDING_BACKEND` setting controls how chunks are embedded:
 | `auto` (default) | Uses Ollama semantic embeddings when the configured embedding model is installed; otherwise falls back to `hash` |
 | `ollama` | Always use Ollama semantic embeddings (requires Ollama running) |
 | `api` | Always use hosted OpenAI-compatible embeddings (requires `RAG_API_KEY`) |
+| `sentence-transformers` | Use a local sentence-transformers model, usually with CUDA on an HPC/GPU node |
 | `hash` | Bag-of-words hashing — fast, no network, non-semantic |
 
 Recommended Ollama embedding models:

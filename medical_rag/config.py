@@ -75,6 +75,9 @@ class Settings:
     top_k: int = 5
     embedding_backend: str = "auto"
     hash_embedding_dimensions: int = 768
+    sentence_transformers_model: str = "BAAI/bge-base-en-v1.5"
+    sentence_transformers_device: str = "auto"
+    sentence_transformers_batch_size: int = 64
     ollama_base_url: str = "http://localhost:11434"
     ollama_embedding_model: str = "nomic-embed-text"
     generation_backend: str = "extractive"
@@ -118,6 +121,11 @@ class Settings:
             top_k=_env_int_compat(5, "RAG_TOP_K", "TOP_K"),
             embedding_backend=os.getenv("RAG_EMBEDDING_BACKEND", "auto").lower(),
             hash_embedding_dimensions=_env_int("RAG_HASH_EMBEDDING_DIMENSIONS", 768),
+            sentence_transformers_model=os.getenv(
+                "RAG_SENTENCE_TRANSFORMERS_MODEL", "BAAI/bge-base-en-v1.5"
+            ),
+            sentence_transformers_device=os.getenv("RAG_SENTENCE_TRANSFORMERS_DEVICE", "auto"),
+            sentence_transformers_batch_size=_env_int("RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE", 64),
             ollama_base_url=_first_env(
                 "RAG_OLLAMA_BASE_URL", "OLLAMA_BASE_URL", default="http://localhost:11434"
             ),
@@ -176,6 +184,9 @@ class Settings:
             top_k=self.top_k,
             embedding_backend=self.embedding_backend,
             hash_embedding_dimensions=self.hash_embedding_dimensions,
+            sentence_transformers_model=self.sentence_transformers_model,
+            sentence_transformers_device=self.sentence_transformers_device,
+            sentence_transformers_batch_size=self.sentence_transformers_batch_size,
             ollama_base_url=self.ollama_base_url,
             ollama_embedding_model=self.ollama_embedding_model,
             generation_backend=self.generation_backend,
@@ -219,6 +230,9 @@ class Settings:
             top_k=self.top_k,
             embedding_backend=self.embedding_backend,
             hash_embedding_dimensions=self.hash_embedding_dimensions,
+            sentence_transformers_model=self.sentence_transformers_model,
+            sentence_transformers_device=self.sentence_transformers_device,
+            sentence_transformers_batch_size=self.sentence_transformers_batch_size,
             ollama_base_url=self.ollama_base_url,
             ollama_embedding_model=self.ollama_embedding_model,
             generation_backend=self.generation_backend,

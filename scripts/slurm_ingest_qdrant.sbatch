@@ -16,9 +16,20 @@ PROJECT_DIR="${PROJECT_DIR:-$SLURM_SUBMIT_DIR}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/.venv}"
 RAG_CORPUS_DIR="${RAG_CORPUS_DIR:-$PROJECT_DIR/pdfs}"
 RAG_SCRATCH_DIR="${RAG_SCRATCH_DIR:-${SLURM_TMPDIR:-$PROJECT_DIR/.rag-slurm}}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 cd "$PROJECT_DIR"
 mkdir -p logs "$RAG_SCRATCH_DIR"
+
+if [ "${RAG_BOOTSTRAP_PYTHON_DEPS:-true}" = "true" ]; then
+  if [ ! -f "$VENV_DIR/bin/activate" ]; then
+    "$PYTHON_BIN" -m venv "$VENV_DIR"
+  fi
+  # shellcheck disable=SC1091
+  source "$VENV_DIR/bin/activate"
+  python -m pip install --upgrade pip
+  python -m pip install -r requirements.txt -r requirements-hpc.txt
+fi
 
 if [ -f "$VENV_DIR/bin/activate" ]; then
   # shellcheck disable=SC1091
@@ -146,7 +157,13 @@ export RAG_MANIFEST_PATH="${RAG_MANIFEST_PATH:-$RAG_SCRATCH_DIR/manifest.sqlite}
 export RAG_EXTRACTION_CACHE_DIR="${RAG_EXTRACTION_CACHE_DIR:-$RAG_SCRATCH_DIR/extracted}"
 export RAG_EMBEDDING_CACHE_PATH="${RAG_EMBEDDING_CACHE_PATH:-$RAG_SCRATCH_DIR/embedding_cache.json}"
 
-export RAG_EMBEDDING_BACKEND="${RAG_EMBEDDING_BACKEND:-ollama}"
+export HF_HOME="${HF_HOME:-$RAG_SCRATCH_DIR/huggingface}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME/transformers}"
+export SENTENCE_TRANSFORMERS_HOME="${SENTENCE_TRANSFORMERS_HOME:-$HF_HOME/sentence-transformers}"
+export RAG_EMBEDDING_BACKEND="${RAG_EMBEDDING_BACKEND:-sentence-transformers}"
+export RAG_SENTENCE_TRANSFORMERS_MODEL="${RAG_SENTENCE_TRANSFORMERS_MODEL:-BAAI/bge-base-en-v1.5}"
+export RAG_SENTENCE_TRANSFORMERS_DEVICE="${RAG_SENTENCE_TRANSFORMERS_DEVICE:-cuda}"
+export RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE="${RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE:-64}"
 if [ "$RAG_EMBEDDING_BACKEND" = "ollama" ] && [ -z "${RAG_OLLAMA_BASE_URL:-}" ]; then
   if [ "${RAG_OLLAMA_SSH_TUNNEL:-true}" = "true" ]; then
     RAG_OLLAMA_LOCAL_PORT="${RAG_OLLAMA_LOCAL_PORT:-11434}"
