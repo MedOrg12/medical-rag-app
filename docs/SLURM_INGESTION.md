@@ -23,6 +23,12 @@ sbatch \
 Set `RAG_QDRANT_API_KEY` in the submit environment if the Qdrant service requires one.
 Set `RAG_QDRANT_SSH_USER` if the SSH username for `134.87.8.87` differs from the Slurm job user.
 
+The job validates SSH tunnels before ingestion starts. If a tunnel fails, the Slurm error log
+prints the SSH target, forwarded port, and the relevant log path:
+
+- `logs/qdrant-ssh-<jobid>.err`
+- `logs/ollama-ssh-<jobid>.err`
+
 ## Useful Overrides
 
 - `PROJECT_DIR`: repository checkout path. Defaults to `SLURM_SUBMIT_DIR`.

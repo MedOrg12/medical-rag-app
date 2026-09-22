@@ -27,6 +27,7 @@ fi
 
 QDRANT_TUNNEL_PID=""
 OLLAMA_TUNNEL_PID=""
+JOB_ID="${SLURM_JOB_ID:-manual}"
 cleanup() {
   if [ -n "$QDRANT_TUNNEL_PID" ] && kill -0 "$QDRANT_TUNNEL_PID" 2>/dev/null; then
     kill "$QDRANT_TUNNEL_PID"
@@ -39,6 +40,84 @@ cleanup() {
 }
 trap cleanup EXIT
 
+fail() {
+  echo "ERROR: $*" >&2
+  exit 2
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || fail "Required command '$1' was not found on this compute node"
+}
+
+check_local_port() {
+  local service_name="$1"
+  local local_port="$2"
+  python - "$service_name" "$local_port" <<'PY'
+import socket
+import sys
+
+service_name = sys.argv[1]
+local_port = int(sys.argv[2])
+try:
+    with socket.create_connection(("127.0.0.1", local_port), timeout=5):
+        pass
+except OSError as exc:
+    print(f"{service_name} tunnel did not open local port 127.0.0.1:{local_port}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+start_tunnel() {
+  local service_name="$1"
+  local local_port="$2"
+  local remote_host="$3"
+  local remote_port="$4"
+  local pid_var="$5"
+  local log_path="logs/${service_name}-ssh-${JOB_ID}.err"
+
+  require_command ssh
+  echo "Opening ${service_name} SSH tunnel: 127.0.0.1:${local_port} -> ${remote_host}:${remote_port} via ${RAG_QDRANT_SSH_TARGET}"
+
+  ssh \
+    -o BatchMode=yes \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -N \
+    -L "127.0.0.1:${local_port}:${remote_host}:${remote_port}" \
+    "$RAG_QDRANT_SSH_TARGET" \
+    2>"$log_path" &
+
+  local tunnel_pid="$!"
+  printf -v "$pid_var" '%s' "$tunnel_pid"
+  sleep 3
+
+  if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+    echo "ERROR: ${service_name} SSH tunnel process exited before ingestion could start." >&2
+    echo "SSH target: ${RAG_QDRANT_SSH_TARGET}" >&2
+    echo "Forward: 127.0.0.1:${local_port} -> ${remote_host}:${remote_port}" >&2
+    echo "SSH log: ${log_path}" >&2
+    if [ -s "$log_path" ]; then
+      echo "--- ${service_name} SSH stderr ---" >&2
+      tail -n 40 "$log_path" >&2
+      echo "--- end SSH stderr ---" >&2
+    fi
+    fail "Could not establish ${service_name} SSH tunnel"
+  fi
+
+  if ! check_local_port "$service_name" "$local_port"; then
+    echo "SSH target: ${RAG_QDRANT_SSH_TARGET}" >&2
+    echo "Forward: 127.0.0.1:${local_port} -> ${remote_host}:${remote_port}" >&2
+    echo "SSH log: ${log_path}" >&2
+    if [ -s "$log_path" ]; then
+      echo "--- ${service_name} SSH stderr ---" >&2
+      tail -n 40 "$log_path" >&2
+      echo "--- end SSH stderr ---" >&2
+    fi
+    fail "${service_name} SSH tunnel started but local port validation failed"
+  fi
+}
+
 RAG_QDRANT_SSH_HOST="${RAG_QDRANT_SSH_HOST:-134.87.8.87}"
 RAG_QDRANT_SSH_TARGET="${RAG_QDRANT_SSH_HOST}"
 if [ -n "${RAG_QDRANT_SSH_USER:-}" ]; then
@@ -50,15 +129,7 @@ if [ "${RAG_QDRANT_SSH_TUNNEL:-true}" = "true" ]; then
   RAG_QDRANT_REMOTE_HOST="${RAG_QDRANT_REMOTE_HOST:-127.0.0.1}"
   RAG_QDRANT_REMOTE_PORT="${RAG_QDRANT_REMOTE_PORT:-6333}"
 
-  ssh \
-    -o BatchMode=yes \
-    -o ExitOnForwardFailure=yes \
-    -N \
-    -L "127.0.0.1:${RAG_QDRANT_LOCAL_PORT}:${RAG_QDRANT_REMOTE_HOST}:${RAG_QDRANT_REMOTE_PORT}" \
-    "$RAG_QDRANT_SSH_TARGET" &
-  QDRANT_TUNNEL_PID="$!"
-  sleep 3
-
+  start_tunnel "qdrant" "$RAG_QDRANT_LOCAL_PORT" "$RAG_QDRANT_REMOTE_HOST" "$RAG_QDRANT_REMOTE_PORT" QDRANT_TUNNEL_PID
   export RAG_QDRANT_URL="${RAG_QDRANT_URL:-http://127.0.0.1:${RAG_QDRANT_LOCAL_PORT}}"
 fi
 
@@ -82,15 +153,7 @@ if [ "$RAG_EMBEDDING_BACKEND" = "ollama" ] && [ -z "${RAG_OLLAMA_BASE_URL:-}" ];
     RAG_OLLAMA_REMOTE_HOST="${RAG_OLLAMA_REMOTE_HOST:-127.0.0.1}"
     RAG_OLLAMA_REMOTE_PORT="${RAG_OLLAMA_REMOTE_PORT:-11434}"
 
-    ssh \
-      -o BatchMode=yes \
-      -o ExitOnForwardFailure=yes \
-      -N \
-      -L "127.0.0.1:${RAG_OLLAMA_LOCAL_PORT}:${RAG_OLLAMA_REMOTE_HOST}:${RAG_OLLAMA_REMOTE_PORT}" \
-      "$RAG_QDRANT_SSH_TARGET" &
-    OLLAMA_TUNNEL_PID="$!"
-    sleep 3
-
+    start_tunnel "ollama" "$RAG_OLLAMA_LOCAL_PORT" "$RAG_OLLAMA_REMOTE_HOST" "$RAG_OLLAMA_REMOTE_PORT" OLLAMA_TUNNEL_PID
     export RAG_OLLAMA_BASE_URL="http://127.0.0.1:${RAG_OLLAMA_LOCAL_PORT}"
   else
     echo "RAG_EMBEDDING_BACKEND=ollama requires RAG_OLLAMA_BASE_URL or RAG_OLLAMA_SSH_TUNNEL=true" >&2
