@@ -111,6 +111,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "status": "ok",
             "index_exists": rag.index_exists(),
             "index_path": str(app_settings.index_path),
+            "vector_store_backend": app_settings.vector_store_backend,
+            "qdrant_url": app_settings.qdrant_url
+            if app_settings.vector_store_backend == "qdrant"
+            else None,
+            "qdrant_collection": app_settings.qdrant_collection
+            if app_settings.vector_store_backend == "qdrant"
+            else None,
             "corpus_dir": str(app_settings.corpus_dir),
             "embedding_backend": app_settings.embedding_backend,
             "active_embedding_model": rag.embedding_model.name,
