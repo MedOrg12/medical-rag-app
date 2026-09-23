@@ -304,6 +304,12 @@ Environment variables:
 - `RAG_QDRANT_COLLECTION`: default `stroke_chunks`
 - `RAG_QDRANT_BATCH_SIZE`: default `128`
 - `RAG_QDRANT_RECREATE_COLLECTION`: default `true`
+- `RAG_QDRANT_TIMEOUT_SECONDS`: default `120`. Qdrant request timeout; collection creation on the shared host can take 5-10 seconds.
+- `QDRANT_DATA_DIR` (docker compose only): absolute host directory for the `qdrant` service's storage.
+  Defaults to the `qdrant_data` named volume under Docker's data root. Point it at a fast local disk;
+  Qdrant fsyncs a 32 MB write-ahead log segment on every collection create, which takes seconds on slow volumes.
+- `QDRANT_WAL_CAPACITY_MB` (docker compose only): Qdrant WAL segment size, upstream default `32`. On hosts
+  with slow synchronous writes, `8` cuts collection creation from several seconds to about one.
 
 Legacy Docker variables from the previous app are also accepted where they map cleanly:
 `PDF_FOLDER`, `VECTOR_DB_PATH`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `OLLAMA_BASE_URL`,

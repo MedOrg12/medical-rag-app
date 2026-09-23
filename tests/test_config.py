@@ -57,3 +57,19 @@ def test_settings_accept_sentence_transformers_environment(monkeypatch, tmp_path
     assert settings.sentence_transformers_model == "intfloat/e5-base-v2"
     assert settings.sentence_transformers_device == "cuda"
     assert settings.sentence_transformers_batch_size == 32
+
+
+def test_settings_accept_qdrant_timeout_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_QDRANT_TIMEOUT_SECONDS", "45.5")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.qdrant_timeout_seconds == 45.5
+    assert settings.with_paths().qdrant_timeout_seconds == 45.5
+    assert settings.with_ingestion_options().qdrant_timeout_seconds == 45.5
+
+
+def test_settings_default_qdrant_timeout_exceeds_client_default(tmp_path) -> None:
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.qdrant_timeout_seconds > 5

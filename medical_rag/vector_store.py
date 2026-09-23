@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -355,10 +356,11 @@ class QdrantVectorStore:
     def _ensure_collection(self, vector_size: int) -> None:
         client = _qdrant_client(self.settings)
         models = _qdrant_models()
+        timeout = _qdrant_timeout(self.settings)
         if self.settings.qdrant_recreate_collection and client.collection_exists(
             self.settings.qdrant_collection
         ):
-            client.delete_collection(self.settings.qdrant_collection)
+            client.delete_collection(self.settings.qdrant_collection, timeout=timeout)
         if not client.collection_exists(self.settings.qdrant_collection):
             client.create_collection(
                 collection_name=self.settings.qdrant_collection,
@@ -368,6 +370,7 @@ class QdrantVectorStore:
                         distance=models.Distance.COSINE,
                     )
                 },
+                timeout=timeout,
             )
 
     def _scroll_chunks(self) -> list[Chunk]:
@@ -394,7 +397,17 @@ def _qdrant_client(settings: Settings) -> Any:
     except ImportError as exc:
         raise RuntimeError("qdrant-client is required for RAG_VECTOR_STORE=qdrant") from exc
 
-    return QdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
+    # qdrant-client defaults to a 5 second REST timeout. Collection creation on the shared
+    # Qdrant service regularly takes longer than that, so use the configured timeout instead.
+    return QdrantClient(
+        url=settings.qdrant_url,
+        api_key=settings.qdrant_api_key,
+        timeout=_qdrant_timeout(settings),
+    )
+
+
+def _qdrant_timeout(settings: Settings) -> int:
+    return max(1, math.ceil(settings.qdrant_timeout_seconds))
 
 
 def _qdrant_models() -> Any:

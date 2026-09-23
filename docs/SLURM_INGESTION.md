@@ -49,6 +49,9 @@ prints the SSH target, forwarded port, and the relevant log path:
 - `RAG_QDRANT_REMOTE_PORT`: remote Qdrant port. Defaults to `6333`.
 - `RAG_QDRANT_COLLECTION`: target collection. Defaults to `stroke_chunks`.
 - `RAG_QDRANT_RECREATE_COLLECTION`: `true` rebuilds the collection for a clean ingestion run.
+- `RAG_QDRANT_TIMEOUT_SECONDS`: Qdrant request timeout. Defaults to `120` because collection
+  creation on the shared Qdrant host has been measured at 5-10 seconds, above the 5 second
+  qdrant-client default.
 - `RAG_EMBEDDING_BACKEND`: default `sentence-transformers`; set `ollama` only to use a remote Ollama service.
 - `RAG_SENTENCE_TRANSFORMERS_MODEL`: default `BAAI/bge-base-en-v1.5`.
 - `RAG_SENTENCE_TRANSFORMERS_DEVICE`: default `cuda`.

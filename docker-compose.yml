@@ -21,6 +21,7 @@ services:
       RAG_QDRANT_COLLECTION: ${RAG_QDRANT_COLLECTION:-stroke_chunks}
       RAG_QDRANT_BATCH_SIZE: ${RAG_QDRANT_BATCH_SIZE:-128}
       RAG_QDRANT_RECREATE_COLLECTION: ${RAG_QDRANT_RECREATE_COLLECTION:-true}
+      RAG_QDRANT_TIMEOUT_SECONDS: ${RAG_QDRANT_TIMEOUT_SECONDS:-120}
       RAG_AUTO_INGEST_ON_STARTUP: "true"
       RAG_PDF_WORKERS: ${RAG_PDF_WORKERS:-1}
       RAG_EMBED_BATCH_SIZE: ${RAG_EMBED_BATCH_SIZE:-64}
@@ -65,7 +66,13 @@ services:
     ports:
       - "6333:6333"
     volumes:
-      - qdrant_data:/qdrant/storage
+      # Set QDRANT_DATA_DIR to an absolute host path to bind-mount Qdrant storage onto a
+      # fast local disk. Collection creation fsyncs a 32 MB WAL segment, so slow disks hurt.
+      - ${QDRANT_DATA_DIR:-qdrant_data}:/qdrant/storage
+    environment:
+      # Qdrant preallocates and fsyncs a WAL segment of this size on every collection create.
+      # Lower it (e.g. 8) on hosts with slow synchronous writes. Upstream default is 32.
+      QDRANT__STORAGE__WAL__WAL_CAPACITY_MB: ${QDRANT_WAL_CAPACITY_MB:-32}
     restart: unless-stopped
 
 volumes:

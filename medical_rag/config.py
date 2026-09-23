@@ -105,6 +105,7 @@ class Settings:
     qdrant_sparse_vector_name: str = "sparse"
     qdrant_batch_size: int = 128
     qdrant_recreate_collection: bool = True
+    qdrant_timeout_seconds: float = 120.0
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> "Settings":
@@ -170,6 +171,7 @@ class Settings:
             qdrant_batch_size=_env_int("RAG_QDRANT_BATCH_SIZE", 128),
             qdrant_recreate_collection=os.getenv("RAG_QDRANT_RECREATE_COLLECTION", "true").lower()
             in {"1", "true", "yes", "on"},
+            qdrant_timeout_seconds=_env_float("RAG_QDRANT_TIMEOUT_SECONDS", 120.0),
         )
 
     def with_paths(
@@ -214,6 +216,7 @@ class Settings:
             qdrant_sparse_vector_name=self.qdrant_sparse_vector_name,
             qdrant_batch_size=self.qdrant_batch_size,
             qdrant_recreate_collection=self.qdrant_recreate_collection,
+            qdrant_timeout_seconds=self.qdrant_timeout_seconds,
         )
 
     def with_ingestion_options(
@@ -260,4 +263,5 @@ class Settings:
             qdrant_sparse_vector_name=self.qdrant_sparse_vector_name,
             qdrant_batch_size=self.qdrant_batch_size,
             qdrant_recreate_collection=self.qdrant_recreate_collection,
+            qdrant_timeout_seconds=self.qdrant_timeout_seconds,
         )
