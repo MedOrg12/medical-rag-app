@@ -8,6 +8,7 @@ Clean stroke-focused retrieval-augmented generation system. The previous reposit
 - Page-aware chunking with stable chunk IDs
 - Local deterministic vector retrieval with no external service required
 - Optional Ollama or OpenAI-compatible API embeddings and chat generation
+- Optional Ollama or sentence-transformers embeddings, plus Ollama chat generation
 - JSON vector index stored at `.rag/index.json`
 - FastAPI API and a browser RAG workbench
 - CLI commands for ingesting and asking questions
@@ -152,6 +153,8 @@ Tuning knobs:
 
 Keep embedding workers conservative with local Ollama. PDF parsing can be parallelized, but local model embedding usually benefits more from batching than from high concurrency.
 
+For GPU-cluster ingestion into Qdrant, see `docs/SLURM_INGESTION.md` and the Slurm template at `scripts/slurm_ingest_qdrant.sbatch`.
+
 ## API
 
 ```bash
@@ -280,8 +283,18 @@ Environment variables:
 - `RAG_MANIFEST_PATH`: default `.rag/manifest.sqlite`
 - `RAG_EXTRACTION_CACHE_DIR`: default `.rag/extracted`
 - `RAG_EMBEDDING_CACHE_PATH`: default `.rag/embedding_cache.json`
-- `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, or `api`
+- `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, `api`, `sentence-transformers`, or `remote`
 - `RAG_GENERATION_BACKEND`: `extractive`, `ollama`, or `api`
+- `RAG_SENTENCE_TRANSFORMERS_MODEL`: default `BAAI/bge-base-en-v1.5`
+- `RAG_SENTENCE_TRANSFORMERS_DEVICE`: default `auto`; use `cuda` on GPU nodes
+- `RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE`: default `64`
+- `RAG_EMBEDDING_SERVICE_URL`: default `http://localhost:8100`
+- `RAG_EMBEDDING_SERVICE_TIMEOUT_SECONDS`: default `60`
+- `RAG_EMBEDDING_SERVICE_TOKEN`: optional bearer token for `/embed`
+- `RAG_EMBEDDING_SERVICE_EXPECTED_MODEL`: optional exact model name guard, for example `sentence-transformers:BAAI/bge-base-en-v1.5`
+- `RAG_REMOTE_EMBED_BATCH_SIZE`: default `64`
+- `RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE`: default `256`; server-side request limit
+- `RAG_EMBEDDING_SERVICE_MAX_TEXT_CHARS`: default `20000`; server-side request limit
 - `RAG_ANSWER_MODE`: `patient` or `clinician`
 - `RAG_OLLAMA_BASE_URL`: default `http://localhost:11434`
 - `RAG_OLLAMA_EMBEDDING_MODEL`: default `nomic-embed-text`
@@ -290,6 +303,20 @@ Environment variables:
 - `RAG_API_KEY`: API key for hosted OpenAI-compatible generation or embeddings; `OPENAI_API_KEY` is also accepted
 - `RAG_API_GENERATION_MODEL`: default `gpt-4o-mini`
 - `RAG_API_EMBEDDING_MODEL`: default `text-embedding-3-small`
+- `RAG_VECTOR_STORE`: `json` or `qdrant`
+- `RAG_QDRANT_URL`: default `http://localhost:6333`
+- `RAG_QDRANT_API_KEY`: optional Qdrant API key
+- `RAG_QDRANT_COLLECTION`: default `stroke_chunks`
+- `RAG_QDRANT_BATCH_SIZE`: default `128`
+- `RAG_QDRANT_RECREATE_COLLECTION`: default `false`. Ingestion upserts into the existing collection and
+  removes points whose source was deleted or re-chunked. Set `true` to drop and rebuild it, which is
+  required when the embedding dimension or vector name changes.
+- `RAG_QDRANT_TIMEOUT_SECONDS`: default `120`. Qdrant request timeout; collection creation on the shared host can take 5-10 seconds.
+- `QDRANT_DATA_DIR` (docker compose only): absolute host directory for the `qdrant` service's storage.
+  Defaults to the `qdrant_data` named volume under Docker's data root. Point it at a fast local disk;
+  Qdrant fsyncs a 32 MB write-ahead log segment on every collection create, which takes seconds on slow volumes.
+- `QDRANT_WAL_CAPACITY_MB` (docker compose only): Qdrant WAL segment size, upstream default `32`. On hosts
+  with slow synchronous writes, `8` cuts collection creation from several seconds to about one.
 
 Legacy Docker variables from the previous app are also accepted where they map cleanly:
 `PDF_FOLDER`, `VECTOR_DB_PATH`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `OLLAMA_BASE_URL`,
@@ -420,6 +447,8 @@ The `RAG_EMBEDDING_BACKEND` setting controls how chunks are embedded:
 | `auto` (default) | Uses Ollama semantic embeddings when the configured embedding model is installed; otherwise falls back to `hash` |
 | `ollama` | Always use Ollama semantic embeddings (requires Ollama running) |
 | `api` | Always use hosted OpenAI-compatible embeddings (requires `RAG_API_KEY`) |
+| `sentence-transformers` | Use a local sentence-transformers model, usually with CUDA on an HPC/GPU node |
+| `remote` | Use the standalone embedding service over HTTP |
 | `hash` | Bag-of-words hashing — fast, no network, non-semantic |
 
 Recommended Ollama embedding models:
@@ -465,6 +494,28 @@ RAG_EMBEDDING_BACKEND=ollama \
 RAG_FORCE_REINGEST=true \
 docker compose up -d --build medical-rag
 ```
+
+### Remote embedding service
+
+`remote` and `api` are both network backends but serve different purposes. `api` talks to a hosted
+OpenAI-compatible provider using its own model catalogue. `remote` talks to this project's own
+`embedder` service, which runs the same sentence-transformers model that Slurm ingestion used, so
+query vectors are guaranteed to match the collection.
+
+On the GPU host, start the embedding service:
+
+```bash
+docker compose --profile embedder up -d embedder
+```
+
+On the API host, point the app at that service:
+
+```bash
+export RAG_EMBEDDING_BACKEND=remote
+export RAG_EMBEDDING_SERVICE_URL=http://<gpu-host>:8100
+```
+
+The remote service's model name must match the model used for ingestion. With Qdrant, points are filtered by the exact `embedding_model` payload, so a model-name mismatch returns no results.
 
 The `RAG_HYBRID_ALPHA`, `RAG_MIN_RELEVANCE_SCORE`, and `RAG_RERANKER_BACKEND` settings control retrieval quality:
 

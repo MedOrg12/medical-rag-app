@@ -18,8 +18,8 @@ def test_settings_accept_legacy_docker_environment(monkeypatch, tmp_path) -> Non
 
     settings = Settings.from_env(tmp_path)
 
-    assert str(settings.corpus_dir) == "/app/pdfs"
-    assert str(settings.index_path) == "/app/vector_db/index.json"
+    assert settings.corpus_dir.as_posix().endswith("/app/pdfs")
+    assert settings.index_path.as_posix().endswith("/app/vector_db/index.json")
     assert settings.chunk_size_chars == 900
     assert settings.chunk_overlap_chars == 120
     assert settings.top_k == 8
@@ -45,3 +45,99 @@ def test_with_ingestion_options_preserves_answer_mode(tmp_path) -> None:
 
     assert updated.pdf_workers == 4
     assert updated.answer_mode == "clinician"
+def test_settings_accept_sentence_transformers_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_BACKEND", "sentence-transformers")
+    monkeypatch.setenv("RAG_SENTENCE_TRANSFORMERS_MODEL", "intfloat/e5-base-v2")
+    monkeypatch.setenv("RAG_SENTENCE_TRANSFORMERS_DEVICE", "cuda")
+    monkeypatch.setenv("RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE", "32")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.embedding_backend == "sentence-transformers"
+    assert settings.sentence_transformers_model == "intfloat/e5-base-v2"
+    assert settings.sentence_transformers_device == "cuda"
+    assert settings.sentence_transformers_batch_size == 32
+
+
+def test_settings_accept_remote_embedding_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_URL", "http://gpu-host:8100")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_TIMEOUT_SECONDS", "15.5")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_TOKEN", "secret")
+    monkeypatch.setenv(
+        "RAG_EMBEDDING_SERVICE_EXPECTED_MODEL",
+        "sentence-transformers:BAAI/bge-base-en-v1.5",
+    )
+    monkeypatch.setenv("RAG_REMOTE_EMBED_BATCH_SIZE", "17")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE", "128")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_MAX_TEXT_CHARS", "9000")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.embedding_service_url == "http://gpu-host:8100"
+    assert settings.embedding_service_timeout_seconds == 15.5
+    assert settings.embedding_service_token == "secret"
+    assert (
+        settings.embedding_service_expected_model
+        == "sentence-transformers:BAAI/bge-base-en-v1.5"
+    )
+    assert settings.remote_embed_batch_size == 17
+    assert settings.embedding_service_max_batch_size == 128
+    assert settings.embedding_service_max_text_chars == 9000
+
+    with_paths = settings.with_paths()
+    with_ingestion_options = settings.with_ingestion_options()
+    for copied in (with_paths, with_ingestion_options):
+        assert copied.embedding_service_url == settings.embedding_service_url
+        assert (
+            copied.embedding_service_timeout_seconds
+            == settings.embedding_service_timeout_seconds
+        )
+        assert copied.embedding_service_token == settings.embedding_service_token
+        assert (
+            copied.embedding_service_expected_model
+            == settings.embedding_service_expected_model
+        )
+        assert copied.remote_embed_batch_size == settings.remote_embed_batch_size
+        assert (
+            copied.embedding_service_max_batch_size
+            == settings.embedding_service_max_batch_size
+        )
+        assert (
+            copied.embedding_service_max_text_chars
+            == settings.embedding_service_max_text_chars
+        )
+
+
+def test_settings_empty_remote_embedding_token_values_become_none(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_TOKEN", "")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_EXPECTED_MODEL", "")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.embedding_service_token is None
+    assert settings.embedding_service_expected_model is None
+
+
+def test_settings_accept_qdrant_timeout_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_QDRANT_TIMEOUT_SECONDS", "45.5")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.qdrant_timeout_seconds == 45.5
+    assert settings.with_paths().qdrant_timeout_seconds == 45.5
+    assert settings.with_ingestion_options().qdrant_timeout_seconds == 45.5
+
+
+def test_settings_default_qdrant_timeout_exceeds_client_default(tmp_path) -> None:
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.qdrant_timeout_seconds > 5
+
+
+def test_settings_default_to_writing_into_existing_qdrant_collection(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("RAG_QDRANT_RECREATE_COLLECTION", raising=False)
+
+    assert Settings.from_env(tmp_path).qdrant_recreate_collection is False
+
+    monkeypatch.setenv("RAG_QDRANT_RECREATE_COLLECTION", "true")
+    assert Settings.from_env(tmp_path).qdrant_recreate_collection is True

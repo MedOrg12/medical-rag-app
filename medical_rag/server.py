@@ -107,13 +107,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ollama_model_name_matches(app_settings.ollama_embedding_model, model)
             for model in ollama_models
         )
+        # The remote backend resolves its model name from the embedding service, so this can
+        # fail when that service is down. Health must report that rather than return a 500.
+        try:
+            active_embedding_model: str | None = rag.embedding_model.name
+            embedding_model_error: str | None = None
+        except Exception as exc:  # noqa: BLE001 - surface any backend failure in health
+            active_embedding_model = None
+            embedding_model_error = str(exc)
         return {
             "status": "ok",
             "index_exists": rag.index_exists(),
             "index_path": str(app_settings.index_path),
+            "vector_store_backend": app_settings.vector_store_backend,
+            "qdrant_url": app_settings.qdrant_url
+            if app_settings.vector_store_backend == "qdrant"
+            else None,
+            "qdrant_collection": app_settings.qdrant_collection
+            if app_settings.vector_store_backend == "qdrant"
+            else None,
             "corpus_dir": str(app_settings.corpus_dir),
             "embedding_backend": app_settings.embedding_backend,
-            "active_embedding_model": rag.embedding_model.name,
+            "active_embedding_model": active_embedding_model,
+            "embedding_model_error": embedding_model_error,
             "fallback_embedding": rag.fallback_embedding_used(),
             "generation_backend": app_settings.generation_backend,
             "generation_model": _generation_model_name(app_settings),

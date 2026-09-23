@@ -11,14 +11,27 @@ services:
       - rag_index:/app/.rag
     environment:
       RAG_CORPUS_DIR: /app/pdfs
+      RAG_VECTOR_STORE: ${RAG_VECTOR_STORE:-json}
       RAG_INDEX_PATH: /app/.rag/index.json
       RAG_MANIFEST_PATH: /app/.rag/manifest.sqlite
       RAG_EXTRACTION_CACHE_DIR: /app/.rag/extracted
       RAG_EMBEDDING_CACHE_PATH: /app/.rag/embedding_cache.json
-      RAG_AUTO_INGEST_ON_STARTUP: "true"
+      RAG_QDRANT_URL: ${RAG_QDRANT_URL:-http://qdrant:6333}
+      RAG_QDRANT_API_KEY: ${RAG_QDRANT_API_KEY:-}
+      RAG_QDRANT_COLLECTION: ${RAG_QDRANT_COLLECTION:-stroke_chunks}
+      RAG_QDRANT_BATCH_SIZE: ${RAG_QDRANT_BATCH_SIZE:-128}
+      RAG_QDRANT_RECREATE_COLLECTION: ${RAG_QDRANT_RECREATE_COLLECTION:-false}
+      RAG_QDRANT_TIMEOUT_SECONDS: ${RAG_QDRANT_TIMEOUT_SECONDS:-120}
+      # Set to "false" on hosts that only serve queries against a collection built elsewhere.
+      RAG_AUTO_INGEST_ON_STARTUP: ${RAG_AUTO_INGEST_ON_STARTUP:-true}
       RAG_PDF_WORKERS: ${RAG_PDF_WORKERS:-1}
       RAG_EMBED_BATCH_SIZE: ${RAG_EMBED_BATCH_SIZE:-64}
       RAG_EMBEDDING_BACKEND: ${RAG_EMBEDDING_BACKEND:-auto}
+      RAG_EMBEDDING_SERVICE_URL: ${RAG_EMBEDDING_SERVICE_URL:-http://embedder:8100}
+      RAG_EMBEDDING_SERVICE_TOKEN: ${RAG_EMBEDDING_SERVICE_TOKEN:-}
+      RAG_EMBEDDING_SERVICE_EXPECTED_MODEL: ${RAG_EMBEDDING_SERVICE_EXPECTED_MODEL:-}
+      RAG_SENTENCE_TRANSFORMERS_MODEL: ${RAG_SENTENCE_TRANSFORMERS_MODEL:-BAAI/bge-base-en-v1.5}
+      RAG_SENTENCE_TRANSFORMERS_DEVICE: ${RAG_SENTENCE_TRANSFORMERS_DEVICE:-cpu}
       RAG_GENERATION_BACKEND: ${RAG_GENERATION_BACKEND:-extractive}
       RAG_ANSWER_MODE: ${RAG_ANSWER_MODE:-patient}
       RAG_OLLAMA_BASE_URL: ${RAG_OLLAMA_BASE_URL:-http://ollama:11434}
@@ -38,6 +51,32 @@ services:
       retries: 3
       start_period: 60s
 
+  embedder:
+    build:
+      context: .
+      dockerfile: Dockerfile.embedder
+    container_name: stroke-medical-rag-embedder
+    profiles:
+      - embedder
+    ports:
+      - "8100:8100"
+    volumes:
+      - embedder_hf:/data/huggingface
+    environment:
+      RAG_SENTENCE_TRANSFORMERS_MODEL: ${RAG_SENTENCE_TRANSFORMERS_MODEL:-BAAI/bge-base-en-v1.5}
+      RAG_SENTENCE_TRANSFORMERS_DEVICE: ${RAG_EMBEDDER_DEVICE:-cuda}
+      RAG_EMBEDDING_SERVICE_TOKEN: ${RAG_EMBEDDING_SERVICE_TOKEN:-}
+      RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE: ${RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE:-256}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # 'all' also matches MIG slices, which a numeric count can fail to select.
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
   ollama:
     image: ollama/ollama:latest
     container_name: stroke-medical-rag-ollama
@@ -51,6 +90,25 @@ services:
       OLLAMA_HOST: 0.0.0.0:11434
     restart: unless-stopped
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: stroke-medical-rag-qdrant
+    profiles:
+      - qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      # Set QDRANT_DATA_DIR to an absolute host path to bind-mount Qdrant storage onto a
+      # fast local disk. Collection creation fsyncs a 32 MB WAL segment, so slow disks hurt.
+      - ${QDRANT_DATA_DIR:-qdrant_data}:/qdrant/storage
+    environment:
+      # Qdrant preallocates and fsyncs a WAL segment of this size on every collection create.
+      # Lower it (e.g. 8) on hosts with slow synchronous writes. Upstream default is 32.
+      QDRANT__STORAGE__WAL__WAL_CAPACITY_MB: ${QDRANT_WAL_CAPACITY_MB:-32}
+    restart: unless-stopped
+
 volumes:
   rag_index:
+  embedder_hf:
   ollama_data:
+  qdrant_data:

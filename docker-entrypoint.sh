@@ -28,7 +28,24 @@ if [ "${RAG_AUTO_INGEST_ON_STARTUP:-true}" = "true" ]; then
     SHOULD_INGEST="false"
     FORCE_ARG=""
 
-    if [ ! -f "${RAG_INDEX_PATH:-/app/.rag/index.json}" ]; then
+    if [ "${RAG_VECTOR_STORE:-json}" = "qdrant" ]; then
+        if [ "${RAG_FORCE_REINGEST:-false}" = "true" ]; then
+            SHOULD_INGEST="true"
+            FORCE_ARG="--force"
+        else
+            if python3 - <<'PY'
+from medical_rag.config import Settings
+from medical_rag.vector_store import vector_store_exists
+
+raise SystemExit(0 if vector_store_exists(Settings.from_env()) else 1)
+PY
+            then
+                echo "Qdrant collection already exists at ${RAG_QDRANT_URL:-http://qdrant:6333}/${RAG_QDRANT_COLLECTION:-stroke_chunks}"
+            else
+                SHOULD_INGEST="true"
+            fi
+        fi
+    elif [ ! -f "${RAG_INDEX_PATH:-/app/.rag/index.json}" ]; then
         SHOULD_INGEST="true"
     elif [ "${RAG_FORCE_REINGEST:-false}" = "true" ]; then
         SHOULD_INGEST="true"

@@ -16,4 +16,5 @@ build/
 .rag/
 vector_db/
 *.log
+logs/
 .DS_Store

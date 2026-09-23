@@ -79,3 +79,23 @@ def test_eval_run_endpoint_scores_selected_question(tmp_path) -> None:
     assert payload["summary"]["total_questions"] == 1
     assert payload["results"][0]["question_id"] == "q2"
     assert payload["results"][0]["retrieval_hit"] is True
+
+
+def test_health_survives_unreachable_remote_embedding_service(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="remote",
+        embedding_service_url="http://127.0.0.1:9",
+        embedding_service_timeout_seconds=1.0,
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["embedding_backend"] == "remote"
+    assert payload["active_embedding_model"] is None
+    assert "127.0.0.1:9" in payload["embedding_model_error"]

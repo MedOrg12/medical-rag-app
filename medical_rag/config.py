@@ -75,6 +75,16 @@ class Settings:
     top_k: int = 5
     embedding_backend: str = "auto"
     hash_embedding_dimensions: int = 768
+    sentence_transformers_model: str = "BAAI/bge-base-en-v1.5"
+    sentence_transformers_device: str = "auto"
+    sentence_transformers_batch_size: int = 64
+    embedding_service_url: str = "http://localhost:8100"
+    embedding_service_timeout_seconds: float = 60.0
+    embedding_service_token: str | None = None
+    embedding_service_expected_model: str | None = None
+    remote_embed_batch_size: int = 64
+    embedding_service_max_batch_size: int = 256
+    embedding_service_max_text_chars: int = 20000
     ollama_base_url: str = "http://localhost:11434"
     ollama_embedding_model: str = "nomic-embed-text"
     generation_backend: str = "extractive"
@@ -94,6 +104,15 @@ class Settings:
     min_relevance_score: float = 0.0
     reranker_backend: str = "lexical"
     hybrid_alpha: float = 0.5
+    vector_store_backend: str = "json"
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "stroke_chunks"
+    qdrant_dense_vector_name: str = "dense"
+    qdrant_sparse_vector_name: str = "sparse"
+    qdrant_batch_size: int = 128
+    qdrant_recreate_collection: bool = False
+    qdrant_timeout_seconds: float = 120.0
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> "Settings":
@@ -110,6 +129,28 @@ class Settings:
             top_k=_env_int_compat(5, "RAG_TOP_K", "TOP_K"),
             embedding_backend=os.getenv("RAG_EMBEDDING_BACKEND", "auto").lower(),
             hash_embedding_dimensions=_env_int("RAG_HASH_EMBEDDING_DIMENSIONS", 768),
+            sentence_transformers_model=os.getenv(
+                "RAG_SENTENCE_TRANSFORMERS_MODEL", "BAAI/bge-base-en-v1.5"
+            ),
+            sentence_transformers_device=os.getenv("RAG_SENTENCE_TRANSFORMERS_DEVICE", "auto"),
+            sentence_transformers_batch_size=_env_int("RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE", 64),
+            embedding_service_url=os.getenv(
+                "RAG_EMBEDDING_SERVICE_URL", "http://localhost:8100"
+            ),
+            embedding_service_timeout_seconds=_env_float(
+                "RAG_EMBEDDING_SERVICE_TIMEOUT_SECONDS", 60.0
+            ),
+            embedding_service_token=os.getenv("RAG_EMBEDDING_SERVICE_TOKEN") or None,
+            embedding_service_expected_model=os.getenv(
+                "RAG_EMBEDDING_SERVICE_EXPECTED_MODEL"
+            ) or None,
+            remote_embed_batch_size=_env_int("RAG_REMOTE_EMBED_BATCH_SIZE", 64),
+            embedding_service_max_batch_size=_env_int(
+                "RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE", 256
+            ),
+            embedding_service_max_text_chars=_env_int(
+                "RAG_EMBEDDING_SERVICE_MAX_TEXT_CHARS", 20000
+            ),
             ollama_base_url=_first_env(
                 "RAG_OLLAMA_BASE_URL", "OLLAMA_BASE_URL", default="http://localhost:11434"
             ),
@@ -145,6 +186,16 @@ class Settings:
             min_relevance_score=_env_float("RAG_MIN_RELEVANCE_SCORE", 0.0),
             reranker_backend=os.getenv("RAG_RERANKER_BACKEND", "lexical").lower(),
             hybrid_alpha=_env_float("RAG_HYBRID_ALPHA", 0.5),
+            vector_store_backend=os.getenv("RAG_VECTOR_STORE", "json").lower(),
+            qdrant_url=os.getenv("RAG_QDRANT_URL", "http://localhost:6333"),
+            qdrant_api_key=os.getenv("RAG_QDRANT_API_KEY") or None,
+            qdrant_collection=os.getenv("RAG_QDRANT_COLLECTION", "stroke_chunks"),
+            qdrant_dense_vector_name=os.getenv("RAG_QDRANT_DENSE_VECTOR_NAME", "dense"),
+            qdrant_sparse_vector_name=os.getenv("RAG_QDRANT_SPARSE_VECTOR_NAME", "sparse"),
+            qdrant_batch_size=_env_int("RAG_QDRANT_BATCH_SIZE", 128),
+            qdrant_recreate_collection=os.getenv("RAG_QDRANT_RECREATE_COLLECTION", "false").lower()
+            in {"1", "true", "yes", "on"},
+            qdrant_timeout_seconds=_env_float("RAG_QDRANT_TIMEOUT_SECONDS", 120.0),
         )
 
     def with_paths(
@@ -159,6 +210,16 @@ class Settings:
             top_k=self.top_k,
             embedding_backend=self.embedding_backend,
             hash_embedding_dimensions=self.hash_embedding_dimensions,
+            sentence_transformers_model=self.sentence_transformers_model,
+            sentence_transformers_device=self.sentence_transformers_device,
+            sentence_transformers_batch_size=self.sentence_transformers_batch_size,
+            embedding_service_url=self.embedding_service_url,
+            embedding_service_timeout_seconds=self.embedding_service_timeout_seconds,
+            embedding_service_token=self.embedding_service_token,
+            embedding_service_expected_model=self.embedding_service_expected_model,
+            remote_embed_batch_size=self.remote_embed_batch_size,
+            embedding_service_max_batch_size=self.embedding_service_max_batch_size,
+            embedding_service_max_text_chars=self.embedding_service_max_text_chars,
             ollama_base_url=self.ollama_base_url,
             ollama_embedding_model=self.ollama_embedding_model,
             generation_backend=self.generation_backend,
@@ -178,6 +239,15 @@ class Settings:
             min_relevance_score=self.min_relevance_score,
             reranker_backend=self.reranker_backend,
             hybrid_alpha=self.hybrid_alpha,
+            vector_store_backend=self.vector_store_backend,
+            qdrant_url=self.qdrant_url,
+            qdrant_api_key=self.qdrant_api_key,
+            qdrant_collection=self.qdrant_collection,
+            qdrant_dense_vector_name=self.qdrant_dense_vector_name,
+            qdrant_sparse_vector_name=self.qdrant_sparse_vector_name,
+            qdrant_batch_size=self.qdrant_batch_size,
+            qdrant_recreate_collection=self.qdrant_recreate_collection,
+            qdrant_timeout_seconds=self.qdrant_timeout_seconds,
         )
 
     def with_ingestion_options(
@@ -194,6 +264,16 @@ class Settings:
             top_k=self.top_k,
             embedding_backend=self.embedding_backend,
             hash_embedding_dimensions=self.hash_embedding_dimensions,
+            sentence_transformers_model=self.sentence_transformers_model,
+            sentence_transformers_device=self.sentence_transformers_device,
+            sentence_transformers_batch_size=self.sentence_transformers_batch_size,
+            embedding_service_url=self.embedding_service_url,
+            embedding_service_timeout_seconds=self.embedding_service_timeout_seconds,
+            embedding_service_token=self.embedding_service_token,
+            embedding_service_expected_model=self.embedding_service_expected_model,
+            remote_embed_batch_size=self.remote_embed_batch_size,
+            embedding_service_max_batch_size=self.embedding_service_max_batch_size,
+            embedding_service_max_text_chars=self.embedding_service_max_text_chars,
             ollama_base_url=self.ollama_base_url,
             ollama_embedding_model=self.ollama_embedding_model,
             generation_backend=self.generation_backend,
@@ -213,4 +293,13 @@ class Settings:
             min_relevance_score=self.min_relevance_score,
             reranker_backend=self.reranker_backend,
             hybrid_alpha=self.hybrid_alpha,
+            vector_store_backend=self.vector_store_backend,
+            qdrant_url=self.qdrant_url,
+            qdrant_api_key=self.qdrant_api_key,
+            qdrant_collection=self.qdrant_collection,
+            qdrant_dense_vector_name=self.qdrant_dense_vector_name,
+            qdrant_sparse_vector_name=self.qdrant_sparse_vector_name,
+            qdrant_batch_size=self.qdrant_batch_size,
+            qdrant_recreate_collection=self.qdrant_recreate_collection,
+            qdrant_timeout_seconds=self.qdrant_timeout_seconds,
         )

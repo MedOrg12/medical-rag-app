@@ -18,6 +18,10 @@ This project follows Semantic Versioning for the application release number:
 - `/eval/questions` and `/eval/run` API endpoints for evaluation metadata and execution.
 - Package-level eval suite data under `medical_rag/eval_data.json`.
 - Health metadata for active embedding model, Ollama/API availability, and embedding fallback state.
+- Qdrant vector store backend (`RAG_VECTOR_STORE=qdrant`) with idempotent upserts into an existing collection, stale-point cleanup, and vector-config validation.
+- Slurm ingestion job (`scripts/slurm_ingest_qdrant.sbatch`) that embeds on a GPU node with sentence-transformers and writes to Qdrant over an SSH tunnel, with GPU and timing diagnostics.
+- Standalone GPU embedding service (`embedder` compose profile) and a `remote` embedding backend so the API host never loads torch.
+- `RAG_QDRANT_TIMEOUT_SECONDS`, `QDRANT_DATA_DIR`, and `QDRANT_WAL_CAPACITY_MB` for slow-disk Qdrant hosts.
 
 ### Changed
 
@@ -26,6 +30,9 @@ This project follows Semantic Versioning for the application release number:
 - Eval pass/fail now requires in-scope answers to include enough expected answer terms, rather than passing on citation matches alone.
 - Corpus discovery now excludes `SOURCES.md` planning/checklist files so they do not appear as medical citations.
 - Live pytest evals now require `RUN_LIVE_EVAL=1`, while eval data validation still runs normally.
+- `RAG_QDRANT_RECREATE_COLLECTION` now defaults to `false`; ingestion writes into the existing collection.
+- `/health` reports `active_embedding_model` as `null` with an `embedding_model_error` when the embedding service is unreachable, instead of failing.
+- `RAG_AUTO_INGEST_ON_STARTUP` is configurable in compose for query-only hosts.
 
 ## [0.1.0] - 2026-08-10
 
