@@ -69,15 +69,23 @@ prints the SSH target, forwarded port, and the relevant log path:
 
 ## After Ingestion
 
-Point the API service at the same collection:
+Point the API service at the same collection. Queries must be embedded with the same model
+the job used, because search filters points by `embedding_model`; a mismatch returns no
+results. The Docker image installs CPU-only torch and sentence-transformers for this.
 
 ```bash
 export RAG_VECTOR_STORE=qdrant
-export RAG_QDRANT_URL=http://qdrant.internal:6333
+export RAG_QDRANT_URL=http://<qdrant-host>:6333
 export RAG_QDRANT_COLLECTION=stroke_chunks
 export RAG_EMBEDDING_BACKEND=sentence-transformers
 export RAG_SENTENCE_TRANSFORMERS_MODEL=BAAI/bge-base-en-v1.5
+export RAG_SENTENCE_TRANSFORMERS_DEVICE=cpu
+export RAG_AUTO_INGEST_ON_STARTUP=false
 ```
+
+Keep `RAG_AUTO_INGEST_ON_STARTUP=false` and avoid the `/ingest` endpoint on the API host.
+Ingesting from the API host with a different embedding backend would overwrite the
+Slurm-built points in place, since point ids derive from chunk content.
 
 Then start the app and run the eval suite against the live server.
 
