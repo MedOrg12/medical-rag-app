@@ -30,8 +30,11 @@ ENV PYTHONUNBUFFERED=1 \
     RAG_EMBEDDING_CACHE_PATH=/app/.rag/embedding_cache.json \
     RAG_PDF_WORKERS=1 \
     RAG_EMBED_BATCH_SIZE=64 \
-    RAG_EMBEDDING_BACKEND=hash \
+    RAG_EMBEDDING_BACKEND=auto \
     RAG_GENERATION_BACKEND=extractive \
+    RAG_API_BASE_URL=https://api.openai.com/v1 \
+    RAG_API_GENERATION_MODEL=gpt-4o-mini \
+    RAG_API_EMBEDDING_MODEL=text-embedding-3-small \
     RAG_ANSWER_MODE=patient
 
 EXPOSE 8000

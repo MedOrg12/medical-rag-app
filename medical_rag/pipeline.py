@@ -297,6 +297,9 @@ class StrokeRAG:
     def index_exists(self) -> bool:
         return self.settings.index_path.exists()
 
+    def fallback_embedding_used(self) -> bool:
+        return self._fallback_embedding
+
     def _load_store(self) -> VectorStore:
         if self._store is not None:
             return self._store

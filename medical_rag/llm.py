@@ -135,6 +135,70 @@ class OllamaGenerator(Generator):
 
 
 @dataclass
+class ApiGenerator(Generator):
+    base_url: str
+    api_key: str
+    model: str
+    temperature: float = 0.1
+    timeout_seconds: float = 20.0
+
+    @property
+    def model_name(self) -> str:
+        return f"api:{self.model}"
+
+    def generate(
+        self, question: str, results: list[SearchResult], answer_mode: str = "patient"
+    ) -> str:
+        if not results:
+            return (
+                "I could not find a relevant indexed passage that answers that question. "
+                "The indexed corpus may not contain enough detail on this topic, or the index may need "
+                "to be rebuilt after recent retrieval changes."
+            )
+
+        payload = json.dumps(
+            {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": _system_prompt(answer_mode)},
+                    {"role": "user", "content": _user_prompt(question, results, answer_mode)},
+                ],
+                "temperature": self.temperature,
+            }
+        ).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url.rstrip('/')}/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(_api_error_message("chat completion", exc)) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(f"Could not generate with API provider at {self.base_url}") from exc
+
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("API chat completion response did not include choices")
+        first_choice = choices[0]
+        content = (
+            (first_choice.get("message") or {}).get("content")
+            if isinstance(first_choice, dict)
+            else None
+        )
+        if not content:
+            raise RuntimeError("API chat completion response did not include message.content")
+        return str(content).strip()
+
+
+@dataclass
 class FallbackGenerator(Generator):
     primary: Generator
     fallback: Generator
@@ -166,6 +230,19 @@ def make_generator(settings: Settings) -> Generator:
             primary=OllamaGenerator(
                 base_url=settings.ollama_base_url,
                 model_name=settings.ollama_generation_model,
+                temperature=settings.temperature,
+                timeout_seconds=settings.request_timeout_seconds,
+            ),
+            fallback=extractive,
+        )
+    if settings.generation_backend == "api":
+        if not settings.api_key:
+            raise ValueError("RAG_API_KEY or OPENAI_API_KEY is required for API generation")
+        return FallbackGenerator(
+            primary=ApiGenerator(
+                base_url=settings.api_base_url,
+                api_key=settings.api_key,
+                model=settings.api_generation_model,
                 temperature=settings.temperature,
                 timeout_seconds=settings.request_timeout_seconds,
             ),
@@ -332,3 +409,15 @@ def _first_citation_with(results: list[SearchResult], terms: set[str]) -> int:
         if _has_any(_evidence_text(result).lower(), terms):
             return citation_id
     return 1
+
+
+def _api_error_message(operation: str, exc: urllib.error.HTTPError) -> str:
+    detail = ""
+    try:
+        payload = json.loads(exc.read().decode("utf-8"))
+        message = (payload.get("error") or {}).get("message")
+        if isinstance(message, str) and message:
+            detail = f": {message}"
+    except Exception:
+        detail = ""
+    return f"Could not get API {operation} response from provider ({exc.code}){detail}"

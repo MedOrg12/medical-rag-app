@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from medical_rag.documents import SUPPORTED_EXTENSIONS, iter_source_files, load_source_file
+from medical_rag.documents import iter_source_files, is_supported_source_file, load_source_file
 from medical_rag.types import Chunk, PageText
 
 PARSER_VERSION = "pymupdf-sorted-text-v1"
@@ -522,4 +522,4 @@ def _cache_path(file: SourceFile, cache_dir: Path) -> Path:
 
 
 def is_supported_source(path: Path) -> bool:
-    return path.suffix.lower() in SUPPORTED_EXTENSIONS
+    return is_supported_source_file(path)

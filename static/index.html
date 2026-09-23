@@ -7,138 +7,62 @@
     <style>
       :root {
         color-scheme: light;
-        --ink: #1f2933;
-        --muted: #5b6673;
-        --line: #d7dee8;
-        --panel: #ffffff;
-        --page: #f5f7fb;
+        --bg: #f4f6f8;
+        --surface: #ffffff;
+        --surface-soft: #f8fafc;
+        --ink: #17212b;
+        --muted: #5d6b7a;
+        --subtle: #8a97a6;
+        --line: #d7dee7;
+        --line-strong: #bcc8d6;
         --accent: #0f766e;
         --accent-dark: #115e59;
-        --danger: #b42318;
+        --accent-soft: #e7f5f2;
+        --gold: #b7791f;
+        --gold-soft: #fff7e6;
+        --ok: #16733a;
+        --ok-soft: #e8f6ee;
+        --bad: #b42318;
+        --bad-soft: #fdecec;
+        --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
       }
 
       * {
         box-sizing: border-box;
       }
 
+      html {
+        min-height: 100%;
+      }
+
       body {
+        min-height: 100%;
         margin: 0;
-        background: var(--page);
+        background: var(--bg);
         color: var(--ink);
         font-family:
           Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-
-      header {
-        border-bottom: 1px solid var(--line);
-        background: var(--panel);
-      }
-
-      .bar,
-      main {
-        width: min(1160px, calc(100vw - 32px));
-        margin: 0 auto;
-      }
-
-      .bar {
-        min-height: 64px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: 20px;
-        font-weight: 650;
-      }
-
-      .status {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: var(--muted);
         font-size: 14px;
+        line-height: 1.45;
       }
 
-      .dot {
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        background: var(--danger);
-      }
-
-      .dot.ready {
-        background: var(--accent);
-      }
-
-      main {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 320px;
-        gap: 18px;
-        padding: 24px 0;
-      }
-
-      section,
-      aside {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-      }
-
-      .workspace {
-        min-height: calc(100vh - 112px);
-        display: grid;
-        grid-template-rows: 1fr auto;
-      }
-
-      .answer {
-        padding: 22px;
-        overflow-wrap: anywhere;
-        line-height: 1.58;
-        white-space: pre-wrap;
-      }
-
-      .empty {
-        color: var(--muted);
-      }
-
-      form {
-        border-top: 1px solid var(--line);
-        padding: 14px;
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 156px auto;
-        gap: 12px;
-      }
-
-      textarea,
+      button,
       input,
+      textarea,
       select {
-        width: 100%;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 11px 12px;
-        color: var(--ink);
         font: inherit;
-        background: #fff;
-      }
-
-      textarea {
-        min-height: 72px;
-        resize: vertical;
       }
 
       button {
-        border: 0;
+        border: 1px solid transparent;
         border-radius: 6px;
+        min-height: 38px;
+        padding: 0 14px;
         background: var(--accent);
-        color: #fff;
-        font: inherit;
+        color: #ffffff;
         font-weight: 650;
-        padding: 0 18px;
         cursor: pointer;
-        min-width: 92px;
+        white-space: nowrap;
       }
 
       button:hover {
@@ -147,132 +71,908 @@
 
       button:disabled {
         cursor: not-allowed;
-        opacity: 0.6;
+        opacity: 0.58;
       }
 
-      aside {
-        padding: 16px;
-        align-self: start;
+      button.secondary {
+        background: var(--surface);
+        color: var(--ink);
+        border-color: var(--line-strong);
+      }
+
+      button.secondary:hover {
+        background: var(--surface-soft);
+      }
+
+      button.ghost {
+        background: transparent;
+        color: var(--accent-dark);
+        border-color: transparent;
+        padding-inline: 8px;
+      }
+
+      button.ghost:hover {
+        background: var(--accent-soft);
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px 11px;
+        background: #ffffff;
+        color: var(--ink);
+        outline: none;
+      }
+
+      input:focus,
+      textarea:focus,
+      select:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+      }
+
+      textarea {
+        min-height: 86px;
+        max-height: 220px;
+        resize: vertical;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 19px;
+        letter-spacing: 0;
       }
 
       h2 {
-        margin: 0 0 12px;
-        font-size: 15px;
+        font-size: 14px;
+        letter-spacing: 0;
       }
 
-      .ingest {
+      h3 {
+        font-size: 13px;
+      }
+
+      .app {
+        min-height: 100vh;
         display: grid;
-        gap: 10px;
-        margin-bottom: 20px;
+        grid-template-rows: auto 1fr auto;
       }
 
-      .ingest button {
-        min-height: 42px;
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.94);
+        backdrop-filter: blur(10px);
       }
 
-      .sources {
+      .topbar-inner {
+        width: min(1480px, calc(100vw - 28px));
+        min-height: 64px;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+      }
+
+      .brand {
         display: grid;
+        gap: 2px;
+        min-width: 220px;
+      }
+
+      .brand span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .status-strip {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
         gap: 8px;
-        max-height: 52vh;
+        flex-wrap: wrap;
+      }
+
+      .chip,
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 28px;
+        border-radius: 999px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        background: #ffffff;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .chip::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--subtle);
+      }
+
+      .chip.ok::before {
+        background: var(--ok);
+      }
+
+      .chip.warn::before {
+        background: var(--gold);
+      }
+
+      .chip.bad::before {
+        background: var(--bad);
+      }
+
+      .pill.pass {
+        background: var(--ok-soft);
+        color: var(--ok);
+        border-color: #b9e4ca;
+      }
+
+      .pill.fail,
+      .pill.error {
+        background: var(--bad-soft);
+        color: var(--bad);
+        border-color: #fac5c0;
+      }
+
+      .layout {
+        width: min(1480px, calc(100vw - 28px));
+        margin: 0 auto;
+        padding: 18px 0 22px;
+        display: grid;
+        grid-template-columns: 320px minmax(0, 1fr) 380px;
+        gap: 14px;
+        align-items: start;
+      }
+
+      .panel {
+        min-width: 0;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+      }
+
+      .panel-header {
+        min-height: 50px;
+        padding: 14px 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .panel-body {
+        padding: 14px 16px;
+      }
+
+      .sidebar,
+      .quality {
+        position: sticky;
+        top: 82px;
+        max-height: calc(100vh - 104px);
         overflow: auto;
       }
 
-      .source {
+      .stack {
+        display: grid;
+        gap: 12px;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .row.wrap {
+        flex-wrap: wrap;
+      }
+
+      .split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 10px;
+      }
+
+      .check-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 500;
+      }
+
+      .check-row input {
+        width: auto;
+      }
+
+      .stat-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .stat {
         border: 1px solid var(--line);
         border-radius: 6px;
         padding: 10px;
+        background: var(--surface-soft);
       }
 
-      .source strong {
+      .stat strong {
         display: block;
-        font-size: 13px;
-        overflow-wrap: anywhere;
+        font-size: 18px;
+        line-height: 1.1;
       }
 
-      .source span,
+      .stat span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
       .meta {
         color: var(--muted);
         font-size: 12px;
       }
 
-      .citations {
-        border-top: 1px solid var(--line);
-        padding: 14px 22px 18px;
+      .notice {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+        background: var(--surface-soft);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .notice.warn {
+        border-color: #f4d69a;
+        background: var(--gold-soft);
+        color: #7a4b0a;
+      }
+
+      .source-tools {
         display: grid;
         gap: 10px;
       }
 
-      .citation {
+      .source-list {
+        display: grid;
+        gap: 8px;
+        max-height: 38vh;
+        overflow: auto;
+        padding-right: 2px;
+      }
+
+      .source-item {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+        background: #ffffff;
+      }
+
+      .source-item strong {
+        display: block;
+        margin-bottom: 6px;
+        overflow-wrap: anywhere;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .source-item .meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .chat {
+        min-height: calc(100vh - 104px);
+        display: grid;
+        grid-template-rows: auto minmax(360px, 1fr) auto;
+      }
+
+      .chat-toolbar {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .segmented {
+        display: inline-grid;
+        grid-template-columns: 1fr 1fr;
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
+        overflow: hidden;
+        background: #ffffff;
+      }
+
+      .segmented button {
+        min-height: 34px;
+        border: 0;
+        border-radius: 0;
+        padding: 0 12px;
+        background: #ffffff;
         color: var(--muted);
-        font-size: 13px;
-        line-height: 1.45;
+      }
+
+      .segmented button.active {
+        background: var(--accent);
+        color: #ffffff;
+      }
+
+      .topk {
+        width: 86px;
+      }
+
+      .messages {
+        overflow: auto;
+        padding: 18px;
+        display: grid;
+        align-content: start;
+        gap: 14px;
+        background:
+          linear-gradient(#ffffff, #ffffff) padding-box,
+          linear-gradient(180deg, rgba(15, 118, 110, 0.08), rgba(183, 121, 31, 0.04)) border-box;
+      }
+
+      .empty-state {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px;
+        background: var(--surface-soft);
+        display: grid;
+        gap: 12px;
+      }
+
+      .empty-state h2 {
+        font-size: 16px;
+      }
+
+      .prompt-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .prompt {
+        min-height: 46px;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #ffffff;
+        color: var(--ink);
+        text-align: left;
+        white-space: normal;
+        font-weight: 600;
+      }
+
+      .prompt:hover {
+        background: var(--accent-soft);
+        border-color: #a5d7cf;
+      }
+
+      .message {
+        display: grid;
+        gap: 7px;
+      }
+
+      .message.user {
+        justify-items: end;
+      }
+
+      .bubble {
+        max-width: min(820px, 92%);
+        border-radius: 8px;
+        padding: 12px 13px;
+        border: 1px solid var(--line);
+        background: #ffffff;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+      }
+
+      .message.user .bubble {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #ffffff;
+      }
+
+      .message.assistant .bubble {
+        border-left: 3px solid var(--accent);
+      }
+
+      .message-meta {
+        max-width: min(820px, 92%);
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .citation-list {
+        max-width: min(820px, 92%);
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      .citation-chip {
+        min-height: 28px;
+        padding: 0 9px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #ffffff;
+        color: var(--accent-dark);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .composer {
+        border-top: 1px solid var(--line);
+        padding: 14px;
+        display: grid;
+        gap: 10px;
+        background: #ffffff;
+        border-radius: 0 0 8px 8px;
+      }
+
+      .composer-actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .evidence-list,
+      .eval-results,
+      .question-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .evidence-item,
+      .eval-item,
+      .question-item {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+        background: #ffffff;
+      }
+
+      .evidence-item strong,
+      .eval-item strong {
+        display: block;
+        margin-bottom: 6px;
+        overflow-wrap: anywhere;
+        font-size: 12px;
+      }
+
+      .evidence-item p,
+      .eval-item p {
+        color: var(--muted);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      .eval-controls {
+        display: grid;
+        gap: 10px;
+      }
+
+      .eval-summary {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .eval-results {
+        max-height: 42vh;
+        overflow: auto;
+        padding-right: 2px;
+      }
+
+      .eval-item header {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .eval-item header strong {
+        margin-bottom: 0;
+      }
+
+      .eval-bars {
+        display: grid;
+        gap: 6px;
+        margin: 9px 0;
+      }
+
+      .barline {
+        display: grid;
+        grid-template-columns: 82px minmax(0, 1fr) 38px;
+        align-items: center;
+        gap: 7px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .track {
+        height: 7px;
+        border-radius: 999px;
+        background: #e6ebf1;
+        overflow: hidden;
+      }
+
+      .fill {
+        height: 100%;
+        width: 0;
+        background: var(--accent);
+      }
+
+      .fill.warn {
+        background: var(--gold);
+      }
+
+      .footer {
+        border-top: 1px solid var(--line);
+        background: #ffffff;
+      }
+
+      .footer-inner {
+        width: min(1480px, calc(100vw - 28px));
+        margin: 0 auto;
+        padding: 12px 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      @media (max-width: 1180px) {
+        .layout {
+          grid-template-columns: 300px minmax(0, 1fr);
+        }
+
+        .quality {
+          grid-column: 1 / -1;
+          position: static;
+          max-height: none;
+        }
+
+        .quality .panel-body {
+          display: grid;
+          grid-template-columns: 320px minmax(0, 1fr);
+          gap: 14px;
+        }
+
+        .eval-results {
+          max-height: 360px;
+        }
       }
 
       @media (max-width: 860px) {
-        main {
+        .topbar-inner,
+        .layout,
+        .footer-inner {
+          width: min(100vw - 20px, 720px);
+        }
+
+        .topbar-inner {
+          align-items: flex-start;
+          flex-direction: column;
+          padding: 12px 0;
+        }
+
+        .status-strip {
+          justify-content: flex-start;
+        }
+
+        .layout {
           grid-template-columns: 1fr;
         }
 
-        .workspace {
-          min-height: 58vh;
+        .sidebar,
+        .quality {
+          position: static;
+          max-height: none;
         }
 
-        form {
+        .chat {
+          min-height: 72vh;
+        }
+
+        .quality .panel-body {
           grid-template-columns: 1fr;
         }
 
-        button {
-          min-height: 42px;
+        .prompt-grid,
+        .split,
+        .eval-summary,
+        .stat-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .chat-toolbar,
+        .composer-actions {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .segmented,
+        .topk {
+          width: 100%;
+        }
+
+        .bubble,
+        .message-meta,
+        .citation-list {
+          max-width: 100%;
         }
       }
     </style>
   </head>
   <body>
-    <header>
-      <div class="bar">
-        <h1>Stroke Medical RAG</h1>
-        <div class="status"><span id="status-dot" class="dot"></span><span id="status">Checking</span></div>
-      </div>
-    </header>
-
-    <main>
-      <section class="workspace">
-        <div>
-          <div id="answer" class="answer empty">Ask a question after the stroke corpus is indexed.</div>
-          <div id="citations" class="citations" hidden></div>
+    <div class="app">
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div class="brand">
+            <h1>Stroke Medical RAG</h1>
+            <span>Corpus-grounded stroke literature assistant</span>
+          </div>
+          <div class="status-strip" aria-live="polite">
+            <span id="index-chip" class="chip bad">Checking index</span>
+            <span id="embedding-chip" class="chip">Embeddings</span>
+            <span id="generation-chip" class="chip">Generation</span>
+            <span id="ollama-chip" class="chip">Ollama</span>
+          </div>
         </div>
-        <form id="ask-form">
-          <textarea id="question" name="question" placeholder="Ask about stroke diagnosis, prevention, rehabilitation, systems of care..." required></textarea>
-          <select id="answer-mode" name="answer-mode" aria-label="Answer mode">
-            <option value="patient">Patient</option>
-            <option value="clinician">Clinician</option>
-          </select>
-          <button id="ask-button" type="submit">Ask</button>
-        </form>
-      </section>
+      </header>
 
-      <aside>
-        <h2>Index</h2>
-        <div class="ingest">
-          <input id="source-path" placeholder="pdfs" />
-          <button id="ingest-button" type="button">Ingest</button>
-          <div id="ingest-result" class="meta"></div>
+      <main class="layout">
+        <aside class="panel sidebar" aria-label="Corpus">
+          <div class="panel-header">
+            <h2>Corpus</h2>
+            <button id="refresh-button" class="ghost" type="button">Refresh</button>
+          </div>
+          <div class="panel-body stack">
+            <div class="stat-grid">
+              <div class="stat">
+                <strong id="source-count">0</strong>
+                <span>Sources</span>
+              </div>
+              <div class="stat">
+                <strong id="chunk-count">0</strong>
+                <span>Chunks</span>
+              </div>
+            </div>
+
+            <div class="stack">
+              <label>
+                Source path
+                <input id="source-path" placeholder="pdfs" autocomplete="off" />
+              </label>
+              <div class="split">
+                <label>
+                  PDF workers
+                  <input id="pdf-workers" type="number" min="1" max="32" value="4" />
+                </label>
+                <label>
+                  Mode
+                  <select id="ingest-mode">
+                    <option value="resume">Resume</option>
+                    <option value="force">Force</option>
+                    <option value="failed">Failed only</option>
+                  </select>
+                </label>
+              </div>
+              <label class="check-row">
+                <input id="background-ingest" type="checkbox" checked />
+                Run in background
+              </label>
+              <button id="ingest-button" type="button">Start Ingest</button>
+              <div id="ingest-result" class="notice">Idle</div>
+            </div>
+
+            <div class="source-tools">
+              <label>
+                Source search
+                <input id="source-search" placeholder="Filter by filename or title" autocomplete="off" />
+              </label>
+              <div id="sources" class="source-list">
+                <div class="notice">No sources loaded.</div>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <section class="panel chat" aria-label="Question answering">
+          <div class="chat-toolbar">
+            <div class="row wrap">
+              <div class="segmented" aria-label="Answer mode">
+                <button id="mode-patient" type="button" class="active" data-mode="patient">Patient</button>
+                <button id="mode-clinician" type="button" data-mode="clinician">Clinician</button>
+              </div>
+              <label class="topk">
+                Top K
+                <input id="top-k" type="number" min="1" max="20" value="5" />
+              </label>
+            </div>
+            <div class="row wrap">
+              <button id="clear-chat" class="secondary" type="button">Clear</button>
+            </div>
+          </div>
+
+          <div id="messages" class="messages" aria-live="polite">
+            <div id="empty-state" class="empty-state">
+              <div class="stack">
+                <h2>Ask against the indexed stroke corpus</h2>
+                <p class="meta">Stroke guidelines, trials, systems of care, rehabilitation, and prevention.</p>
+              </div>
+              <div class="prompt-grid">
+                <button class="prompt" type="button">What is dysphagia after stroke?</button>
+                <button class="prompt" type="button">What are signs of acute stroke?</button>
+                <button class="prompt" type="button">When is thrombectomy discussed?</button>
+                <button class="prompt" type="button">What should I eat after a stroke?</button>
+              </div>
+            </div>
+          </div>
+
+          <form id="ask-form" class="composer">
+            <textarea
+              id="question"
+              name="question"
+              placeholder="Ask about stroke diagnosis, prevention, rehabilitation, systems of care, or the indexed PDFs..."
+              required
+            ></textarea>
+            <div class="composer-actions">
+              <span id="composer-status" class="meta">Ready</span>
+              <button id="ask-button" type="submit">Ask Corpus</button>
+            </div>
+          </form>
+        </section>
+
+        <aside class="panel quality" aria-label="Evidence and evaluation">
+          <div class="panel-header">
+            <h2>Evidence and Quality</h2>
+            <span id="quality-status" class="meta">Not evaluated</span>
+          </div>
+          <div class="panel-body">
+            <div class="stack">
+              <section class="stack" aria-label="System status">
+                <h2>System</h2>
+                <div id="system-details" class="notice">Checking server.</div>
+              </section>
+
+              <section class="stack" aria-label="Latest evidence">
+                <div class="row" style="justify-content: space-between">
+                  <h2>Latest Evidence</h2>
+                  <span id="evidence-count" class="meta">0 citations</span>
+                </div>
+                <div id="evidence-list" class="evidence-list">
+                  <div class="notice">Ask a question to see citations.</div>
+                </div>
+              </section>
+            </div>
+
+            <section class="stack" aria-label="Evaluation">
+              <div class="row" style="justify-content: space-between">
+                <h2>Evaluation</h2>
+                <button id="eval-run-button" type="button">Run Eval</button>
+              </div>
+              <div class="eval-controls">
+                <div class="split">
+                  <label>
+                    Eval mode
+                    <select id="eval-answer-mode">
+                      <option value="patient">Patient</option>
+                      <option value="clinician">Clinician</option>
+                    </select>
+                  </label>
+                  <label>
+                    Top K
+                    <input id="eval-top-k" type="number" min="1" max="20" value="5" />
+                  </label>
+                </div>
+                <label class="check-row">
+                  <input id="eval-include-answers" type="checkbox" />
+                  Include full answers
+                </label>
+                <div id="eval-question-list" class="question-list">
+                  <div class="notice">Loading eval questions.</div>
+                </div>
+              </div>
+              <div id="eval-summary" class="eval-summary hidden"></div>
+              <div id="eval-results" class="eval-results">
+                <div class="notice">No eval run yet.</div>
+              </div>
+            </section>
+          </div>
+        </aside>
+      </main>
+
+      <footer class="footer">
+        <div class="footer-inner">
+          Literature review and clinical education support only. Not a substitute for emergency care, diagnosis, or treatment.
         </div>
-
-        <h2>Sources</h2>
-        <div id="sources" class="sources"></div>
-      </aside>
-    </main>
+      </footer>
+    </div>
 
     <script>
-      const statusDot = document.querySelector("#status-dot");
-      const statusText = document.querySelector("#status");
-      const answer = document.querySelector("#answer");
-      const citations = document.querySelector("#citations");
-      const sources = document.querySelector("#sources");
-      const askButton = document.querySelector("#ask-button");
-      const ingestButton = document.querySelector("#ingest-button");
-      const ingestResult = document.querySelector("#ingest-result");
+      const state = {
+        answerMode: "patient",
+        health: null,
+        sources: [],
+        evalQuestions: [],
+        ingestPoll: null,
+      };
+
+      const els = {
+        indexChip: document.querySelector("#index-chip"),
+        embeddingChip: document.querySelector("#embedding-chip"),
+        generationChip: document.querySelector("#generation-chip"),
+        ollamaChip: document.querySelector("#ollama-chip"),
+        systemDetails: document.querySelector("#system-details"),
+        qualityStatus: document.querySelector("#quality-status"),
+        sourceCount: document.querySelector("#source-count"),
+        chunkCount: document.querySelector("#chunk-count"),
+        sourcePath: document.querySelector("#source-path"),
+        pdfWorkers: document.querySelector("#pdf-workers"),
+        ingestMode: document.querySelector("#ingest-mode"),
+        backgroundIngest: document.querySelector("#background-ingest"),
+        ingestButton: document.querySelector("#ingest-button"),
+        ingestResult: document.querySelector("#ingest-result"),
+        sourceSearch: document.querySelector("#source-search"),
+        sources: document.querySelector("#sources"),
+        messages: document.querySelector("#messages"),
+        emptyState: document.querySelector("#empty-state"),
+        question: document.querySelector("#question"),
+        topK: document.querySelector("#top-k"),
+        askButton: document.querySelector("#ask-button"),
+        composerStatus: document.querySelector("#composer-status"),
+        evidenceCount: document.querySelector("#evidence-count"),
+        evidenceList: document.querySelector("#evidence-list"),
+        evalAnswerMode: document.querySelector("#eval-answer-mode"),
+        evalTopK: document.querySelector("#eval-top-k"),
+        evalIncludeAnswers: document.querySelector("#eval-include-answers"),
+        evalRunButton: document.querySelector("#eval-run-button"),
+        evalQuestionList: document.querySelector("#eval-question-list"),
+        evalSummary: document.querySelector("#eval-summary"),
+        evalResults: document.querySelector("#eval-results"),
+      };
 
       async function requestJson(path, options = {}) {
         const response = await fetch(path, {
@@ -286,82 +986,519 @@
         return payload;
       }
 
-      async function refreshStatus() {
-        const payload = await requestJson("/health");
-        statusDot.classList.toggle("ready", payload.index_exists);
-        statusText.textContent = payload.index_exists ? "Indexed" : "No index";
+      async function refreshAll() {
+        await refreshHealth();
+        await refreshSources();
+        await refreshEvalQuestions();
+      }
+
+      async function refreshHealth() {
+        try {
+          const payload = await requestJson("/health");
+          state.health = payload;
+          if (!els.sourcePath.value) {
+            els.sourcePath.placeholder = payload.corpus_dir || "pdfs";
+          }
+          renderHealth(payload);
+        } catch (error) {
+          setChip(els.indexChip, "bad", "Server unavailable");
+          els.systemDetails.textContent = error.message;
+        }
+      }
+
+      function renderHealth(payload) {
+        setChip(els.indexChip, payload.index_exists ? "ok" : "bad", payload.index_exists ? "Indexed" : "No index");
+        setChip(
+          els.embeddingChip,
+          payload.fallback_embedding ? "warn" : "ok",
+          payload.active_embedding_model || payload.embedding_backend || "Embeddings",
+        );
+        setChip(
+          els.generationChip,
+          payload.generation_backend === "ollama" ? "ok" : "warn",
+          payload.generation_model || payload.generation_backend || "Generation",
+        );
+        const apiMode =
+          payload.generation_backend === "api" || payload.embedding_backend === "api";
+        if (apiMode) {
+          setChip(
+            els.ollamaChip,
+            payload.api_key_configured ? "ok" : "bad",
+            payload.api_key_configured ? "API configured" : "API key missing",
+          );
+        } else {
+          setChip(
+            els.ollamaChip,
+            payload.ollama_available ? "ok" : "warn",
+            payload.ollama_available ? `${payload.ollama_models.length} Ollama models` : "Ollama offline",
+          );
+        }
+
+        const fallback = payload.fallback_embedding
+          ? "Auto embeddings are using the hash fallback."
+          : "Configured embedding model is active.";
+        els.systemDetails.innerHTML = [
+          detailLine("Index", payload.index_path),
+          detailLine("Corpus", payload.corpus_dir),
+          detailLine("Embedding", `${payload.active_embedding_model || payload.embedding_backend} - ${fallback}`),
+          detailLine("Generation", payload.generation_model || payload.generation_backend),
+          detailLine(
+            "API",
+            `${payload.api_base_url || "not configured"} - ${
+              payload.api_key_configured ? "key configured" : "no key configured"
+            }`,
+          ),
+          detailLine(
+            "Ollama embedding",
+            `${payload.ollama_embedding_model || "not configured"}${
+              payload.ollama_embedding_model_available ? " available" : " unavailable"
+            }`,
+          ),
+        ].join("");
+        els.systemDetails.classList.toggle("warn", Boolean(payload.fallback_embedding));
       }
 
       async function refreshSources() {
         try {
           const payload = await requestJson("/sources");
-          sources.innerHTML = payload
-            .map(
-              (source) =>
-                `<div class="source"><strong>${escapeHtml(source.source_id)}</strong><span>${source.chunks} chunks</span></div>`,
-            )
-            .join("");
-        } catch {
-          sources.innerHTML = '<div class="meta">No sources indexed.</div>';
+          state.sources = payload;
+          renderSources();
+        } catch (error) {
+          state.sources = [];
+          els.sourceCount.textContent = "0";
+          els.chunkCount.textContent = "0";
+          els.sources.innerHTML = `<div class="notice warn">${escapeHtml(error.message)}</div>`;
         }
       }
 
-      document.querySelector("#ingest-button").addEventListener("click", async () => {
-        ingestButton.disabled = true;
-        ingestResult.textContent = "Indexing...";
-        try {
-          const sourcePath = document.querySelector("#source-path").value.trim();
-          const payload = await requestJson("/ingest", {
-            method: "POST",
-            body: JSON.stringify({ source_path: sourcePath || null }),
-          });
-          ingestResult.textContent = `${payload.documents} documents, ${payload.chunks} chunks`;
-          await refreshStatus();
-          await refreshSources();
-        } catch (error) {
-          ingestResult.textContent = error.message;
-        } finally {
-          ingestButton.disabled = false;
-        }
-      });
+      function renderSources() {
+        const query = els.sourceSearch.value.trim().toLowerCase();
+        const filtered = state.sources.filter((source) => {
+          const text = `${source.source_id || ""} ${source.title || ""}`.toLowerCase();
+          return !query || text.includes(query);
+        });
+        const totalChunks = state.sources.reduce((sum, source) => sum + Number(source.chunks || 0), 0);
+        els.sourceCount.textContent = formatNumber(state.sources.length);
+        els.chunkCount.textContent = formatNumber(totalChunks);
 
-      document.querySelector("#ask-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        askButton.disabled = true;
-        answer.classList.remove("empty");
-        answer.textContent = "Retrieving...";
-        citations.hidden = true;
+        if (!filtered.length) {
+          els.sources.innerHTML = '<div class="notice">No matching sources.</div>';
+          return;
+        }
+
+        els.sources.innerHTML = filtered
+          .map(
+            (source) => `<article class="source-item">
+              <strong>${escapeHtml(compactSource(source.source_id || source.title || "Unknown source"))}</strong>
+              <div class="meta">
+                <span>${formatNumber(source.chunks || 0)} chunks</span>
+                <span>${formatPages(source.pages)}</span>
+              </div>
+            </article>`,
+          )
+          .join("");
+      }
+
+      async function refreshEvalQuestions() {
         try {
-          const question = document.querySelector("#question").value.trim();
-          const answerMode = document.querySelector("#answer-mode").value;
+          const payload = await requestJson("/eval/questions");
+          state.evalQuestions = payload.questions || [];
+          renderEvalQuestions();
+        } catch (error) {
+          els.evalQuestionList.innerHTML = `<div class="notice warn">${escapeHtml(error.message)}</div>`;
+        }
+      }
+
+      function renderEvalQuestions() {
+        if (!state.evalQuestions.length) {
+          els.evalQuestionList.innerHTML = '<div class="notice">No eval questions found.</div>';
+          return;
+        }
+        els.evalQuestionList.innerHTML = state.evalQuestions
+          .map(
+            (question) => `<label class="question-item check-row">
+              <input type="checkbox" value="${escapeHtml(question.id)}" checked />
+              <span>${escapeHtml(question.question)}</span>
+            </label>`,
+          )
+          .join("");
+      }
+
+      async function startIngest() {
+        els.ingestButton.disabled = true;
+        els.ingestResult.classList.remove("warn");
+        els.ingestResult.textContent = "Starting ingestion.";
+        const mode = els.ingestMode.value;
+        const payload = {
+          source_path: els.sourcePath.value.trim() || null,
+          pdf_workers: Number(els.pdfWorkers.value || 1),
+          background: els.backgroundIngest.checked,
+          force: mode === "force",
+          failed_only: mode === "failed",
+          resume: mode !== "force",
+        };
+
+        try {
+          const response = await requestJson("/ingest", {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          if (response.accepted) {
+            els.ingestResult.textContent = "Ingestion running in background.";
+            startIngestPolling();
+          } else {
+            renderIngestReport(response);
+            await refreshHealth();
+            await refreshSources();
+          }
+        } catch (error) {
+          els.ingestResult.textContent = error.message;
+          els.ingestResult.classList.add("warn");
+        } finally {
+          if (!payload.background) {
+            els.ingestButton.disabled = false;
+          }
+        }
+      }
+
+      function startIngestPolling() {
+        stopIngestPolling();
+        els.ingestButton.disabled = true;
+        state.ingestPoll = window.setInterval(checkIngestStatus, 1500);
+        checkIngestStatus().catch(() => {});
+      }
+
+      function stopIngestPolling() {
+        if (state.ingestPoll) {
+          window.clearInterval(state.ingestPoll);
+          state.ingestPoll = null;
+        }
+      }
+
+      async function checkIngestStatus() {
+        try {
+          const payload = await requestJson("/ingest/status");
+          if (payload.running) {
+            els.ingestResult.textContent = `Ingestion running since ${formatTime(payload.started_at)}.`;
+            return;
+          }
+          stopIngestPolling();
+          els.ingestButton.disabled = false;
+          if (payload.last_error) {
+            els.ingestResult.textContent = payload.last_error;
+            els.ingestResult.classList.add("warn");
+            return;
+          }
+          if (payload.last_report) {
+            renderIngestReport(payload.last_report);
+            await refreshHealth();
+            await refreshSources();
+          } else {
+            els.ingestResult.textContent = "Idle";
+          }
+        } catch (error) {
+          stopIngestPolling();
+          els.ingestButton.disabled = false;
+          els.ingestResult.textContent = error.message;
+          els.ingestResult.classList.add("warn");
+        }
+      }
+
+      function renderIngestReport(report) {
+        const pieces = [
+          `${formatNumber(report.documents)} documents`,
+          `${formatNumber(report.chunks)} chunks`,
+          `${formatNumber(report.files_changed || 0)} changed`,
+          `${formatNumber(report.files_from_cache || 0)} cached`,
+        ];
+        if (report.deleted_files) {
+          pieces.push(`${formatNumber(report.deleted_files)} deleted`);
+        }
+        if (report.timings?.total_seconds != null) {
+          pieces.push(`${report.timings.total_seconds}s`);
+        }
+        els.ingestResult.textContent = pieces.join(" - ");
+      }
+
+      async function askQuestion(event) {
+        event.preventDefault();
+        const question = els.question.value.trim();
+        if (!question) {
+          return;
+        }
+
+        hideEmptyState();
+        appendMessage("user", question);
+        const pending = appendMessage("assistant", "Retrieving evidence.");
+        els.askButton.disabled = true;
+        els.composerStatus.textContent = "Retrieving";
+
+        try {
           const payload = await requestJson("/ask", {
             method: "POST",
-            body: JSON.stringify({ question, answer_mode: answerMode }),
+            body: JSON.stringify({
+              question,
+              answer_mode: state.answerMode,
+              top_k: Number(els.topK.value || 5),
+            }),
           });
-          answer.textContent = payload.answer;
-          citations.innerHTML = payload.citations
-            .map(
-              (citation) =>
-                `<div class="citation">[${citation.id}] ${escapeHtml(citation.source)}${citation.page ? `, page ${citation.page}` : ""} · score ${citation.score}<br>${escapeHtml(citation.excerpt)}</div>`,
-            )
-            .join("");
-          citations.hidden = payload.citations.length === 0;
+          updateAssistantMessage(pending, payload);
+          renderEvidence(payload.citations || []);
+          els.question.value = "";
+          els.composerStatus.textContent = `${payload.retrieval_model} - ${payload.generation_model}`;
         } catch (error) {
-          answer.textContent = error.message;
+          pending.querySelector(".bubble").textContent = error.message;
+          pending.querySelector(".message-meta").textContent = "Request failed";
+          els.composerStatus.textContent = "Error";
         } finally {
-          askButton.disabled = false;
+          els.askButton.disabled = false;
         }
-      });
+      }
+
+      function appendMessage(role, text) {
+        const message = document.createElement("article");
+        message.className = `message ${role}`;
+        message.innerHTML = `
+          <div class="bubble"></div>
+          <div class="message-meta"></div>
+          <div class="citation-list"></div>
+        `;
+        message.querySelector(".bubble").textContent = text;
+        message.querySelector(".message-meta").textContent =
+          role === "user" ? activeModeLabel() : "Working";
+        els.messages.appendChild(message);
+        els.messages.scrollTop = els.messages.scrollHeight;
+        return message;
+      }
+
+      function updateAssistantMessage(message, payload) {
+        const citationCount = (payload.citations || []).length;
+        message.querySelector(".bubble").textContent = payload.answer || "No answer returned.";
+        message.querySelector(".message-meta").textContent = [
+          `${payload.answer_mode || activeModeLabel()} mode`,
+          `${payload.retrieval_mode || "retrieval"} retrieval`,
+          payload.fallback_embedding ? "fallback embeddings" : payload.retrieval_model,
+          payload.generation_model,
+        ]
+          .filter(Boolean)
+          .join(" - ");
+        message.querySelector(".citation-list").innerHTML = (payload.citations || [])
+          .map(
+            (citation) =>
+              `<button class="citation-chip" type="button" data-citation="${citation.id}">[${citation.id}] ${escapeHtml(shortSource(citation.source))}</button>`,
+          )
+          .join("");
+        if (!citationCount) {
+          message.querySelector(".citation-list").innerHTML = '<span class="meta">No citations returned.</span>';
+        }
+        els.messages.scrollTop = els.messages.scrollHeight;
+      }
+
+      function renderEvidence(citations) {
+        els.evidenceCount.textContent = `${citations.length} citation${citations.length === 1 ? "" : "s"}`;
+        if (!citations.length) {
+          els.evidenceList.innerHTML = '<div class="notice warn">No citations returned.</div>';
+          return;
+        }
+        els.evidenceList.innerHTML = citations
+          .map(
+            (citation) => `<article class="evidence-item" id="citation-${citation.id}">
+              <strong>[${citation.id}] ${escapeHtml(citation.source || "Unknown source")}</strong>
+              <p class="meta">${citation.page ? `Page ${escapeHtml(citation.page)}` : "Page unknown"} - score ${escapeHtml(citation.score)}</p>
+              <p>${escapeHtml(citation.excerpt || "")}</p>
+            </article>`,
+          )
+          .join("");
+      }
+
+      async function runEval() {
+        els.evalRunButton.disabled = true;
+        els.qualityStatus.textContent = "Running eval";
+        els.evalSummary.classList.add("hidden");
+        els.evalResults.innerHTML = '<div class="notice">Running eval.</div>';
+        const selected = [...els.evalQuestionList.querySelectorAll("input[type='checkbox']:checked")].map(
+          (input) => input.value,
+        );
+        if (state.evalQuestions.length && selected.length === 0) {
+          els.qualityStatus.textContent = "No eval selected";
+          els.evalResults.innerHTML = '<div class="notice">No eval questions selected.</div>';
+          els.evalRunButton.disabled = false;
+          return;
+        }
+
+        try {
+          const payload = await requestJson("/eval/run", {
+            method: "POST",
+            body: JSON.stringify({
+              answer_mode: els.evalAnswerMode.value,
+              top_k: Number(els.evalTopK.value || 5),
+              question_ids: selected,
+              include_answers: els.evalIncludeAnswers.checked,
+            }),
+          });
+          renderEval(payload);
+        } catch (error) {
+          els.qualityStatus.textContent = "Eval failed";
+          els.evalResults.innerHTML = `<div class="notice warn">${escapeHtml(error.message)}</div>`;
+        } finally {
+          els.evalRunButton.disabled = false;
+        }
+      }
+
+      function renderEval(payload) {
+        const summary = payload.summary;
+        els.qualityStatus.textContent = `${summary.passed_questions}/${summary.total_questions} passed`;
+        els.evalSummary.classList.remove("hidden");
+        els.evalSummary.innerHTML = [
+          stat("Passed", `${summary.passed_questions}/${summary.total_questions}`),
+          stat("Retrieval", formatPercent(summary.retrieval_hit_rate)),
+          stat("Answer terms", formatPercent(summary.average_answer_term_coverage)),
+          stat("Refusal", formatPercent(summary.refusal_accuracy)),
+        ].join("");
+
+        if (!payload.results.length) {
+          els.evalResults.innerHTML = '<div class="notice">No eval questions selected.</div>';
+          return;
+        }
+
+        els.evalResults.innerHTML = payload.results
+          .map((result) => {
+            const status = escapeHtml(result.status || "unknown");
+            const evidence = (result.citations || [])
+              .slice(0, 2)
+              .map((citation) => `[${citation.id}] ${shortSource(citation.source)}${citation.page ? `, p. ${citation.page}` : ""}`)
+              .join(" | ");
+            return `<article class="eval-item">
+              <header>
+                <strong>${escapeHtml(result.question)}</strong>
+                <span class="pill ${status}">${status.toUpperCase()}</span>
+              </header>
+              <div class="eval-bars">
+                ${barline("Retrieval", result.retrieval_hit ? 1 : 0)}
+                ${barline("Citation", result.citation_term_coverage)}
+                ${barline("Answer", result.answer_term_coverage)}
+              </div>
+              <p>${escapeHtml(result.answer_snippet || result.error || "No answer snippet.")}</p>
+              <p class="meta">${escapeHtml(evidence || "No evidence")} - ${escapeHtml(result.question_id)} - ${result.latency_seconds}s</p>
+            </article>`;
+          })
+          .join("");
+      }
+
+      function setMode(mode) {
+        state.answerMode = mode;
+        document.querySelectorAll(".segmented button").forEach((button) => {
+          button.classList.toggle("active", button.dataset.mode === mode);
+        });
+      }
+
+      function clearChat() {
+        els.messages.innerHTML = "";
+        els.messages.appendChild(els.emptyState);
+        els.emptyState.classList.remove("hidden");
+        renderEvidence([]);
+        els.composerStatus.textContent = "Ready";
+      }
+
+      function hideEmptyState() {
+        if (!els.emptyState.classList.contains("hidden")) {
+          els.emptyState.classList.add("hidden");
+        }
+      }
+
+      function setChip(element, status, text) {
+        element.className = `chip ${status || ""}`.trim();
+        element.textContent = text;
+      }
+
+      function detailLine(label, value) {
+        return `<div><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value || "unknown")}</div>`;
+      }
+
+      function stat(label, value) {
+        return `<div class="stat"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`;
+      }
+
+      function barline(label, value) {
+        const percent = Math.max(0, Math.min(100, Math.round(Number(value || 0) * 100)));
+        const fillClass = percent < 40 ? "fill warn" : "fill";
+        return `<div class="barline">
+          <span>${escapeHtml(label)}</span>
+          <span class="track"><span class="${fillClass}" style="width: ${percent}%"></span></span>
+          <span>${percent}%</span>
+        </div>`;
+      }
+
+      function activeModeLabel() {
+        return state.answerMode === "clinician" ? "Clinician" : "Patient";
+      }
+
+      function formatNumber(value) {
+        return new Intl.NumberFormat().format(Number(value || 0));
+      }
+
+      function formatPercent(value) {
+        return `${Math.round(Number(value || 0) * 100)}%`;
+      }
+
+      function formatPages(pages) {
+        if (!Array.isArray(pages) || !pages.length) {
+          return "No pages";
+        }
+        return `${formatNumber(pages.length)} pages`;
+      }
+
+      function formatTime(timestamp) {
+        if (!timestamp) {
+          return "unknown";
+        }
+        return new Date(Number(timestamp) * 1000).toLocaleTimeString();
+      }
+
+      function compactSource(source) {
+        return String(source).replace(/\.pdf$/i, "");
+      }
+
+      function shortSource(source) {
+        const compact = compactSource(source || "source");
+        return compact.length > 42 ? `${compact.slice(0, 39)}...` : compact;
+      }
 
       function escapeHtml(value) {
-        return String(value).replace(/[&<>"']/g, (char) => {
+        return String(value ?? "").replace(/[&<>"']/g, (char) => {
           const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
           return map[char];
         });
       }
 
-      refreshStatus().catch(() => {});
-      refreshSources().catch(() => {});
+      document.querySelector("#ask-form").addEventListener("submit", askQuestion);
+      document.querySelector("#ingest-button").addEventListener("click", startIngest);
+      document.querySelector("#refresh-button").addEventListener("click", refreshAll);
+      document.querySelector("#source-search").addEventListener("input", renderSources);
+      document.querySelector("#eval-run-button").addEventListener("click", runEval);
+      document.querySelector("#clear-chat").addEventListener("click", clearChat);
+
+      document.querySelectorAll(".segmented button").forEach((button) => {
+        button.addEventListener("click", () => setMode(button.dataset.mode));
+      });
+
+      document.querySelectorAll(".prompt").forEach((button) => {
+        button.addEventListener("click", () => {
+          els.question.value = button.textContent.trim();
+          els.question.focus();
+        });
+      });
+
+      els.messages.addEventListener("click", (event) => {
+        const target = event.target.closest("[data-citation]");
+        if (!target) {
+          return;
+        }
+        const citation = document.querySelector(`#citation-${target.dataset.citation}`);
+        citation?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+
+      refreshAll().catch(() => {});
     </script>
   </body>
 </html>

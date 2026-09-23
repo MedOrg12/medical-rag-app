@@ -7,9 +7,9 @@ Clean stroke-focused retrieval-augmented generation system. The previous reposit
 - PDF, Markdown, and text ingestion
 - Page-aware chunking with stable chunk IDs
 - Local deterministic vector retrieval with no external service required
-- Optional Ollama embeddings and chat generation
+- Optional Ollama or OpenAI-compatible API embeddings and chat generation
 - JSON vector index stored at `.rag/index.json`
-- FastAPI API and a minimal browser UI
+- FastAPI API and a browser RAG workbench
 - CLI commands for ingesting and asking questions
 - Focused tests for the core RAG path
 
@@ -83,6 +83,27 @@ docker compose --profile ollama up -d --build medical-rag
 
 The default Docker path still works without Ollama by using local hashing retrieval and extractive answers.
 
+To run with a hosted OpenAI-compatible API for generation:
+
+```bash
+RAG_GENERATION_BACKEND=api \
+RAG_API_KEY=sk-... \
+RAG_API_GENERATION_MODEL=gpt-4o-mini \
+docker compose up -d --build medical-rag
+```
+
+To use hosted API embeddings too, reingest because the vector index must match the embedding model:
+
+```bash
+RAG_GENERATION_BACKEND=api \
+RAG_EMBEDDING_BACKEND=api \
+RAG_API_KEY=sk-... \
+RAG_API_GENERATION_MODEL=gpt-4o-mini \
+RAG_API_EMBEDDING_MODEL=text-embedding-3-small \
+RAG_FORCE_REINGEST=true \
+docker compose up -d --build medical-rag
+```
+
 ## Large Corpus Ingestion
 
 The ingestion pipeline is designed to handle larger corpora without reprocessing every PDF on every run. It keeps a SQLite manifest, an extracted-text cache, and an embedding cache under `.rag/`.
@@ -143,9 +164,33 @@ curl -X POST http://127.0.0.1:8000/ask \
   -d '{"question":"What does the indexed literature say about stroke rehabilitation?"}'
 ```
 
-## Ollama Generation
+## Generation Backends
 
-Default retrieval uses the built-in hashing vectorizer and default answers are extractive. Extractive mode cites retrieved passages, but it does not behave like a full chatbot. Use Ollama generation for synthesized responses grounded in the retrieved PDF chunks.
+Default retrieval uses the built-in hashing vectorizer and default answers are extractive. Extractive mode cites retrieved passages, but it does not behave like a full chatbot. Use `api` or `ollama` generation for synthesized responses grounded in the retrieved PDF chunks.
+
+### API generation
+
+The `api` backend uses an OpenAI-compatible `/v1/chat/completions` endpoint. It is opt-in and does not remove Ollama support.
+
+```bash
+export RAG_GENERATION_BACKEND=api
+export RAG_API_BASE_URL=https://api.openai.com/v1
+export RAG_API_KEY=sk-...
+export RAG_API_GENERATION_MODEL=gpt-4o-mini
+python app.py
+```
+
+The same settings work for the CLI:
+
+```bash
+export RAG_GENERATION_BACKEND=api
+export RAG_API_KEY=sk-...
+python -m medical_rag.cli ask "What does SPAN-100 estimate?"
+```
+
+If you see `Generation backend was unavailable, so this answer uses extractive retrieval`, the API call failed and the system fell back to extractive retrieval. Check that `RAG_API_KEY` is set, `RAG_API_BASE_URL` points to an OpenAI-compatible base URL ending in `/v1`, and the configured model is available.
+
+### Ollama generation
 
 Install Ollama for macOS from the official download page:
 
@@ -191,6 +236,8 @@ python -m medical_rag.cli ask "What does SPAN-100 estimate?"
 If you see `Generation backend was unavailable, so this answer uses extractive retrieval`, the app tried Ollama and fell back because generation failed. Check that `curl http://localhost:11434/api/tags` works, that `ollama list` includes `llama3.1:latest`, and that the app was restarted after setting the environment variables. The fallback message includes a `Backend error:` line with the exact failure.
 
 To use Ollama embeddings, set `RAG_EMBEDDING_BACKEND=ollama` and re-run ingestion so the index matches the embedding model.
+For the default `auto` embedding mode, Ollama embeddings are used only when the configured embedding
+model is installed; otherwise the app falls back to hash embeddings.
 
 ## Answer Modes
 
@@ -233,12 +280,16 @@ Environment variables:
 - `RAG_MANIFEST_PATH`: default `.rag/manifest.sqlite`
 - `RAG_EXTRACTION_CACHE_DIR`: default `.rag/extracted`
 - `RAG_EMBEDDING_CACHE_PATH`: default `.rag/embedding_cache.json`
-- `RAG_EMBEDDING_BACKEND`: `hash` or `ollama`
-- `RAG_GENERATION_BACKEND`: `extractive` or `ollama`
+- `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, or `api`
+- `RAG_GENERATION_BACKEND`: `extractive`, `ollama`, or `api`
 - `RAG_ANSWER_MODE`: `patient` or `clinician`
 - `RAG_OLLAMA_BASE_URL`: default `http://localhost:11434`
 - `RAG_OLLAMA_EMBEDDING_MODEL`: default `nomic-embed-text`
 - `RAG_OLLAMA_GENERATION_MODEL`: default `llama3.1`
+- `RAG_API_BASE_URL`: default `https://api.openai.com/v1`
+- `RAG_API_KEY`: API key for hosted OpenAI-compatible generation or embeddings; `OPENAI_API_KEY` is also accepted
+- `RAG_API_GENERATION_MODEL`: default `gpt-4o-mini`
+- `RAG_API_EMBEDDING_MODEL`: default `text-embedding-3-small`
 
 Legacy Docker variables from the previous app are also accepted where they map cleanly:
 `PDF_FOLDER`, `VECTOR_DB_PATH`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `OLLAMA_BASE_URL`,
@@ -246,7 +297,16 @@ Legacy Docker variables from the previous app are also accepted where they map c
 
 ## Frontend
 
-The active UI is `static/index.html` and is wired to `/health`, `/ingest`, `/ask`, and `/sources`.
+The active UI is `static/index.html` and is wired to `/health`, `/ingest`, `/ingest/status`, `/ask`, `/sources`, `/eval/questions`, and `/eval/run`.
+It is a dependency-free RAG workbench with:
+
+- Corpus ingestion controls with background-status polling.
+- Source search and source/chunk counts.
+- Patient and clinician chat modes with configurable `top_k`.
+- Chat history plus latest citation evidence.
+- System health indicators for index, embedding fallback, generation backend, Ollama, and API configuration.
+- Integrated eval question selection, metrics, and per-question failure details.
+
 The previous UI has been preserved as `static/legacy-index.html` for reference, but it targets the old API surface and is not the active app.
 
 ## Medical Safety
@@ -256,6 +316,7 @@ This project is for literature retrieval, research support, and education. It sh
 ## Corpus Coverage
 
 Answer quality is directly tied to what has been indexed. The system can only cite evidence that exists in the `pdfs/` folder.
+`SOURCES.md` files are treated as acquisition notes and are intentionally excluded from ingestion.
 
 ### Adding new PDFs
 
@@ -287,17 +348,29 @@ Avoid:
 
 ## Evaluation
 
-The eval suite provides a repeatable way to check retrieval quality, citation relevance, and refusal correctness.
+The eval suite provides a repeatable way to check retrieval quality, citation relevance, answer-term coverage, and refusal correctness. In-scope questions pass only when retrieval finds relevant evidence and the generated answer includes enough expected answer terms.
+
+The browser UI includes an Evaluation dashboard. Click `Run Eval` to run the packaged eval suite against
+the current index and model settings.
 
 ### Prerequisites
 
 The server must be running and the index must be built before running evals:
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 python app.py &
 # Click Ingest in the UI, or:
 curl -s -X POST http://localhost:8000/ingest -H "Content-Type: application/json" -d '{}'
+```
+
+The API exposes the same dashboard data:
+
+```bash
+curl http://localhost:8000/eval/questions
+curl -s -X POST http://localhost:8000/eval/run \
+  -H "Content-Type: application/json" \
+  -d '{"answer_mode":"patient","top_k":5}'
 ```
 
 ### Run the CLI runner
@@ -307,34 +380,35 @@ curl -s -X POST http://localhost:8000/ingest -H "Content-Type: application/json"
 python tests/run_eval.py
 
 # Custom server URL or data file
-python tests/run_eval.py --url http://localhost:8000 --data tests/eval_data.json
+python tests/run_eval.py --url http://localhost:8000 --data medical_rag/eval_data.json
 ```
 
 ### Run via pytest
 
 ```bash
-# Run eval tests (requires running server)
-pytest tests/test_eval_suite.py -m eval -v
+# Run live eval tests (requires running server)
+RUN_LIVE_EVAL=1 pytest tests/test_eval_suite.py -m eval -v
 
-# Skip eval tests (CI without a running server)
-pytest -m "not eval"
+# Run normal tests without live eval
+pytest
 ```
 
 ### Metrics
 
 | Metric | Description | Pass threshold |
 |--------|-------------|----------------|
-| Retrieval hit rate | Fraction of in-scope questions where ≥1 citation source filename matches expected topic | ≥ 5/6 |
-| Citation relevance | Fraction of citations whose excerpt contains an expected answer term | ≥ 0.60 |
-| Refusal correctness | Out-of-scope questions where the system returns no confident citation | 1/1 |
+| Retrieval hit rate | Fraction of in-scope questions where retrieved citations contain expected source/topic hints | Track over time |
+| Citation term coverage | Fraction of expected answer terms found in retrieved citation excerpts | Track over time |
+| Answer term coverage | Fraction of expected answer terms found in the generated answer | At least `0.40` per in-scope question |
+| Refusal accuracy | Out-of-scope questions where the system declines or returns no confident citation | Track over time |
 
 ### Adding new eval questions
 
-Edit `tests/eval_data.json`. Each entry needs:
+Edit `medical_rag/eval_data.json`. Each entry needs:
 - `id` — unique string
 - `question` — the question text
-- `expected_source_hints` — keywords expected in citation source filenames
-- `expected_answer_terms` — keywords expected in citation excerpts
+- `expected_source_hints` — topic/source keywords expected in retrieved citation metadata or excerpts
+- `expected_answer_terms` — keywords expected in the generated answer
 - `should_refuse` — `true` for out-of-scope questions
 
 ## Switching Embedding Backends
@@ -343,17 +417,53 @@ The `RAG_EMBEDDING_BACKEND` setting controls how chunks are embedded:
 
 | Value | Behaviour |
 |-------|-----------|
-| `auto` (default) | Probes Ollama at startup; uses `ollama` if available, falls back to `hash` |
+| `auto` (default) | Uses Ollama semantic embeddings when the configured embedding model is installed; otherwise falls back to `hash` |
 | `ollama` | Always use Ollama semantic embeddings (requires Ollama running) |
+| `api` | Always use hosted OpenAI-compatible embeddings (requires `RAG_API_KEY`) |
 | `hash` | Bag-of-words hashing — fast, no network, non-semantic |
 
-**Important:** Changing the embedding backend invalidates the existing index. Delete both cache files before re-ingesting:
+Recommended Ollama embedding models:
+
+- `nomic-embed-text`: good default local embedding model.
+- `bge-m3`: stronger multilingual/general retrieval model when available in your Ollama install.
+
+Recommended API embedding default:
+
+- `text-embedding-3-small`: hosted OpenAI embedding model configured by default for `RAG_EMBEDDING_BACKEND=api`.
+
+Pull the embedding model first:
 
 ```bash
-rm -f .rag/index.json .rag/embedding_cache.json
-source venv/bin/activate
+ollama pull nomic-embed-text
+```
+
+**Important:** Changing the embedding backend invalidates the existing index. Re-run ingestion after
+switching models:
+
+```bash
+source .venv/bin/activate
+export RAG_EMBEDDING_BACKEND=ollama
 python app.py
 # Then click Ingest in the UI or POST /ingest
+```
+
+For API embeddings:
+
+```bash
+source .venv/bin/activate
+export RAG_EMBEDDING_BACKEND=api
+export RAG_API_KEY=sk-...
+export RAG_API_EMBEDDING_MODEL=text-embedding-3-small
+python app.py
+# Then click Ingest in the UI or POST /ingest
+```
+
+For Docker:
+
+```bash
+RAG_EMBEDDING_BACKEND=ollama \
+RAG_FORCE_REINGEST=true \
+docker compose up -d --build medical-rag
 ```
 
 The `RAG_HYBRID_ALPHA`, `RAG_MIN_RELEVANCE_SCORE`, and `RAG_RERANKER_BACKEND` settings control retrieval quality:

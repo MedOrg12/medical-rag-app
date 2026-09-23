@@ -79,6 +79,10 @@ class Settings:
     ollama_embedding_model: str = "nomic-embed-text"
     generation_backend: str = "extractive"
     ollama_generation_model: str = "llama3.1"
+    api_base_url: str = "https://api.openai.com/v1"
+    api_key: str = ""
+    api_generation_model: str = "gpt-4o-mini"
+    api_embedding_model: str = "text-embedding-3-small"
     answer_mode: str = "patient"
     temperature: float = 0.1
     request_timeout_seconds: float = 20.0
@@ -118,6 +122,12 @@ class Settings:
             ollama_generation_model=_first_env(
                 "RAG_OLLAMA_GENERATION_MODEL", "OLLAMA_MODEL", default="llama3.1"
             ),
+            api_base_url=_first_env(
+                "RAG_API_BASE_URL", "OPENAI_BASE_URL", default="https://api.openai.com/v1"
+            ),
+            api_key=_first_env("RAG_API_KEY", "OPENAI_API_KEY", default=""),
+            api_generation_model=os.getenv("RAG_API_GENERATION_MODEL", "gpt-4o-mini"),
+            api_embedding_model=os.getenv("RAG_API_EMBEDDING_MODEL", "text-embedding-3-small"),
             answer_mode=os.getenv("RAG_ANSWER_MODE", "patient").lower(),
             temperature=_env_float_compat(0.1, "RAG_TEMPERATURE", "TEMPERATURE"),
             request_timeout_seconds=_env_float("RAG_REQUEST_TIMEOUT_SECONDS", 20.0),
@@ -153,6 +163,10 @@ class Settings:
             ollama_embedding_model=self.ollama_embedding_model,
             generation_backend=self.generation_backend,
             ollama_generation_model=self.ollama_generation_model,
+            api_base_url=self.api_base_url,
+            api_key=self.api_key,
+            api_generation_model=self.api_generation_model,
+            api_embedding_model=self.api_embedding_model,
             answer_mode=self.answer_mode,
             temperature=self.temperature,
             request_timeout_seconds=self.request_timeout_seconds,
@@ -184,6 +198,11 @@ class Settings:
             ollama_embedding_model=self.ollama_embedding_model,
             generation_backend=self.generation_backend,
             ollama_generation_model=self.ollama_generation_model,
+            api_base_url=self.api_base_url,
+            api_key=self.api_key,
+            api_generation_model=self.api_generation_model,
+            api_embedding_model=self.api_embedding_model,
+            answer_mode=self.answer_mode,
             temperature=self.temperature,
             request_timeout_seconds=self.request_timeout_seconds,
             embedding_cache_path=self.embedding_cache_path,

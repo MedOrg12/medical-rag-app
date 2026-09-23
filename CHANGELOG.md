@@ -8,6 +8,25 @@ This project follows Semantic Versioning for the application release number:
 - `MINOR`: new features or meaningful behavior improvements.
 - `PATCH`: bug fixes, documentation updates, and compatible maintenance.
 
+## [Unreleased]
+
+### Added
+
+- Browser evaluation dashboard for running the RAG eval suite from the UI.
+- Redesigned frontend workbench with corpus controls, source search, chat history, citation evidence, health indicators, and integrated eval controls.
+- Opt-in OpenAI-compatible API backends for generation and embeddings via `RAG_GENERATION_BACKEND=api` and `RAG_EMBEDDING_BACKEND=api`.
+- `/eval/questions` and `/eval/run` API endpoints for evaluation metadata and execution.
+- Package-level eval suite data under `medical_rag/eval_data.json`.
+- Health metadata for active embedding model, Ollama/API availability, and embedding fallback state.
+
+### Changed
+
+- Docker and `.env.example` now default `RAG_EMBEDDING_BACKEND` to `auto`.
+- Auto embeddings now use Ollama only when the configured embedding model is installed; otherwise they fall back to hash embeddings.
+- Eval pass/fail now requires in-scope answers to include enough expected answer terms, rather than passing on citation matches alone.
+- Corpus discovery now excludes `SOURCES.md` planning/checklist files so they do not appear as medical citations.
+- Live pytest evals now require `RUN_LIVE_EVAL=1`, while eval data validation still runs normally.
+
 ## [0.1.0] - 2026-08-10
 
 Initial release of the refactored Stroke Medical RAG application.
@@ -44,4 +63,5 @@ Initial release of the refactored Stroke Medical RAG application.
 - OCR is not yet implemented for scanned PDFs; scanned pages are detected and reported.
 - Medical answer quality is limited by the indexed PDF corpus.
 
-[0.1.0]: https://github.com/MoCode98/medical-rag-app/releases/tag/v0.1.0
+[Unreleased]: https://github.com/MedOrg12/medical-rag-app/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/MedOrg12/medical-rag-app/releases/tag/v0.1.0

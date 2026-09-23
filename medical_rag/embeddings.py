@@ -112,6 +112,56 @@ class OllamaEmbeddingModel(EmbeddingModel):
 
 
 @dataclass
+class ApiEmbeddingModel(EmbeddingModel):
+    base_url: str
+    api_key: str
+    model: str
+    timeout_seconds: float = 20.0
+
+    @property
+    def name(self) -> str:
+        return f"api:{self.model}"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+
+        payload = json.dumps({"model": self.model, "input": texts}).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url.rstrip('/')}/embeddings",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(_api_error_message("embedding", exc)) from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(f"Could not get API embeddings from {self.base_url}") from exc
+
+        items = data.get("data")
+        if not isinstance(items, list) or len(items) != len(texts):
+            raise RuntimeError("API embedding response did not include expected data entries")
+
+        indexed_items = []
+        for position, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise RuntimeError("API embedding response included a malformed data entry")
+            embedding = item.get("embedding")
+            if not isinstance(embedding, list):
+                raise RuntimeError("API embedding response did not include an embedding list")
+            indexed_items.append((int(item.get("index", position)), embedding))
+
+        indexed_items.sort(key=lambda item: item[0])
+        return [_normalize([float(value) for value in embedding]) for _, embedding in indexed_items]
+
+
+@dataclass
 class CachedEmbeddingModel(EmbeddingModel):
     """Transparent disk-backed cache wrapping any EmbeddingModel.
 
@@ -177,14 +227,49 @@ class CachedEmbeddingModel(EmbeddingModel):
 
 def _ollama_available(base_url: str, timeout: float = 2.0) -> bool:
     """Probe Ollama /api/tags endpoint; return True if reachable."""
+    return bool(list_ollama_models(base_url, timeout=timeout))
+
+
+def list_ollama_models(base_url: str, timeout: float = 2.0) -> list[str]:
+    """Return installed Ollama model names, or an empty list when Ollama is unreachable."""
     try:
         with urllib.request.urlopen(
             urllib.request.Request(f"{base_url.rstrip('/')}/api/tags"),
             timeout=timeout,
         ) as resp:
-            return resp.status == 200
+            if resp.status != 200:
+                return []
+            data = json.loads(resp.read().decode("utf-8"))
     except Exception:
-        return False
+        return []
+
+    models = data.get("models", [])
+    if not isinstance(models, list):
+        return []
+
+    names = []
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("model")
+        if isinstance(name, str) and name:
+            names.append(name)
+    return names
+
+
+def ollama_model_name_matches(configured: str, available: str) -> bool:
+    if configured == available:
+        return True
+    if ":" not in configured and available == f"{configured}:latest":
+        return True
+    return False
+
+
+def ollama_model_available(base_url: str, model: str, timeout: float = 2.0) -> bool:
+    return any(
+        ollama_model_name_matches(model, available)
+        for available in list_ollama_models(base_url, timeout)
+    )
 
 
 def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
@@ -197,7 +282,7 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
     fallback_used = False
 
     if backend == "auto":
-        if _ollama_available(settings.ollama_base_url):
+        if ollama_model_available(settings.ollama_base_url, settings.ollama_embedding_model):
             backend = "ollama"
         else:
             backend = "hash"
@@ -209,6 +294,15 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
         inner = OllamaEmbeddingModel(
             base_url=settings.ollama_base_url,
             model=settings.ollama_embedding_model,
+            timeout_seconds=settings.request_timeout_seconds,
+        )
+    elif backend == "api":
+        if not settings.api_key:
+            raise ValueError("RAG_API_KEY or OPENAI_API_KEY is required for API embeddings")
+        inner = ApiEmbeddingModel(
+            base_url=settings.api_base_url,
+            api_key=settings.api_key,
+            model=settings.api_embedding_model,
             timeout_seconds=settings.request_timeout_seconds,
         )
     else:
@@ -239,3 +333,15 @@ def _normalize(vector: list[float]) -> list[float]:
     if norm == 0:
         return vector
     return [value / norm for value in vector]
+
+
+def _api_error_message(operation: str, exc: urllib.error.HTTPError) -> str:
+    detail = ""
+    try:
+        payload = json.loads(exc.read().decode("utf-8"))
+        message = (payload.get("error") or {}).get("message")
+        if isinstance(message, str) and message:
+            detail = f": {message}"
+    except Exception:
+        detail = ""
+    return f"Could not get API {operation} response from provider ({exc.code}){detail}"

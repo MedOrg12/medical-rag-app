@@ -10,6 +10,10 @@ def test_settings_accept_legacy_docker_environment(monkeypatch, tmp_path) -> Non
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
     monkeypatch.setenv("OLLAMA_MODEL", "llama3.1")
     monkeypatch.setenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
+    monkeypatch.setenv("RAG_API_BASE_URL", "https://api.example.test/v1")
+    monkeypatch.setenv("RAG_API_KEY", "test-key")
+    monkeypatch.setenv("RAG_API_GENERATION_MODEL", "api-chat")
+    monkeypatch.setenv("RAG_API_EMBEDDING_MODEL", "api-embed")
     monkeypatch.setenv("RAG_ANSWER_MODE", "clinician")
 
     settings = Settings.from_env(tmp_path)
@@ -22,4 +26,22 @@ def test_settings_accept_legacy_docker_environment(monkeypatch, tmp_path) -> Non
     assert settings.ollama_base_url == "http://ollama:11434"
     assert settings.ollama_generation_model == "llama3.1"
     assert settings.ollama_embedding_model == "nomic-embed-text"
+    assert settings.api_base_url == "https://api.example.test/v1"
+    assert settings.api_key == "test-key"
+    assert settings.api_generation_model == "api-chat"
+    assert settings.api_embedding_model == "api-embed"
     assert settings.answer_mode == "clinician"
+
+
+def test_with_ingestion_options_preserves_answer_mode(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path,
+        index_path=tmp_path / "index.json",
+        answer_mode="clinician",
+    )
+
+    updated = settings.with_ingestion_options(pdf_workers=4)
+
+    assert updated.pdf_workers == 4
+    assert updated.answer_mode == "clinician"

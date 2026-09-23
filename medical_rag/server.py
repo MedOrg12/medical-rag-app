@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field
 
 from medical_rag import __version__
 from medical_rag.config import Settings
-from medical_rag.embeddings import _ollama_available
+from medical_rag.embeddings import list_ollama_models, ollama_model_name_matches
+from medical_rag.evaluation import evaluate_rag, load_eval_suite
 from medical_rag.pipeline import StrokeRAG
 
 
@@ -32,6 +33,13 @@ class IngestRequest(BaseModel):
     ocr_scanned: bool = False
     pdf_workers: int | None = Field(default=None, ge=1, le=32)
     background: bool = False
+
+
+class EvalRunRequest(BaseModel):
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    answer_mode: Literal["patient", "clinician"] | None = None
+    question_ids: list[str] | None = None
+    include_answers: bool = False
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -94,14 +102,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, Any]:
+        ollama_models = list_ollama_models(app_settings.ollama_base_url)
+        ollama_embedding_model_available = any(
+            ollama_model_name_matches(app_settings.ollama_embedding_model, model)
+            for model in ollama_models
+        )
         return {
             "status": "ok",
             "index_exists": rag.index_exists(),
             "index_path": str(app_settings.index_path),
             "corpus_dir": str(app_settings.corpus_dir),
             "embedding_backend": app_settings.embedding_backend,
+            "active_embedding_model": rag.embedding_model.name,
+            "fallback_embedding": rag.fallback_embedding_used(),
             "generation_backend": app_settings.generation_backend,
-            "ollama_available": _ollama_available(app_settings.ollama_base_url),
+            "generation_model": _generation_model_name(app_settings),
+            "ollama_available": bool(ollama_models),
+            "ollama_models": ollama_models,
+            "ollama_embedding_model": app_settings.ollama_embedding_model,
+            "ollama_embedding_model_available": ollama_embedding_model_available,
+            "api_base_url": app_settings.api_base_url,
+            "api_key_configured": bool(app_settings.api_key),
+            "api_generation_model": app_settings.api_generation_model,
+            "api_embedding_model": app_settings.api_embedding_model,
         }
 
     @app.post("/ingest")
@@ -161,7 +184,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except FileNotFoundError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    @app.get("/eval/questions")
+    def eval_questions() -> dict[str, Any]:
+        version, questions = load_eval_suite()
+        return {
+            "version": version,
+            "questions": [question.to_dict() for question in questions],
+        }
+
+    @app.post("/eval/run")
+    def eval_run(request: EvalRunRequest) -> dict[str, Any]:
+        try:
+            return evaluate_rag(
+                rag,
+                top_k=request.top_k,
+                answer_mode=request.answer_mode,
+                question_ids=request.question_ids,
+                include_answers=request.include_answers,
+            ).to_dict()
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     return app
 
 
 app = create_app()
+
+
+def _generation_model_name(settings: Settings) -> str:
+    if settings.generation_backend == "ollama":
+        return settings.ollama_generation_model
+    if settings.generation_backend == "api":
+        return f"api:{settings.api_generation_model}"
+    return "extractive"
