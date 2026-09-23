@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import sys
+import time
 import json
 import math
 import re
@@ -197,7 +199,23 @@ class SentenceTransformersEmbeddingModel(EmbeddingModel):
             ) from exc
 
         device = None if self.device == "auto" else self.device
+        if device is not None and device.startswith("cuda"):
+            import torch
+
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    f"RAG_SENTENCE_TRANSFORMERS_DEVICE={device!r} but torch {torch.__version__} "
+                    f"reports no usable CUDA device (torch.version.cuda={torch.version.cuda!r}). "
+                    "Check that the job has a GPU allocated and that the CUDA runtime is on the "
+                    "library path, or set RAG_SENTENCE_TRANSFORMERS_DEVICE=cpu explicitly."
+                )
+        started = time.perf_counter()
         self._model = SentenceTransformer(self.model_name, device=device)
+        print(
+            f"sentence-transformers: loaded {self.model_name} on device "
+            f"{self._model.device} in {time.perf_counter() - started:.1f}s",
+            file=sys.stderr,
+        )
         return self._model
 
 

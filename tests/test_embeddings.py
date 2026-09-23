@@ -1,3 +1,5 @@
+import pytest
+
 from dataclasses import replace
 
 from medical_rag.config import Settings
@@ -153,3 +155,22 @@ def test_sentence_transformers_backend_selection_is_lazy(tmp_path) -> None:
     assert model.name == "sentence-transformers:BAAI/bge-small-en-v1.5"
     assert model.device == "cuda"
     assert model.batch_size == 16
+
+
+def test_sentence_transformers_refuses_cuda_when_unavailable(monkeypatch) -> None:
+    import sys
+    import types
+
+    from medical_rag.embeddings import SentenceTransformersEmbeddingModel
+
+    fake_torch = types.SimpleNamespace(
+        __version__="0.0-test",
+        version=types.SimpleNamespace(cuda=None),
+        cuda=types.SimpleNamespace(is_available=lambda: False),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=object))
+    model = SentenceTransformersEmbeddingModel(model_name="BAAI/bge-base-en-v1.5", device="cuda")
+
+    with pytest.raises(RuntimeError, match="no usable CUDA device"):
+        model.embed(["stroke"])

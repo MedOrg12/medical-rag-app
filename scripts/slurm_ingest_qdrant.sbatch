@@ -183,6 +183,21 @@ export RAG_OLLAMA_EMBEDDING_MODEL="${RAG_OLLAMA_EMBEDDING_MODEL:-nomic-embed-tex
 export RAG_PDF_WORKERS="${RAG_PDF_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}"
 export RAG_EMBED_BATCH_SIZE="${RAG_EMBED_BATCH_SIZE:-64}"
 
+if [ "$RAG_EMBEDDING_BACKEND" = "sentence-transformers" ]; then
+  echo "--- GPU visibility ---"
+  command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || echo "nvidia-smi not found"
+  echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+  python - <<'PY'
+import torch
+print(f"torch {torch.__version__} cuda_build={torch.version.cuda} cuda_available={torch.cuda.is_available()} devices={torch.cuda.device_count()}")
+if torch.cuda.is_available():
+    print(f"device 0: {torch.cuda.get_device_name(0)}")
+PY
+  echo "RAG_SENTENCE_TRANSFORMERS_DEVICE=${RAG_SENTENCE_TRANSFORMERS_DEVICE}"
+  echo "HF_HOME=${HF_HOME}"
+  echo "----------------------"
+fi
+
 python -m medical_rag.cli ingest \
   --source "$RAG_CORPUS_DIR" \
   --force \
