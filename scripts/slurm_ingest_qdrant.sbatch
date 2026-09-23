@@ -182,6 +182,8 @@ fi
 export RAG_OLLAMA_EMBEDDING_MODEL="${RAG_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
 export RAG_PDF_WORKERS="${RAG_PDF_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}"
 export RAG_EMBED_BATCH_SIZE="${RAG_EMBED_BATCH_SIZE:-64}"
+# Set RAG_PROFILE_EMBEDDING=1 at submit time to get per-batch timings and a cProfile summary in the .err log.
+export RAG_PROFILE_EMBEDDING="${RAG_PROFILE_EMBEDDING:-}"
 
 if [ "$RAG_EMBEDDING_BACKEND" = "sentence-transformers" ]; then
   echo "--- GPU visibility ---"

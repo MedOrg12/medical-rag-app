@@ -5,6 +5,7 @@ import sys
 import time
 import json
 import math
+import os
 import re
 import urllib.error
 import urllib.request
@@ -384,13 +385,38 @@ class CachedEmbeddingModel(EmbeddingModel):
                 misses.append((i, text))
 
         if misses:
+            profile = os.environ.get("RAG_PROFILE_EMBEDDING", "").lower() in {"1", "true", "yes"}
+            profiler = None
+            if profile:
+                import cProfile
+
+                profiler = cProfile.Profile()
+                profiler.enable()
             embed_started = time.perf_counter()
-            for batch in _batches(misses, max(1, self.batch_size)):
+            for batch_index, batch in enumerate(_batches(misses, max(1, self.batch_size))):
+                call_started = time.perf_counter()
                 new_vectors = self.inner.embed([t for _, t in batch])
+                call_seconds = time.perf_counter() - call_started
                 for (i, text), vector in zip(batch, new_vectors):
                     self._cache[hashlib.sha256(text.encode()).hexdigest()] = vector
                     results[i] = vector
+                if profile:
+                    print(
+                        f"embedding cache: batch {batch_index} of {len(batch)} texts: "
+                        f"inner.embed wall {call_seconds:.2f}s, "
+                        f"bookkeeping {time.perf_counter() - call_started - call_seconds:.3f}s",
+                        file=sys.stderr,
+                    )
             save_started = time.perf_counter()
+            if profiler is not None:
+                import io
+                import pstats
+
+                profiler.disable()
+                stream = io.StringIO()
+                pstats.Stats(profiler, stream=stream).sort_stats("cumulative").print_stats(30)
+                print("embedding cache: profile (top 30 by cumulative time)", file=sys.stderr)
+                print(stream.getvalue(), file=sys.stderr)
             self._save()
             print(
                 f"embedding cache: {len(misses)} misses / {len(texts)} texts embedded in "
