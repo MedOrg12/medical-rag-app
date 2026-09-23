@@ -52,6 +52,9 @@ prints the SSH target, forwarded port, and the relevant log path:
   collection and deletes stale points. Set `true` to drop and rebuild it; this is required when
   switching to an embedding model with a different dimension. The job refuses to write into a
   collection whose vector size or name does not match.
+- `HF_HOME`: Hugging Face model cache. Defaults to `$PROJECT_DIR/.hf-cache` so the embedding
+  model is downloaded once and reused by later jobs.
+- `RAG_PROFILE_EMBEDDING`: set to `1` to log per-batch embedding timings and a cProfile summary.
 - `RAG_QDRANT_TIMEOUT_SECONDS`: Qdrant request timeout. Defaults to `120` because collection
   creation on the shared Qdrant host has been measured at 5-10 seconds, above the 5 second
   qdrant-client default.
@@ -93,3 +96,12 @@ If the web app still appears to use the old JSON index, check `/health`. It shou
 `"vector_store_backend": "qdrant"` and the expected `qdrant_collection`. If it reports
 `json`, restart the app with `RAG_VECTOR_STORE=qdrant` and point `RAG_QDRANT_URL` at the
 same Qdrant service used by the Slurm job.
+
+## Job Duration Varies by Node
+
+The embedding phase includes importing torch, transformers, and sentence-transformers from
+the project virtual environment on the first model call. Those imports touch thousands of
+files and can take anywhere from a few seconds to a few minutes depending on how warm the
+network filesystem is on the assigned compute node. The `.err` log reports the import and
+model load times separately from encoding. The GPU work itself for ~1,700 chunks is about
+five seconds on an H100.

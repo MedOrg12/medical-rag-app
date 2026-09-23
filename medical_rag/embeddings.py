@@ -322,6 +322,9 @@ class SentenceTransformersEmbeddingModel(EmbeddingModel):
     def _load_model(self):
         if self._model is not None:
             return self._model
+        # Importing sentence-transformers pulls in torch and transformers, thousands of files.
+        # On network filesystems this alone can take minutes, so time it separately.
+        import_started = time.perf_counter()
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
@@ -344,8 +347,9 @@ class SentenceTransformersEmbeddingModel(EmbeddingModel):
         started = time.perf_counter()
         self._model = SentenceTransformer(self.model_name, device=device)
         print(
-            f"sentence-transformers: loaded {self.model_name} on device "
-            f"{self._model.device} in {time.perf_counter() - started:.1f}s",
+            f"sentence-transformers: imported libraries in {started - import_started:.1f}s, "
+            f"loaded {self.model_name} on device {self._model.device} in "
+            f"{time.perf_counter() - started:.1f}s",
             file=sys.stderr,
         )
         return self._model
