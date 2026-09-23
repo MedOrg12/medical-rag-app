@@ -194,6 +194,7 @@ if torch.cuda.is_available():
     print(f"device 0: {torch.cuda.get_device_name(0)}")
 PY
   echo "RAG_SENTENCE_TRANSFORMERS_DEVICE=${RAG_SENTENCE_TRANSFORMERS_DEVICE}"
+  echo "RAG_EMBED_BATCH_SIZE=${RAG_EMBED_BATCH_SIZE} RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE=${RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE} RAG_PDF_WORKERS=${RAG_PDF_WORKERS}"
   echo "HF_HOME=${HF_HOME}"
   echo "----------------------"
 fi

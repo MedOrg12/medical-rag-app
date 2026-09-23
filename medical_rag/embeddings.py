@@ -394,7 +394,8 @@ class CachedEmbeddingModel(EmbeddingModel):
             self._save()
             print(
                 f"embedding cache: {len(misses)} misses / {len(texts)} texts embedded in "
-                f"{save_started - embed_started:.2f}s, cache saved to {self.cache_path} in "
+                f"batches of {max(1, self.batch_size)} in {save_started - embed_started:.2f}s, "
+                f"cache saved to {self.cache_path} in "
                 f"{time.perf_counter() - save_started:.2f}s",
                 file=sys.stderr,
             )
