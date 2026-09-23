@@ -1,5 +1,0 @@
-# CPU-only embedding dependencies for the web/API host. Queries must be embedded with the
-# same model the Slurm job used for ingestion (BAAI/bge-base-en-v1.5 via sentence-transformers).
---extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.3.0
-sentence-transformers>=3.0.0

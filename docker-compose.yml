@@ -27,6 +27,9 @@ services:
       RAG_PDF_WORKERS: ${RAG_PDF_WORKERS:-1}
       RAG_EMBED_BATCH_SIZE: ${RAG_EMBED_BATCH_SIZE:-64}
       RAG_EMBEDDING_BACKEND: ${RAG_EMBEDDING_BACKEND:-auto}
+      RAG_EMBEDDING_SERVICE_URL: ${RAG_EMBEDDING_SERVICE_URL:-http://embedder:8100}
+      RAG_EMBEDDING_SERVICE_TOKEN: ${RAG_EMBEDDING_SERVICE_TOKEN:-}
+      RAG_EMBEDDING_SERVICE_EXPECTED_MODEL: ${RAG_EMBEDDING_SERVICE_EXPECTED_MODEL:-}
       RAG_SENTENCE_TRANSFORMERS_MODEL: ${RAG_SENTENCE_TRANSFORMERS_MODEL:-BAAI/bge-base-en-v1.5}
       RAG_SENTENCE_TRANSFORMERS_DEVICE: ${RAG_SENTENCE_TRANSFORMERS_DEVICE:-cpu}
       RAG_GENERATION_BACKEND: ${RAG_GENERATION_BACKEND:-extractive}
@@ -47,6 +50,32 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  embedder:
+    build:
+      context: .
+      dockerfile: Dockerfile.embedder
+    container_name: stroke-medical-rag-embedder
+    profiles:
+      - embedder
+    ports:
+      - "8100:8100"
+    volumes:
+      - embedder_hf:/data/huggingface
+    environment:
+      RAG_SENTENCE_TRANSFORMERS_MODEL: ${RAG_SENTENCE_TRANSFORMERS_MODEL:-BAAI/bge-base-en-v1.5}
+      RAG_SENTENCE_TRANSFORMERS_DEVICE: ${RAG_EMBEDDER_DEVICE:-cuda}
+      RAG_EMBEDDING_SERVICE_TOKEN: ${RAG_EMBEDDING_SERVICE_TOKEN:-}
+      RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE: ${RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE:-256}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # 'all' also matches MIG slices, which a numeric count can fail to select.
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
 
   ollama:
     image: ollama/ollama:latest
@@ -80,5 +109,6 @@ services:
 
 volumes:
   rag_index:
+  embedder_hf:
   ollama_data:
   qdrant_data:

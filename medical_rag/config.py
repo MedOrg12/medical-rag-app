@@ -78,6 +78,13 @@ class Settings:
     sentence_transformers_model: str = "BAAI/bge-base-en-v1.5"
     sentence_transformers_device: str = "auto"
     sentence_transformers_batch_size: int = 64
+    embedding_service_url: str = "http://localhost:8100"
+    embedding_service_timeout_seconds: float = 60.0
+    embedding_service_token: str | None = None
+    embedding_service_expected_model: str | None = None
+    remote_embed_batch_size: int = 64
+    embedding_service_max_batch_size: int = 256
+    embedding_service_max_text_chars: int = 20000
     ollama_base_url: str = "http://localhost:11434"
     ollama_embedding_model: str = "nomic-embed-text"
     generation_backend: str = "extractive"
@@ -127,6 +134,23 @@ class Settings:
             ),
             sentence_transformers_device=os.getenv("RAG_SENTENCE_TRANSFORMERS_DEVICE", "auto"),
             sentence_transformers_batch_size=_env_int("RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE", 64),
+            embedding_service_url=os.getenv(
+                "RAG_EMBEDDING_SERVICE_URL", "http://localhost:8100"
+            ),
+            embedding_service_timeout_seconds=_env_float(
+                "RAG_EMBEDDING_SERVICE_TIMEOUT_SECONDS", 60.0
+            ),
+            embedding_service_token=os.getenv("RAG_EMBEDDING_SERVICE_TOKEN") or None,
+            embedding_service_expected_model=os.getenv(
+                "RAG_EMBEDDING_SERVICE_EXPECTED_MODEL"
+            ) or None,
+            remote_embed_batch_size=_env_int("RAG_REMOTE_EMBED_BATCH_SIZE", 64),
+            embedding_service_max_batch_size=_env_int(
+                "RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE", 256
+            ),
+            embedding_service_max_text_chars=_env_int(
+                "RAG_EMBEDDING_SERVICE_MAX_TEXT_CHARS", 20000
+            ),
             ollama_base_url=_first_env(
                 "RAG_OLLAMA_BASE_URL", "OLLAMA_BASE_URL", default="http://localhost:11434"
             ),
@@ -189,6 +213,13 @@ class Settings:
             sentence_transformers_model=self.sentence_transformers_model,
             sentence_transformers_device=self.sentence_transformers_device,
             sentence_transformers_batch_size=self.sentence_transformers_batch_size,
+            embedding_service_url=self.embedding_service_url,
+            embedding_service_timeout_seconds=self.embedding_service_timeout_seconds,
+            embedding_service_token=self.embedding_service_token,
+            embedding_service_expected_model=self.embedding_service_expected_model,
+            remote_embed_batch_size=self.remote_embed_batch_size,
+            embedding_service_max_batch_size=self.embedding_service_max_batch_size,
+            embedding_service_max_text_chars=self.embedding_service_max_text_chars,
             ollama_base_url=self.ollama_base_url,
             ollama_embedding_model=self.ollama_embedding_model,
             generation_backend=self.generation_backend,
@@ -236,6 +267,13 @@ class Settings:
             sentence_transformers_model=self.sentence_transformers_model,
             sentence_transformers_device=self.sentence_transformers_device,
             sentence_transformers_batch_size=self.sentence_transformers_batch_size,
+            embedding_service_url=self.embedding_service_url,
+            embedding_service_timeout_seconds=self.embedding_service_timeout_seconds,
+            embedding_service_token=self.embedding_service_token,
+            embedding_service_expected_model=self.embedding_service_expected_model,
+            remote_embed_batch_size=self.remote_embed_batch_size,
+            embedding_service_max_batch_size=self.embedding_service_max_batch_size,
+            embedding_service_max_text_chars=self.embedding_service_max_text_chars,
             ollama_base_url=self.ollama_base_url,
             ollama_embedding_model=self.ollama_embedding_model,
             generation_backend=self.generation_backend,

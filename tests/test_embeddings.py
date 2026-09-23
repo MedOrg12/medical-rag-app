@@ -1,12 +1,15 @@
 import pytest
 
 from dataclasses import replace
+import json
 
 from medical_rag.config import Settings
 from medical_rag.embeddings import (
     ApiEmbeddingModel,
+    CachedEmbeddingModel,
     HashingEmbeddingModel,
     OllamaEmbeddingModel,
+    RemoteEmbeddingModel,
     SentenceTransformersEmbeddingModel,
     make_embedding_model,
     ollama_model_name_matches,
@@ -174,3 +177,137 @@ def test_sentence_transformers_refuses_cuda_when_unavailable(monkeypatch) -> Non
 
     with pytest.raises(RuntimeError, match="no usable CUDA device"):
         model.embed(["stroke"])
+
+
+class _FakeResponse:
+    def __init__(self, payload: dict[str, object], status: int = 200) -> None:
+        self.payload = payload
+        self.status = status
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
+
+
+def test_remote_embedding_model_uses_health_and_batches_by_service_limit(monkeypatch) -> None:
+    posts: list[list[str]] = []
+
+    def fake_urlopen(request, timeout: float):  # type: ignore[no-untyped-def]
+        assert timeout == 12.5
+        if request.full_url == "http://embedder.test/health":
+            assert request.get_method() == "GET"
+            return _FakeResponse(
+                {
+                    "model_name": "sentence-transformers:test-model",
+                    "dimensions": 3,
+                    "max_batch_size": 2,
+                }
+            )
+
+        assert request.full_url == "http://embedder.test/embed"
+        assert request.get_method() == "POST"
+        assert request.get_header("Authorization") == "Bearer secret"
+        payload = json.loads(request.data.decode("utf-8"))
+        assert payload["model_name"] == "sentence-transformers:test-model"
+        texts = payload["texts"]
+        posts.append(texts)
+        return _FakeResponse(
+            {
+                "model_name": "sentence-transformers:test-model",
+                "dimensions": 3,
+                "embeddings": [[float(len(text)), 0.0, 1.0] for text in texts],
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    model = RemoteEmbeddingModel(
+        base_url="http://embedder.test",
+        timeout_seconds=12.5,
+        batch_size=64,
+        token="secret",
+    )
+
+    assert model.name == "sentence-transformers:test-model"
+    embeddings = model.embed(["a", "bb", "ccc", "dddd", "eeeee"])
+
+    assert posts == [["a", "bb"], ["ccc", "dddd"], ["eeeee"]]
+    assert embeddings == [
+        [1.0, 0.0, 1.0],
+        [2.0, 0.0, 1.0],
+        [3.0, 0.0, 1.0],
+        [4.0, 0.0, 1.0],
+        [5.0, 0.0, 1.0],
+    ]
+
+
+def test_remote_embedding_model_rejects_dimension_mismatch(monkeypatch) -> None:
+    def fake_urlopen(request, timeout: float):  # type: ignore[no-untyped-def]
+        if request.full_url == "http://embedder.test/health":
+            return _FakeResponse(
+                {
+                    "model_name": "sentence-transformers:test-model",
+                    "dimensions": 3,
+                    "max_batch_size": 10,
+                }
+            )
+        return _FakeResponse(
+            {
+                "model_name": "sentence-transformers:test-model",
+                "dimensions": 3,
+                "embeddings": [[1.0, 2.0]],
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    model = RemoteEmbeddingModel(base_url="http://embedder.test")
+
+    with pytest.raises(RuntimeError, match="dimension 2.*expected 3"):
+        model.embed(["stroke"])
+
+
+def test_remote_embedding_model_rejects_expected_model_mismatch(monkeypatch) -> None:
+    def fake_urlopen(request, timeout: float):  # type: ignore[no-untyped-def]
+        return _FakeResponse(
+            {
+                "model_name": "sentence-transformers:actual",
+                "dimensions": 3,
+                "max_batch_size": 10,
+            }
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    model = RemoteEmbeddingModel(
+        base_url="http://embedder.test",
+        expected_model_name="sentence-transformers:expected",
+    )
+
+    with pytest.raises(RuntimeError, match="sentence-transformers:expected.*sentence-transformers:actual"):
+        _ = model.name
+
+
+def test_make_embedding_model_builds_cached_remote_model(tmp_path) -> None:
+    settings = replace(
+        Settings.from_env(tmp_path),
+        embedding_backend="remote",
+        embedding_service_url="http://embedder.test",
+        embedding_service_timeout_seconds=5.0,
+        embedding_service_token="secret",
+        embedding_service_expected_model="sentence-transformers:test-model",
+        remote_embed_batch_size=7,
+    )
+
+    model, fallback_used = make_embedding_model(settings)
+
+    assert fallback_used is False
+    assert isinstance(model, CachedEmbeddingModel)
+    assert isinstance(model.inner, RemoteEmbeddingModel)
+    assert model.inner.base_url == "http://embedder.test"
+    assert model.inner.timeout_seconds == 5.0
+    assert model.inner.token == "secret"
+    assert model.inner.expected_model_name == "sentence-transformers:test-model"
+    assert model.inner.batch_size == 7

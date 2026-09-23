@@ -6,8 +6,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt requirements-cpu.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-cpu.txt
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY medical_rag/ ./medical_rag/
 COPY static/ ./static/
@@ -31,8 +31,6 @@ ENV PYTHONUNBUFFERED=1 \
     RAG_PDF_WORKERS=1 \
     RAG_EMBED_BATCH_SIZE=64 \
     RAG_EMBEDDING_BACKEND=auto \
-    RAG_SENTENCE_TRANSFORMERS_DEVICE=cpu \
-    HF_HOME=/app/.rag/huggingface \
     RAG_GENERATION_BACKEND=extractive \
     RAG_API_BASE_URL=https://api.openai.com/v1 \
     RAG_API_GENERATION_MODEL=gpt-4o-mini \

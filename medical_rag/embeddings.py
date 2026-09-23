@@ -164,6 +164,128 @@ class ApiEmbeddingModel(EmbeddingModel):
 
 
 @dataclass
+class RemoteEmbeddingModel(EmbeddingModel):
+    base_url: str
+    timeout_seconds: float = 60.0
+    batch_size: int = 64
+    token: str | None = None
+    expected_model_name: str | None = None
+    _model_name: str | None = field(default=None, init=False, repr=False)
+    _dimensions: int | None = field(default=None, init=False, repr=False)
+    _max_batch_size: int | None = field(default=None, init=False, repr=False)
+
+    @property
+    def name(self) -> str:
+        self._load_health()
+        assert self._model_name is not None
+        return self._model_name
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+
+        model_name = self.name
+        dimensions = self._dimensions
+        max_batch_size = self._max_batch_size
+        if dimensions is None or max_batch_size is None:
+            raise RuntimeError("Embedding service health response was incomplete")
+
+        embeddings: list[list[float]] = []
+        batch_size = min(max(1, self.batch_size), max(1, max_batch_size))
+        for batch in _text_batches(texts, batch_size):
+            payload = json.dumps({"texts": batch, "model_name": model_name}).encode("utf-8")
+            request = urllib.request.Request(
+                f"{self.base_url.rstrip('/')}/embed",
+                data=payload,
+                headers=self._headers(),
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(self._format_http_error(exc)) from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                raise RuntimeError(
+                    f"Could not reach embedding service at {self.base_url}: {exc}"
+                ) from exc
+
+            response_model_name = data.get("model_name")
+            if response_model_name != model_name:
+                raise RuntimeError(
+                    "Embedding service returned model_name "
+                    f"{response_model_name!r}, expected {model_name!r}"
+                )
+
+            batch_embeddings = data.get("embeddings")
+            if not isinstance(batch_embeddings, list) or len(batch_embeddings) != len(batch):
+                raise RuntimeError(
+                    "Embedding service returned "
+                    f"{len(batch_embeddings) if isinstance(batch_embeddings, list) else 'invalid'} "
+                    f"embeddings for a batch of {len(batch)} texts"
+                )
+
+            for index, vector in enumerate(batch_embeddings):
+                if not isinstance(vector, list):
+                    raise RuntimeError("Embedding service returned a non-list embedding vector")
+                if len(vector) != dimensions:
+                    raise RuntimeError(
+                        "Embedding service returned vector with dimension "
+                        f"{len(vector)} at batch index {index}, expected {dimensions}"
+                    )
+                embeddings.append([float(value) for value in vector])
+
+        return embeddings
+
+    def _load_health(self) -> None:
+        if self._model_name is not None:
+            return
+
+        request = urllib.request.Request(f"{self.base_url.rstrip('/')}/health")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(
+                f"Could not reach embedding service at {self.base_url}: {exc}"
+            ) from exc
+
+        model_name = data.get("model_name")
+        dimensions = data.get("dimensions")
+        max_batch_size = data.get("max_batch_size")
+        if not isinstance(model_name, str) or not isinstance(dimensions, int) or not isinstance(
+            max_batch_size, int
+        ):
+            raise RuntimeError("Embedding service health response was incomplete")
+        if self.expected_model_name is not None and model_name != self.expected_model_name:
+            raise RuntimeError(
+                "Embedding service model mismatch: "
+                f"expected {self.expected_model_name!r}, got {model_name!r}"
+            )
+
+        self._model_name = model_name
+        self._dimensions = dimensions
+        self._max_batch_size = max_batch_size
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.token is not None:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
+
+    def _format_http_error(self, exc: urllib.error.HTTPError) -> str:
+        message = str(exc)
+        try:
+            data = json.loads(exc.read().decode("utf-8"))
+            error = data.get("error")
+            if isinstance(error, dict) and isinstance(error.get("message"), str):
+                message = error["message"]
+        except Exception:
+            pass
+        return f"Embedding service returned HTTP {exc.code}: {message}"
+
+
+@dataclass
 class SentenceTransformersEmbeddingModel(EmbeddingModel):
     model_name: str
     device: str = "auto"
@@ -178,6 +300,7 @@ class SentenceTransformersEmbeddingModel(EmbeddingModel):
         if not texts:
             return []
         model = self._load_model()
+        started = time.perf_counter()
         vectors = model.encode(
             texts,
             batch_size=max(1, self.batch_size),
@@ -185,7 +308,15 @@ class SentenceTransformersEmbeddingModel(EmbeddingModel):
             convert_to_numpy=True,
             show_progress_bar=False,
         )
-        return [[float(value) for value in vector] for vector in vectors.tolist()]
+        encoded = time.perf_counter()
+        result = vectors.tolist()
+        print(
+            f"sentence-transformers: encoded {len(texts)} texts "
+            f"(max {max(len(t) for t in texts)} chars) in {encoded - started:.2f}s, "
+            f"converted in {time.perf_counter() - encoded:.2f}s",
+            file=sys.stderr,
+        )
+        return result
 
     def _load_model(self):
         if self._model is not None:
@@ -253,12 +384,20 @@ class CachedEmbeddingModel(EmbeddingModel):
                 misses.append((i, text))
 
         if misses:
+            embed_started = time.perf_counter()
             for batch in _batches(misses, max(1, self.batch_size)):
                 new_vectors = self.inner.embed([t for _, t in batch])
                 for (i, text), vector in zip(batch, new_vectors):
                     self._cache[hashlib.sha256(text.encode()).hexdigest()] = vector
                     results[i] = vector
+            save_started = time.perf_counter()
             self._save()
+            print(
+                f"embedding cache: {len(misses)} misses / {len(texts)} texts embedded in "
+                f"{save_started - embed_started:.2f}s, cache saved to {self.cache_path} in "
+                f"{time.perf_counter() - save_started:.2f}s",
+                file=sys.stderr,
+            )
 
         return results  # type: ignore[return-value]
 
@@ -369,6 +508,14 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
             device=settings.sentence_transformers_device,
             batch_size=settings.sentence_transformers_batch_size,
         )
+    elif backend == "remote":
+        inner = RemoteEmbeddingModel(
+            base_url=settings.embedding_service_url,
+            timeout_seconds=settings.embedding_service_timeout_seconds,
+            batch_size=settings.remote_embed_batch_size,
+            token=settings.embedding_service_token,
+            expected_model_name=settings.embedding_service_expected_model,
+        )
     else:
         raise ValueError(f"Unsupported embedding backend: {backend!r}")
 
@@ -385,6 +532,10 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
 
 
 def _batches(items: list[tuple[int, str]], batch_size: int) -> list[list[tuple[int, str]]]:
+    return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
+
+
+def _text_batches(items: list[str], batch_size: int) -> list[list[str]]:
     return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
 
 

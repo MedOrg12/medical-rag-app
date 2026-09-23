@@ -283,12 +283,18 @@ Environment variables:
 - `RAG_MANIFEST_PATH`: default `.rag/manifest.sqlite`
 - `RAG_EXTRACTION_CACHE_DIR`: default `.rag/extracted`
 - `RAG_EMBEDDING_CACHE_PATH`: default `.rag/embedding_cache.json`
-- `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, or `api`
+- `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, `api`, `sentence-transformers`, or `remote`
 - `RAG_GENERATION_BACKEND`: `extractive`, `ollama`, or `api`
-- `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, or `sentence-transformers`
 - `RAG_SENTENCE_TRANSFORMERS_MODEL`: default `BAAI/bge-base-en-v1.5`
 - `RAG_SENTENCE_TRANSFORMERS_DEVICE`: default `auto`; use `cuda` on GPU nodes
 - `RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE`: default `64`
+- `RAG_EMBEDDING_SERVICE_URL`: default `http://localhost:8100`
+- `RAG_EMBEDDING_SERVICE_TIMEOUT_SECONDS`: default `60`
+- `RAG_EMBEDDING_SERVICE_TOKEN`: optional bearer token for `/embed`
+- `RAG_EMBEDDING_SERVICE_EXPECTED_MODEL`: optional exact model name guard, for example `sentence-transformers:BAAI/bge-base-en-v1.5`
+- `RAG_REMOTE_EMBED_BATCH_SIZE`: default `64`
+- `RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE`: default `256`; server-side request limit
+- `RAG_EMBEDDING_SERVICE_MAX_TEXT_CHARS`: default `20000`; server-side request limit
 - `RAG_GENERATION_BACKEND`: `extractive` or `ollama`
 - `RAG_ANSWER_MODE`: `patient` or `clinician`
 - `RAG_OLLAMA_BASE_URL`: default `http://localhost:11434`
@@ -443,6 +449,7 @@ The `RAG_EMBEDDING_BACKEND` setting controls how chunks are embedded:
 | `ollama` | Always use Ollama semantic embeddings (requires Ollama running) |
 | `api` | Always use hosted OpenAI-compatible embeddings (requires `RAG_API_KEY`) |
 | `sentence-transformers` | Use a local sentence-transformers model, usually with CUDA on an HPC/GPU node |
+| `remote` | Use the standalone embedding service over HTTP |
 | `hash` | Bag-of-words hashing — fast, no network, non-semantic |
 
 Recommended Ollama embedding models:
@@ -455,6 +462,24 @@ Recommended API embedding default:
 - `text-embedding-3-small`: hosted OpenAI embedding model configured by default for `RAG_EMBEDDING_BACKEND=api`.
 
 Pull the embedding model first:
+### Remote embedding service
+
+On the GPU host, start the embedding service:
+
+```bash
+docker compose --profile embedder up -d embedder
+```
+
+On the API host, point the app at that service:
+
+```bash
+export RAG_EMBEDDING_BACKEND=remote
+export RAG_EMBEDDING_SERVICE_URL=http://<gpu-host>:8100
+```
+
+The remote service's model name must match the model used for ingestion. With Qdrant, points are filtered by the exact `embedding_model` payload, so a model-name mismatch returns no results.
+
+**Important:** Changing the embedding backend invalidates the existing index. Delete both cache files before re-ingesting:
 
 ```bash
 ollama pull nomic-embed-text
