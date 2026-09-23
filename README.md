@@ -295,7 +295,6 @@ Environment variables:
 - `RAG_REMOTE_EMBED_BATCH_SIZE`: default `64`
 - `RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE`: default `256`; server-side request limit
 - `RAG_EMBEDDING_SERVICE_MAX_TEXT_CHARS`: default `20000`; server-side request limit
-- `RAG_GENERATION_BACKEND`: `extractive` or `ollama`
 - `RAG_ANSWER_MODE`: `patient` or `clinician`
 - `RAG_OLLAMA_BASE_URL`: default `http://localhost:11434`
 - `RAG_OLLAMA_EMBEDDING_MODEL`: default `nomic-embed-text`
@@ -462,24 +461,6 @@ Recommended API embedding default:
 - `text-embedding-3-small`: hosted OpenAI embedding model configured by default for `RAG_EMBEDDING_BACKEND=api`.
 
 Pull the embedding model first:
-### Remote embedding service
-
-On the GPU host, start the embedding service:
-
-```bash
-docker compose --profile embedder up -d embedder
-```
-
-On the API host, point the app at that service:
-
-```bash
-export RAG_EMBEDDING_BACKEND=remote
-export RAG_EMBEDDING_SERVICE_URL=http://<gpu-host>:8100
-```
-
-The remote service's model name must match the model used for ingestion. With Qdrant, points are filtered by the exact `embedding_model` payload, so a model-name mismatch returns no results.
-
-**Important:** Changing the embedding backend invalidates the existing index. Delete both cache files before re-ingesting:
 
 ```bash
 ollama pull nomic-embed-text
@@ -513,6 +494,28 @@ RAG_EMBEDDING_BACKEND=ollama \
 RAG_FORCE_REINGEST=true \
 docker compose up -d --build medical-rag
 ```
+
+### Remote embedding service
+
+`remote` and `api` are both network backends but serve different purposes. `api` talks to a hosted
+OpenAI-compatible provider using its own model catalogue. `remote` talks to this project's own
+`embedder` service, which runs the same sentence-transformers model that Slurm ingestion used, so
+query vectors are guaranteed to match the collection.
+
+On the GPU host, start the embedding service:
+
+```bash
+docker compose --profile embedder up -d embedder
+```
+
+On the API host, point the app at that service:
+
+```bash
+export RAG_EMBEDDING_BACKEND=remote
+export RAG_EMBEDDING_SERVICE_URL=http://<gpu-host>:8100
+```
+
+The remote service's model name must match the model used for ingestion. With Qdrant, points are filtered by the exact `embedding_model` payload, so a model-name mismatch returns no results.
 
 The `RAG_HYBRID_ALPHA`, `RAG_MIN_RELEVANCE_SCORE`, and `RAG_RERANKER_BACKEND` settings control retrieval quality:
 
