@@ -188,10 +188,43 @@ if [ "$RAG_EMBEDDING_BACKEND" = "sentence-transformers" ]; then
   command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || echo "nvidia-smi not found"
   echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
   python - <<'PY'
+import os
+import time
+
 import torch
+
 print(f"torch {torch.__version__} cuda_build={torch.version.cuda} cuda_available={torch.cuda.is_available()} devices={torch.cuda.device_count()}")
 if torch.cuda.is_available():
-    print(f"device 0: {torch.cuda.get_device_name(0)}")
+    print(f"device 0: {torch.cuda.get_device_name(0)} capability={torch.cuda.get_device_capability(0)}")
+    print(f"torch arch list: {torch.cuda.get_arch_list()} TORCH_CUDA_ARCH_LIST={os.environ.get('TORCH_CUDA_ARCH_LIST', '<unset>')}")
+    print(f"torch threads: {torch.get_num_threads()} OMP_NUM_THREADS={os.environ.get('OMP_NUM_THREADS', '<unset>')}")
+    # Raw GPU throughput: an H100 should sustain well over 40 TFLOPS fp32 here.
+    a = torch.randn(8192, 8192, device="cuda"); b = torch.randn(8192, 8192, device="cuda")
+    torch.cuda.synchronize(); (a @ b); torch.cuda.synchronize()
+    t = time.perf_counter()
+    for _ in range(10):
+        a @ b
+    torch.cuda.synchronize()
+    dt = time.perf_counter() - t
+    print(f"matmul benchmark: 10 x 8192^2 fp32 in {dt:.3f}s = {10 * 2 * 8192**3 / dt / 1e12:.1f} TFLOPS")
+    try:
+        from sentence_transformers import SentenceTransformer
+
+        model_name = os.environ.get("RAG_SENTENCE_TRANSFORMERS_MODEL", "BAAI/bge-base-en-v1.5")
+        model = SentenceTransformer(model_name, device="cuda")
+        tok = model.tokenizer
+        print(f"tokenizer: {type(tok).__name__} is_fast={getattr(tok, 'is_fast', None)} dtype={next(model.parameters()).dtype}")
+        texts = ["Stroke is a leading cause of disability. " * 30] * 64
+        model.encode(texts, batch_size=64)
+        for _ in range(3):
+            t = time.perf_counter()
+            model.encode(texts, batch_size=64, normalize_embeddings=True, convert_to_numpy=True)
+            print(f"direct encode benchmark: 64 texts x ~330 tokens in {time.perf_counter() - t:.3f}s")
+        t = time.perf_counter()
+        tok(texts, padding=True, truncation=True, max_length=512, return_tensors="pt")
+        print(f"tokenize only: 64 texts in {time.perf_counter() - t:.3f}s")
+    except Exception as exc:  # diagnostics must never fail the job
+        print(f"direct encode benchmark skipped: {exc!r}")
 PY
   echo "RAG_SENTENCE_TRANSFORMERS_DEVICE=${RAG_SENTENCE_TRANSFORMERS_DEVICE}"
   echo "RAG_EMBED_BATCH_SIZE=${RAG_EMBED_BATCH_SIZE} RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE=${RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE} RAG_PDF_WORKERS=${RAG_PDF_WORKERS}"
