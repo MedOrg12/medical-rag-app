@@ -303,7 +303,9 @@ Environment variables:
 - `RAG_QDRANT_API_KEY`: optional Qdrant API key
 - `RAG_QDRANT_COLLECTION`: default `stroke_chunks`
 - `RAG_QDRANT_BATCH_SIZE`: default `128`
-- `RAG_QDRANT_RECREATE_COLLECTION`: default `true`
+- `RAG_QDRANT_RECREATE_COLLECTION`: default `false`. Ingestion upserts into the existing collection and
+  removes points whose source was deleted or re-chunked. Set `true` to drop and rebuild it, which is
+  required when the embedding dimension or vector name changes.
 - `RAG_QDRANT_TIMEOUT_SECONDS`: default `120`. Qdrant request timeout; collection creation on the shared host can take 5-10 seconds.
 - `QDRANT_DATA_DIR` (docker compose only): absolute host directory for the `qdrant` service's storage.
   Defaults to the `qdrant_data` named volume under Docker's data root. Point it at a fast local disk;

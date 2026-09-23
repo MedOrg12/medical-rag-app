@@ -73,3 +73,12 @@ def test_settings_default_qdrant_timeout_exceeds_client_default(tmp_path) -> Non
     settings = Settings.from_env(tmp_path)
 
     assert settings.qdrant_timeout_seconds > 5
+
+
+def test_settings_default_to_writing_into_existing_qdrant_collection(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("RAG_QDRANT_RECREATE_COLLECTION", raising=False)
+
+    assert Settings.from_env(tmp_path).qdrant_recreate_collection is False
+
+    monkeypatch.setenv("RAG_QDRANT_RECREATE_COLLECTION", "true")
+    assert Settings.from_env(tmp_path).qdrant_recreate_collection is True

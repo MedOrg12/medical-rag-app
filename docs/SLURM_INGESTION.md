@@ -48,7 +48,10 @@ prints the SSH target, forwarded port, and the relevant log path:
 - `RAG_QDRANT_REMOTE_HOST`: host visible from the SSH server. Defaults to `127.0.0.1`.
 - `RAG_QDRANT_REMOTE_PORT`: remote Qdrant port. Defaults to `6333`.
 - `RAG_QDRANT_COLLECTION`: target collection. Defaults to `stroke_chunks`.
-- `RAG_QDRANT_RECREATE_COLLECTION`: `true` rebuilds the collection for a clean ingestion run.
+- `RAG_QDRANT_RECREATE_COLLECTION`: defaults to `false`, so the job upserts into the existing
+  collection and deletes stale points. Set `true` to drop and rebuild it; this is required when
+  switching to an embedding model with a different dimension. The job refuses to write into a
+  collection whose vector size or name does not match.
 - `RAG_QDRANT_TIMEOUT_SECONDS`: Qdrant request timeout. Defaults to `120` because collection
   creation on the shared Qdrant host has been measured at 5-10 seconds, above the 5 second
   qdrant-client default.

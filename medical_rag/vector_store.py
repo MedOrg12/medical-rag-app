@@ -305,6 +305,33 @@ class QdrantVectorStore:
                 collection_name=self.settings.qdrant_collection,
                 points=points[start : start + batch_size],
             )
+        # Point ids derive deterministically from chunk ids, so re-ingesting an unchanged
+        # source overwrites its points in place. Anything left over belongs to a source that
+        # was deleted or re-chunked and must go, so the collection mirrors the current corpus.
+        self._delete_stale_points(client, {point.id for point in points})
+
+    def _delete_stale_points(self, client: Any, current_ids: set[str]) -> int:
+        models = _qdrant_models()
+        stale: list[str] = []
+        offset = None
+        while True:
+            records, offset = client.scroll(
+                collection_name=self.settings.qdrant_collection,
+                limit=1024,
+                offset=offset,
+                with_payload=False,
+                with_vectors=False,
+            )
+            stale.extend(str(record.id) for record in records if str(record.id) not in current_ids)
+            if offset is None:
+                break
+        batch_size = max(1, self.settings.qdrant_batch_size)
+        for start in range(0, len(stale), batch_size):
+            client.delete(
+                collection_name=self.settings.qdrant_collection,
+                points_selector=models.PointIdsList(points=stale[start : start + batch_size]),
+            )
+        return len(stale)
 
     def search(
         self,
@@ -357,11 +384,13 @@ class QdrantVectorStore:
         client = _qdrant_client(self.settings)
         models = _qdrant_models()
         timeout = _qdrant_timeout(self.settings)
-        if self.settings.qdrant_recreate_collection and client.collection_exists(
-            self.settings.qdrant_collection
-        ):
+        exists = client.collection_exists(self.settings.qdrant_collection)
+        if exists and self.settings.qdrant_recreate_collection:
             client.delete_collection(self.settings.qdrant_collection, timeout=timeout)
-        if not client.collection_exists(self.settings.qdrant_collection):
+            exists = False
+        if exists:
+            self._validate_existing_collection(client, vector_size)
+        else:
             client.create_collection(
                 collection_name=self.settings.qdrant_collection,
                 vectors_config={
@@ -371,6 +400,26 @@ class QdrantVectorStore:
                     )
                 },
                 timeout=timeout,
+            )
+
+    def _validate_existing_collection(self, client: Any, vector_size: int) -> None:
+        """Fail early with a clear message if the live collection cannot accept these vectors."""
+        name = self.settings.qdrant_collection
+        vector_name = self.settings.qdrant_dense_vector_name
+        info = client.get_collection(name)
+        vectors = info.config.params.vectors
+        params = vectors.get(vector_name) if isinstance(vectors, dict) else None
+        if params is None:
+            configured = sorted(vectors) if isinstance(vectors, dict) else "an unnamed vector"
+            raise ValueError(
+                f"Qdrant collection {name!r} has no vector named {vector_name!r} (it has {configured}). "
+                "Set RAG_QDRANT_RECREATE_COLLECTION=true to rebuild it, or use a different collection."
+            )
+        if int(params.size) != int(vector_size):
+            raise ValueError(
+                f"Qdrant collection {name!r} stores {params.size}-dimensional vectors but the embedding "
+                f"model produces {vector_size} dimensions. Set RAG_QDRANT_RECREATE_COLLECTION=true to "
+                "rebuild it, or use a different collection."
             )
 
     def _scroll_chunks(self) -> list[Chunk]:
