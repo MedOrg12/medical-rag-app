@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -126,6 +126,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "api_generation_model": app_settings.api_generation_model,
             "api_embedding_model": app_settings.api_embedding_model,
         }
+
+    @app.get("/ready")
+    def ready(response: Response) -> dict[str, Any]:
+        index_exists = rag.index_exists()
+        if not index_exists:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "ok" if index_exists else "not_ready", "index_exists": index_exists}
 
     @app.post("/ingest")
     def ingest(request: IngestRequest) -> dict[str, Any]:

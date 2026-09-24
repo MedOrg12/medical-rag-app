@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch for Medical RAG deployment requests
+After=medical-rag-deploy-api.service
+Requires=medical-rag-deploy-api.service
+
+[Path]
+DirectoryNotEmpty=/var/lib/medical-rag-deploy/pending
+Unit=medical-rag-deploy-worker.service
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,32 @@
+[Unit]
+Description=Medical RAG deployment admission API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=medical-rag-deploy
+Group=medical-rag-deploy
+WorkingDirectory=/opt/medical-rag/source
+EnvironmentFile=/etc/medical-rag/deploy-agent.env
+ExecStart=/opt/medical-rag/deploy-venv/bin/uvicorn deploy_agent.api:create_app --factory --host 127.0.0.1 --port 9100 --workers 1 --no-access-log
+Restart=on-failure
+RestartSec=5
+
+StateDirectory=medical-rag-deploy
+StateDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/lib/medical-rag-deploy
+
+[Install]
+WantedBy=multi-user.target

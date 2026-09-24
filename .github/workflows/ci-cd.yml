@@ -1,0 +1,124 @@
+name: CI and production deployment
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: medical-rag-production
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-deploy.txt
+      - run: pytest
+
+  publish:
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: metadata
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: type=sha,format=long
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.APPLICATION_URL }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Request short-lived deployment identity
+        id: oidc
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const token = await core.getIDToken(process.env.DEPLOY_URL)
+            core.setSecret(token)
+            core.setOutput("token", token)
+        env:
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+
+      - name: Queue immutable image deployment
+        id: queue
+        env:
+          DEPLOY_TOKEN: ${{ steps.oidc.outputs.token }}
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+        run: |
+          response="$(
+            curl --fail-with-body --retry 3 \
+              --request POST \
+              --header "Authorization: Bearer $DEPLOY_TOKEN" \
+              --header "Content-Type: application/json" \
+              --data "$(jq -cn --arg digest "$IMAGE_DIGEST" '{digest: $digest}')" \
+              "$DEPLOY_URL"
+          )"
+          deployment_id="$(jq -er '.deployment_id' <<<"$response")"
+          echo "deployment_id=$deployment_id" >>"$GITHUB_OUTPUT"
+
+      - name: Wait for deployment result
+        env:
+          DEPLOY_TOKEN: ${{ steps.oidc.outputs.token }}
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+          DEPLOYMENT_ID: ${{ steps.queue.outputs.deployment_id }}
+        run: |
+          for attempt in $(seq 1 60); do
+            state="$(
+              curl --fail-with-body --silent \
+                --header "Authorization: Bearer $DEPLOY_TOKEN" \
+                "$DEPLOY_URL/$DEPLOYMENT_ID" |
+                jq -er '.state'
+            )"
+            case "$state" in
+              healthy) exit 0 ;;
+              rejected|rolled_back|rollback_failed|failed)
+                echo "Deployment ended in state: $state"
+                exit 1
+                ;;
+            esac
+            sleep 5
+          done
+          echo "Timed out waiting for deployment"
+          exit 1
