@@ -312,6 +312,15 @@ def test_qdrant_ingest_phases_account_for_all_of_the_loop_time(monkeypatch, tmp_
     assert stats.upsert_requests == 5 and stats.upsert_busy_seconds > 0
 
 
+def test_qdrant_ingest_skips_the_stale_scan_on_a_collection_it_created(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(monkeypatch)
+
+    _, stats = _ingest(_qdrant_settings(tmp_path), _many_chunks(5))
+
+    assert "scroll" not in _call_names()
+    assert stats.stale_points_removed == 0
+
+
 def test_qdrant_ingest_only_waits_on_the_final_upsert(monkeypatch, tmp_path) -> None:
     _use_fake_qdrant(monkeypatch)
     chunks = [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(5)]
