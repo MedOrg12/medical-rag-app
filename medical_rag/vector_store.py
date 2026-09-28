@@ -25,6 +25,10 @@ SCHEMA_VERSION = 1
 # batches pile up in memory, and makes the embedding loop wait instead.
 _MAX_PENDING_UPSERTS = 2
 
+# Qdrant's own default HNSW indexing threshold (KB of vectors per segment), restored when a
+# collection is found with indexing still paused by an ingest that was killed mid-run.
+_DEFAULT_INDEXING_THRESHOLD_KB = 10000
+
 
 class VectorStoreBackend(Protocol):
     @property
@@ -396,6 +400,9 @@ class QdrantVectorStore:
         Qdrant applies a shard's updates in order, so once it returns every earlier
         batch has been applied too, and the point count is checked against the corpus to
         catch an asynchronous write that was acknowledged but never applied.
+
+        HNSW indexing is paused while points stream in and restored afterwards, so Qdrant
+        builds the index once instead of re-indexing segments on its disk during the load.
         """
         store = cls(settings, embedding_model_name=embedding_model.name)
         client = store.client
@@ -406,81 +413,114 @@ class QdrantVectorStore:
         if collection_ready and settings.qdrant_recreate_collection:
             client.delete_collection(collection, timeout=_qdrant_timeout(settings))
             collection_ready = False
+        # A collection created (or recreated) by this run holds nothing to reuse, so its
+        # batches skip the reuse lookup instead of paying a round trip each.
+        can_reuse = collection_ready
         collection_validated = False
+        restore_indexing_threshold: int | None = None
 
         current_ids: set[str] = set()
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="qdrant-upsert") as writer:
-            pending: deque[Future[Any]] = deque()
-            # The latest batch is held back one step so the last one can go out with wait=True.
-            held_points: list[Any] | None = None
+        upsert_client = _qdrant_client(settings, for_bulk_upsert=True)
+        try:
+            with ThreadPoolExecutor(max_workers=1, thread_name_prefix="qdrant-upsert") as writer:
+                pending: deque[Future[Any]] = deque()
+                # The latest batch is held back one step so the last one can go out with wait=True.
+                held_points: list[Any] | None = None
 
-            def send(points: list[Any], wait: bool) -> None:
-                while len(pending) >= _MAX_PENDING_UPSERTS:
-                    pending.popleft().result()
-                pending.append(
-                    writer.submit(client.upsert, collection_name=collection, points=points, wait=wait)
-                )
+                def send(points: list[Any], wait: bool) -> None:
+                    while len(pending) >= _MAX_PENDING_UPSERTS:
+                        pending.popleft().result()
+                    pending.append(
+                        writer.submit(
+                            upsert_client.upsert,
+                            collection_name=collection,
+                            points=points,
+                            wait=wait,
+                        )
+                    )
 
-            for start in range(0, len(chunks), batch_size):
-                batch = chunks[start : start + batch_size]
-                point_ids = [_point_id(chunk.id) for chunk in batch]
-                current_ids.update(point_ids)
+                for start in range(0, len(chunks), batch_size):
+                    batch = chunks[start : start + batch_size]
+                    point_ids = [_point_id(chunk.id) for chunk in batch]
+                    current_ids.update(point_ids)
 
-                reusable: set[str] = set()
-                if collection_ready:
-                    reusable = store._reusable_point_ids(point_ids, batch)
-                missing = [
-                    (point_id, chunk)
-                    for point_id, chunk in zip(point_ids, batch, strict=True)
-                    if point_id not in reusable
-                ]
-                stats.chunks_reused += len(batch) - len(missing)
-                if not missing:
-                    continue
+                    reusable: set[str] = set()
+                    if can_reuse:
+                        reusable = store._reusable_point_ids(point_ids, batch)
+                    missing = [
+                        (point_id, chunk)
+                        for point_id, chunk in zip(point_ids, batch, strict=True)
+                        if point_id not in reusable
+                    ]
+                    stats.chunks_reused += len(batch) - len(missing)
+                    if not missing:
+                        continue
 
-                embed_started = time.perf_counter()
-                vectors = embedding_model.embed([chunk.text for _, chunk in missing])
-                stats.embedding_seconds += time.perf_counter() - embed_started
-                stats.chunks_embedded += len(missing)
+                    embed_started = time.perf_counter()
+                    vectors = embedding_model.embed([chunk.text for _, chunk in missing])
+                    stats.embedding_seconds += time.perf_counter() - embed_started
+                    stats.chunks_embedded += len(missing)
+
+                    write_started = time.perf_counter()
+                    if not collection_validated:
+                        # Needs a real vector to know the dimension; runs once per ingest.
+                        store._ensure_collection(len(vectors[0]))
+                        collection_ready = True
+                        restore_indexing_threshold = store._pause_indexing()
+                        collection_validated = True
+                    if held_points is not None:
+                        send(held_points, wait=False)
+                    held_points = [
+                        _qdrant_point(
+                            settings=settings,
+                            chunk=chunk,
+                            dense_vector=vector,
+                            embedding_model=embedding_model.name,
+                        )
+                        for (_, chunk), vector in zip(missing, vectors, strict=True)
+                    ]
+                    stats.write_seconds += time.perf_counter() - write_started
 
                 write_started = time.perf_counter()
-                if not collection_validated:
-                    # Needs a real vector to know the dimension; runs once per ingest.
-                    store._ensure_collection(len(vectors[0]))
-                    collection_ready = True
-                    collection_validated = True
                 if held_points is not None:
-                    send(held_points, wait=False)
-                held_points = [
-                    _qdrant_point(
-                        settings=settings,
-                        chunk=chunk,
-                        dense_vector=vector,
-                        embedding_model=embedding_model.name,
-                    )
-                    for (_, chunk), vector in zip(missing, vectors, strict=True)
-                ]
+                    send(held_points, wait=True)
+                while pending:
+                    pending.popleft().result()
                 stats.write_seconds += time.perf_counter() - write_started
 
-            write_started = time.perf_counter()
-            if held_points is not None:
-                send(held_points, wait=True)
-            while pending:
-                pending.popleft().result()
-            stats.write_seconds += time.perf_counter() - write_started
-
-        if collection_ready:
-            write_started = time.perf_counter()
-            stats.stale_points_removed = store._delete_stale_points(client, current_ids)
-            stored = store.chunk_count()
-            stats.write_seconds += time.perf_counter() - write_started
-            if stored != len(current_ids):
-                raise RuntimeError(
-                    f"Qdrant collection {collection!r} holds {stored} points after ingestion, "
-                    f"expected {len(current_ids)}; an asynchronous upsert may have failed on "
-                    "the server. Check the Qdrant logs and re-run the ingest."
-                )
+            if collection_ready:
+                write_started = time.perf_counter()
+                stats.stale_points_removed = store._delete_stale_points(client, current_ids)
+                stored = store.chunk_count()
+                stats.write_seconds += time.perf_counter() - write_started
+                if stored != len(current_ids):
+                    raise RuntimeError(
+                        f"Qdrant collection {collection!r} holds {stored} points after ingestion, "
+                        f"expected {len(current_ids)}; an asynchronous upsert may have failed on "
+                        "the server. Check the Qdrant logs and re-run the ingest."
+                    )
+        finally:
+            upsert_client.close()
+            if restore_indexing_threshold is not None:
+                store._set_indexing_threshold(restore_indexing_threshold)
         return store, stats
+
+    def _pause_indexing(self) -> int:
+        """Stop HNSW indexing on the collection and return the threshold to restore."""
+        client = self.client
+        name = self.settings.qdrant_collection
+        current = client.get_collection(name).config.optimizer_config.indexing_threshold
+        # 0 means an earlier ingest was killed before restoring indexing; don't keep that.
+        restore = current or _DEFAULT_INDEXING_THRESHOLD_KB
+        self._set_indexing_threshold(0)
+        return restore
+
+    def _set_indexing_threshold(self, threshold: int) -> None:
+        self.client.update_collection(
+            collection_name=self.settings.qdrant_collection,
+            optimizers_config=_qdrant_models().OptimizersConfigDiff(indexing_threshold=threshold),
+            timeout=_qdrant_timeout(self.settings),
+        )
 
     def _reusable_point_ids(self, point_ids: list[str], batch: list[Chunk]) -> set[str]:
         """Ids in ``point_ids`` whose stored point was embedded from the same text by the
@@ -613,7 +653,7 @@ class QdrantVectorStore:
             )
 
 
-def _qdrant_client(settings: Settings) -> Any:
+def _qdrant_client(settings: Settings, for_bulk_upsert: bool = False) -> Any:
     try:
         from qdrant_client import QdrantClient
     except ImportError as exc:
@@ -621,10 +661,18 @@ def _qdrant_client(settings: Settings) -> Any:
 
     # qdrant-client defaults to a 5 second REST timeout. Collection creation on the shared
     # Qdrant service regularly takes longer than that, so use the configured timeout instead.
+    # gRPC ships vectors as packed floats instead of JSON, which matters for bulk ingestion;
+    # it connects to the URL's host on ``qdrant_grpc_port``.
     return QdrantClient(
         url=settings.qdrant_url,
         api_key=settings.qdrant_api_key,
         timeout=_qdrant_timeout(settings),
+        prefer_grpc=settings.qdrant_prefer_grpc,
+        grpc_port=settings.qdrant_grpc_port,
+        # Otherwise every upsert first scans each float of each point in Python looking for
+        # local-inference objects (models.Document etc.), which dominated ingest write time.
+        # Ingestion only sends precomputed vectors, so there is never anything to infer.
+        cloud_inference=for_bulk_upsert,
     )
 
 

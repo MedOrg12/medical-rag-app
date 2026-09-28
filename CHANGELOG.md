@@ -22,6 +22,7 @@ This project follows Semantic Versioning for the application release number:
 - Slurm ingestion job (`scripts/slurm_ingest_qdrant.sbatch`) that embeds on a GPU node with sentence-transformers and writes to Qdrant over an SSH tunnel, with GPU and timing diagnostics.
 - Standalone GPU embedding service (`embedder` compose profile) and a `remote` embedding backend so the API host never loads torch.
 - `RAG_QDRANT_TIMEOUT_SECONDS`, `QDRANT_DATA_DIR`, and `QDRANT_WAL_CAPACITY_MB` for slow-disk Qdrant hosts.
+- `RAG_QDRANT_PREFER_GRPC` and `RAG_QDRANT_GRPC_PORT` to talk to Qdrant over gRPC; the Slurm job opens a gRPC tunnel when enabled, and the compose `qdrant` service publishes port `6334`.
 
 ### Removed
 
@@ -42,6 +43,10 @@ This project follows Semantic Versioning for the application release number:
 - An unreachable Qdrant is now reported as an error rather than as a missing collection, so container startup no longer launches a full ingestion when the vector store is down.
 - `RAG_AUTO_INGEST_ON_STARTUP` is configurable in compose for query-only hosts.
 - Qdrant ingestion writes each batch on a background thread with `wait=False` while the next batch is embedded, then waits on the final upsert and checks the collection's point count, failing the run if any asynchronous write did not land. `index_write_seconds` now reports only write time not hidden behind embedding.
+- Qdrant ingestion upserts through a client that skips qdrant-client's local-inference scan, which walked every float of every point in Python and was most of the write time (about 3x faster writes in local benchmarks).
+- Qdrant ingestion pauses HNSW indexing on the collection while it writes and restores it afterwards, including after a failed run or one that was killed mid-load.
+- Qdrant ingestion skips the per-batch reuse lookup when it created the collection itself.
+- The Slurm job defaults `RAG_EMBED_BATCH_SIZE` to `256` to cut Qdrant round trips through the tunnel.
 
 ## [0.1.0] - 2026-08-10
 

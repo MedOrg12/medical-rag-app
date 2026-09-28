@@ -21,6 +21,8 @@ services:
       RAG_QDRANT_BATCH_SIZE: ${RAG_QDRANT_BATCH_SIZE:-128}
       RAG_QDRANT_RECREATE_COLLECTION: ${RAG_QDRANT_RECREATE_COLLECTION:-false}
       RAG_QDRANT_TIMEOUT_SECONDS: ${RAG_QDRANT_TIMEOUT_SECONDS:-120}
+      RAG_QDRANT_PREFER_GRPC: ${RAG_QDRANT_PREFER_GRPC:-false}
+      RAG_QDRANT_GRPC_PORT: ${RAG_QDRANT_GRPC_PORT:-6334}
       # Set to "false" on hosts that only serve queries against a collection built elsewhere.
       RAG_AUTO_INGEST_ON_STARTUP: ${RAG_AUTO_INGEST_ON_STARTUP:-true}
       RAG_PDF_WORKERS: ${RAG_PDF_WORKERS:-1}
@@ -103,6 +105,8 @@ services:
       - qdrant
     ports:
       - "6333:6333"
+      # gRPC, used by ingestion jobs with RAG_QDRANT_PREFER_GRPC=true.
+      - "6334:6334"
     volumes:
       # Set QDRANT_DATA_DIR to an absolute host path to bind-mount Qdrant storage onto a
       # fast local disk. Collection creation fsyncs a 32 MB WAL segment, so slow disks hurt.

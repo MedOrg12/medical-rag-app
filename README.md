@@ -331,6 +331,9 @@ Environment variables:
   removes points whose source was deleted or re-chunked. Set `true` to drop and rebuild it, which is
   required when the embedding dimension or vector name changes.
 - `RAG_QDRANT_TIMEOUT_SECONDS`: default `120`. Qdrant request timeout; collection creation on the shared host can take 5-10 seconds.
+- `RAG_QDRANT_PREFER_GRPC`: default `false`. Use gRPC instead of REST; faster for bulk ingestion, and
+  requires the Qdrant gRPC port to be reachable.
+- `RAG_QDRANT_GRPC_PORT`: default `6334`. gRPC port on the `RAG_QDRANT_URL` host.
 - `QDRANT_DATA_DIR` (docker compose only): absolute host directory for the `qdrant` service's storage.
   Defaults to the `qdrant_data` named volume under Docker's data root. Point it at a fast local disk;
   Qdrant fsyncs a 32 MB write-ahead log segment on every collection create, which takes seconds on slow volumes.
