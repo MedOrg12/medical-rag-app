@@ -42,9 +42,9 @@ This project follows Semantic Versioning for the application release number:
 - `/health` reports `active_embedding_model` as `null` with an `embedding_model_error` when the embedding service is unreachable, and `index_exists` as `null` with a `vector_store_error` when Qdrant is unreachable, instead of failing.
 - An unreachable Qdrant is now reported as an error rather than as a missing collection, so container startup no longer launches a full ingestion when the vector store is down.
 - `RAG_AUTO_INGEST_ON_STARTUP` is configurable in compose for query-only hosts.
-- Qdrant ingestion writes each batch on a background thread with `wait=False` while the next batch is embedded, then waits on the final upsert and checks the collection's point count, failing the run if any asynchronous write did not land. `index_write_seconds` now reports only write time not hidden behind embedding.
-- Qdrant ingestion upserts through a client that skips qdrant-client's local-inference scan, which walked every float of every point in Python and was most of the write time (about 3x faster writes in local benchmarks).
-- Qdrant ingestion pauses HNSW indexing on the collection while it writes and restores it afterwards, including after a failed run or one that was killed mid-load.
+- Qdrant ingestion writes each batch on a background thread with `wait=False` while the next batch is embedded, waits on every eighth upsert and the final one to bound Qdrant's apply backlog, and checks the collection's point count, failing the run if any asynchronous write did not land. `index_write_seconds` now reports only write time not hidden behind embedding.
+- Qdrant ingestion upserts through a client that skips qdrant-client's local-inference scan, which walked every float of every point in Python on the ingesting machine before each request.
+- Qdrant ingestion pauses HNSW indexing once a run writes enough to cross the collection's indexing threshold, and restores it afterwards, including after a failed run or one that was killed mid-load. Small incremental runs leave the config alone.
 - Qdrant ingestion skips the per-batch reuse lookup when it created the collection itself.
 - The Slurm job defaults `RAG_EMBED_BATCH_SIZE` to `256` to cut Qdrant round trips through the tunnel.
 

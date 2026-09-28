@@ -25,6 +25,11 @@ SCHEMA_VERSION = 1
 # batches pile up in memory, and makes the embedding loop wait instead.
 _MAX_PENDING_UPSERTS = 2
 
+# Every Nth upsert (and the last) uses wait=True. Qdrant acknowledges a wait=False upsert
+# before applying it, so on a slow disk its apply backlog could otherwise grow for the whole
+# run and the final wait would have to drain all of it inside a single request timeout.
+_UPSERTS_PER_WAIT = 8
+
 # Qdrant's own default HNSW indexing threshold (KB of vectors per segment), restored when a
 # collection is found with indexing still paused by an ingest that was killed mid-run.
 _DEFAULT_INDEXING_THRESHOLD_KB = 10000
@@ -401,8 +406,10 @@ class QdrantVectorStore:
         batch has been applied too, and the point count is checked against the corpus to
         catch an asynchronous write that was acknowledged but never applied.
 
-        HNSW indexing is paused while points stream in and restored afterwards, so Qdrant
-        builds the index once instead of re-indexing segments on its disk during the load.
+        Once a run has written enough to cross Qdrant's indexing threshold, HNSW indexing is
+        paused and restored afterwards, so Qdrant builds the index once instead of
+        re-indexing segments on its disk during the load. Every ``_UPSERTS_PER_WAIT``-th
+        upsert also waits, which bounds how far Qdrant's apply backlog can fall behind.
         """
         store = cls(settings, embedding_model_name=embedding_model.name)
         client = store.client
@@ -418,6 +425,9 @@ class QdrantVectorStore:
         can_reuse = collection_ready
         collection_validated = False
         restore_indexing_threshold: int | None = None
+        indexing_paused = False
+        pause_indexing_at_bytes = 0
+        written_vector_bytes = 0
 
         current_ids: set[str] = set()
         upsert_client = _qdrant_client(settings, for_bulk_upsert=True)
@@ -427,15 +437,19 @@ class QdrantVectorStore:
                 # The latest batch is held back one step so the last one can go out with wait=True.
                 held_points: list[Any] | None = None
 
-                def send(points: list[Any], wait: bool) -> None:
+                upserts_sent = 0
+
+                def send(points: list[Any], final: bool = False) -> None:
+                    nonlocal upserts_sent
                     while len(pending) >= _MAX_PENDING_UPSERTS:
                         pending.popleft().result()
+                    upserts_sent += 1
                     pending.append(
                         writer.submit(
                             upsert_client.upsert,
                             collection_name=collection,
                             points=points,
-                            wait=wait,
+                            wait=final or upserts_sent % _UPSERTS_PER_WAIT == 0,
                         )
                     )
 
@@ -466,10 +480,23 @@ class QdrantVectorStore:
                         # Needs a real vector to know the dimension; runs once per ingest.
                         store._ensure_collection(len(vectors[0]))
                         collection_ready = True
-                        restore_indexing_threshold = store._pause_indexing()
                         collection_validated = True
+                        threshold_kb = store._indexing_threshold_kb()
+                        if threshold_kb == 0:
+                            # An earlier ingest was killed before restoring indexing.
+                            indexing_paused = True
+                            restore_indexing_threshold = _DEFAULT_INDEXING_THRESHOLD_KB
+                        # Below the threshold Qdrant would not index the new points during
+                        # the load anyway, so small incremental runs leave the config alone.
+                        pause_indexing_at_bytes = threshold_kb * 1024 // 2
+                    # Qdrant stores dense vectors as float32.
+                    written_vector_bytes += len(vectors) * len(vectors[0]) * 4
+                    if not indexing_paused and written_vector_bytes >= pause_indexing_at_bytes:
+                        store._set_indexing_threshold(0)
+                        indexing_paused = True
+                        restore_indexing_threshold = threshold_kb
                     if held_points is not None:
-                        send(held_points, wait=False)
+                        send(held_points)
                     held_points = [
                         _qdrant_point(
                             settings=settings,
@@ -483,7 +510,7 @@ class QdrantVectorStore:
 
                 write_started = time.perf_counter()
                 if held_points is not None:
-                    send(held_points, wait=True)
+                    send(held_points, final=True)
                 while pending:
                     pending.popleft().result()
                 stats.write_seconds += time.perf_counter() - write_started
@@ -505,15 +532,10 @@ class QdrantVectorStore:
                 store._set_indexing_threshold(restore_indexing_threshold)
         return store, stats
 
-    def _pause_indexing(self) -> int:
-        """Stop HNSW indexing on the collection and return the threshold to restore."""
-        client = self.client
-        name = self.settings.qdrant_collection
-        current = client.get_collection(name).config.optimizer_config.indexing_threshold
-        # 0 means an earlier ingest was killed before restoring indexing; don't keep that.
-        restore = current or _DEFAULT_INDEXING_THRESHOLD_KB
-        self._set_indexing_threshold(0)
-        return restore
+    def _indexing_threshold_kb(self) -> int:
+        info = self.client.get_collection(self.settings.qdrant_collection)
+        threshold = info.config.optimizer_config.indexing_threshold
+        return _DEFAULT_INDEXING_THRESHOLD_KB if threshold is None else int(threshold)
 
     def _set_indexing_threshold(self, threshold: int) -> None:
         self.client.update_collection(
