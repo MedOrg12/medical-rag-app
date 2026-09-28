@@ -5,7 +5,7 @@ import json
 import os
 import sqlite3
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -339,14 +339,18 @@ class ManifestStore:
             )
 
 
-def discover_source_files(path: Path) -> list[SourceFile]:
+def discover_source_files(path: Path, workers: int = 1) -> list[SourceFile]:
     raw_files = iter_source_files(path)
     seen_hashes: dict[str, str] = {}
     files: list[SourceFile] = []
 
-    for raw_file in raw_files:
-        digest = sha256_file(raw_file)
-        stat = raw_file.stat()
+    # Hashing is dominated by file-open and read latency on shared storage, and hashlib
+    # releases the GIL, so threads overlap it. Results come back in input order, so the
+    # first copy of a duplicate in sorted order is still the one kept.
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        hashed = list(pool.map(_hash_and_stat, raw_files))
+
+    for raw_file, (digest, stat) in zip(raw_files, hashed, strict=True):
         duplicate_of = seen_hashes.get(digest)
         if duplicate_of is None:
             seen_hashes[digest] = str(raw_file)
@@ -411,6 +415,10 @@ def load_extracted_documents(
 
     documents.sort(key=lambda item: str(item.source.path).lower())
     return documents, failures
+
+
+def _hash_and_stat(path: Path) -> tuple[str, os.stat_result]:
+    return sha256_file(path), path.stat()
 
 
 def sha256_file(path: Path) -> str:

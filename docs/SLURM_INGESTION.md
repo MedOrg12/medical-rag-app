@@ -99,7 +99,8 @@ prints the SSH target, forwarded port, and the relevant log path:
 - `RAG_OLLAMA_LOCAL_PORT`: local forwarded Ollama port. Defaults to `11434`.
 - `RAG_OLLAMA_REMOTE_HOST`: host visible from the SSH server. Defaults to `127.0.0.1`.
 - `RAG_OLLAMA_REMOTE_PORT`: remote Ollama port. Defaults to `11434`.
-- `RAG_PDF_WORKERS`: PDF extraction workers. Defaults to `SLURM_CPUS_PER_TASK`.
+- `RAG_PDF_WORKERS`: parallelism for hashing files during discovery, PDF extraction and
+  chunking. Defaults to `SLURM_CPUS_PER_TASK`.
 - `RAG_EMBED_BATCH_SIZE`: chunks per embedding call and per Qdrant reuse lookup. Defaults to
   `256` in the job. The GPU still encodes in `RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE`
   mini-batches.
