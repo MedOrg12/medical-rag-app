@@ -20,6 +20,7 @@ This project follows Semantic Versioning for the application release number:
 - Health metadata for active embedding model, Ollama/API availability, and embedding fallback state.
 - Qdrant vector store backend (`RAG_VECTOR_STORE=qdrant`) with idempotent upserts into an existing collection, stale-point cleanup, and vector-config validation.
 - Slurm ingestion job (`scripts/slurm_ingest_qdrant.sbatch`) that embeds on a GPU node with sentence-transformers and writes to Qdrant over an SSH tunnel, with GPU and timing diagnostics.
+- Standalone GPU embedding service (`embedder` compose profile) and a `remote` embedding backend so the API host never loads torch.
 - `RAG_QDRANT_TIMEOUT_SECONDS`, `QDRANT_DATA_DIR`, and `QDRANT_WAL_CAPACITY_MB` for slow-disk Qdrant hosts.
 
 ### Changed
@@ -31,6 +32,7 @@ This project follows Semantic Versioning for the application release number:
 - Live pytest evals now require `RUN_LIVE_EVAL=1`, while eval data validation still runs normally.
 - `RAG_QDRANT_RECREATE_COLLECTION` now defaults to `false`; ingestion writes into the existing collection.
 - The Slurm job keeps its scratch directory on shared storage (`$PROJECT_DIR/.rag-slurm`) instead of `SLURM_TMPDIR`, so the manifest and extracted-text cache survive between jobs.
+- `/health` reports `active_embedding_model` as `null` with an `embedding_model_error` when the embedding service is unreachable, and `index_exists` as `null` with a `vector_store_error` when Qdrant is unreachable, instead of failing.
 - An unreachable Qdrant is now reported as an error rather than as a missing collection, so container startup no longer launches a full ingestion when the vector store is down.
 - `RAG_AUTO_INGEST_ON_STARTUP` is configurable in compose for query-only hosts.
 

@@ -62,7 +62,7 @@ prints the SSH target, forwarded port, and the relevant log path:
 - `RAG_QDRANT_TIMEOUT_SECONDS`: Qdrant request timeout. Defaults to `120` because collection
   creation on the shared Qdrant host has been measured at 5-10 seconds, above the 5 second
   qdrant-client default.
-- `RAG_EMBEDDING_BACKEND`: default `sentence-transformers`.
+- `RAG_EMBEDDING_BACKEND`: default `sentence-transformers`; use `remote` on API hosts that query through the embedding service.
 - `RAG_SENTENCE_TRANSFORMERS_MODEL`: default `BAAI/bge-base-en-v1.5`.
 - `RAG_SENTENCE_TRANSFORMERS_DEVICE`: default `cuda`.
 - `RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE`: default `64`.
@@ -76,9 +76,25 @@ prints the SSH target, forwarded port, and the relevant log path:
 
 ## After Ingestion
 
-Point the API service at the same collection with `RAG_VECTOR_STORE=qdrant`,
-`RAG_QDRANT_URL`, and `RAG_QDRANT_COLLECTION`, then start the app and run the eval suite
-against the live server.
+Point the API service at the same collection and a remote embedding service. Queries must
+be embedded with the same model the job used, because search filters points by
+`embedding_model`; a mismatch returns no results.
+
+```bash
+export RAG_VECTOR_STORE=qdrant
+export RAG_QDRANT_URL=http://<qdrant-host>:6333
+export RAG_QDRANT_COLLECTION=stroke_chunks
+export RAG_EMBEDDING_BACKEND=remote
+export RAG_EMBEDDING_SERVICE_URL=http://<gpu-host>:8100
+export RAG_EMBEDDING_SERVICE_EXPECTED_MODEL=sentence-transformers:BAAI/bge-base-en-v1.5
+export RAG_AUTO_INGEST_ON_STARTUP=false
+```
+
+Keep `RAG_AUTO_INGEST_ON_STARTUP=false` and avoid the `/ingest` endpoint on the API host.
+Ingesting from the API host with a different embedding backend would overwrite the
+Slurm-built points in place, since point ids derive from chunk content.
+
+Then start the app and run the eval suite against the live server.
 
 If the web app still appears to use the old JSON index, check `/health`. It should report
 `"vector_store_backend": "qdrant"` and the expected `qdrant_collection`. If it reports
