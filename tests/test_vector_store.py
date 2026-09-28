@@ -180,6 +180,7 @@ def _qdrant_settings(tmp_path, **overrides) -> Settings:
             "vector_store_backend": "qdrant",
             "qdrant_url": "http://qdrant.test:6333",
             "embedding_batch_size": 2,
+            "qdrant_batch_size": 2,
             **overrides,
         },
     )
@@ -241,6 +242,74 @@ def test_qdrant_ingest_streams_in_batches_and_reports_counts(monkeypatch, tmp_pa
     assert store.chunk_count() == 5
     stored = _FakeQdrantClient.existing["points"]
     assert all("text_sha256" in point.payload for point in stored.values())
+
+
+def test_qdrant_upsert_size_is_independent_of_the_embedding_batch(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(monkeypatch)
+    model = _CountingModel()
+
+    _, stats = _ingest(
+        _qdrant_settings(tmp_path, embedding_batch_size=2, qdrant_batch_size=3), _many_chunks(7), model
+    )
+
+    upserts = [kwargs for name, kwargs in _calls() if name == "upsert"]
+    assert [len(call["points"]) for call in upserts] == [3, 3, 1]
+    assert stats.upsert_requests == 3
+    assert len(model.embedded) == 7
+
+
+def test_qdrant_upserts_are_split_to_stay_under_the_request_size_limit(
+    monkeypatch, tmp_path
+) -> None:
+    import json
+
+    from medical_rag.vector_store import _estimated_request_bytes
+
+    _use_fake_qdrant(monkeypatch)
+    settings = _qdrant_settings(
+        tmp_path, embedding_batch_size=10, qdrant_batch_size=100, qdrant_max_request_mb=0.001
+    )
+
+    _ingest(settings, _many_chunks(10))
+
+    limit = int(0.001 * 1024 * 1024)
+    upserts = [kwargs for name, kwargs in _calls() if name == "upsert"]
+    assert len(upserts) > 1
+    assert sum(len(call["points"]) for call in upserts) == 10
+    for call in upserts:
+        estimated = sum(_estimated_request_bytes(p.payload, 8) for p in call["points"])
+        actual = len(json.dumps([{"id": p.id, "vector": p.vector, "payload": p.payload} for p in call["points"]]))
+        assert estimated <= limit or len(call["points"]) == 1
+        assert actual <= estimated
+
+
+def test_qdrant_ingest_phases_account_for_all_of_the_loop_time(monkeypatch, tmp_path) -> None:
+    import time
+
+    _use_fake_qdrant(monkeypatch)
+
+    class _SlowModel(_CountingModel):
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            time.sleep(0.01)
+            return super().embed(texts)
+
+    started = time.perf_counter()
+    _, stats = _ingest(_qdrant_settings(tmp_path), _many_chunks(10), _SlowModel())
+    wall = time.perf_counter() - started
+
+    phases = (
+        stats.setup_seconds
+        + stats.lookup_seconds
+        + stats.embedding_seconds
+        + stats.point_build_seconds
+        + stats.write_wait_seconds
+        + stats.cleanup_seconds
+    )
+    assert stats.total_seconds == pytest.approx(phases)
+    assert stats.write_seconds == pytest.approx(phases - stats.lookup_seconds - stats.embedding_seconds)
+    assert stats.embedding_seconds >= 0.05
+    assert 0.9 * wall <= stats.total_seconds <= wall
+    assert stats.upsert_requests == 5 and stats.upsert_busy_seconds > 0
 
 
 def test_qdrant_ingest_only_waits_on_the_final_upsert(monkeypatch, tmp_path) -> None:
@@ -359,7 +428,9 @@ def test_qdrant_ingest_pauses_indexing_during_a_large_load_and_restores_it(
         monkeypatch, existing={"vectors": {"dense": 8}, "points": {}, "indexing_threshold": 1}
     )
 
-    _ingest(_qdrant_settings(tmp_path, embedding_batch_size=10), _many_chunks())
+    _ingest(
+        _qdrant_settings(tmp_path, embedding_batch_size=10, qdrant_batch_size=10), _many_chunks()
+    )
 
     names = _call_names()
     update_indexes = [i for i, name in enumerate(names) if name == "update_collection"]
@@ -390,7 +461,10 @@ def test_qdrant_ingest_restores_indexing_when_a_write_fails(monkeypatch, tmp_pat
     monkeypatch.setattr(_FakeQdrantClient, "upsert", failing_upsert)
 
     with pytest.raises(ConnectionError):
-        _ingest(_qdrant_settings(tmp_path, embedding_batch_size=10), _many_chunks())
+        _ingest(
+            _qdrant_settings(tmp_path, embedding_batch_size=10, qdrant_batch_size=10),
+            _many_chunks(),
+        )
 
     assert _indexing_thresholds() == [0, 1]
 

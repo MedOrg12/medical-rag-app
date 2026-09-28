@@ -164,7 +164,11 @@ export RAG_VECTOR_STORE="${RAG_VECTOR_STORE:-qdrant}"
 export RAG_QDRANT_URL="${RAG_QDRANT_URL:?Set RAG_QDRANT_URL to the shared Qdrant endpoint}"
 export RAG_QDRANT_COLLECTION="${RAG_QDRANT_COLLECTION:-stroke_chunks}"
 export RAG_QDRANT_DENSE_VECTOR_NAME="${RAG_QDRANT_DENSE_VECTOR_NAME:-dense}"
-export RAG_QDRANT_BATCH_SIZE="${RAG_QDRANT_BATCH_SIZE:-128}"
+# Points per upsert request. Larger requests were much faster against the shared host;
+# requests are also cut to stay under RAG_QDRANT_MAX_REQUEST_MB, which must not exceed the
+# server's service.max_request_size_mb (Qdrant's default is 32).
+export RAG_QDRANT_BATCH_SIZE="${RAG_QDRANT_BATCH_SIZE:-1024}"
+export RAG_QDRANT_MAX_REQUEST_MB="${RAG_QDRANT_MAX_REQUEST_MB:-32}"
 export RAG_QDRANT_RECREATE_COLLECTION="${RAG_QDRANT_RECREATE_COLLECTION:-false}"
 # Collection create/delete on the shared Qdrant host can take well over the 5s client default.
 export RAG_QDRANT_TIMEOUT_SECONDS="${RAG_QDRANT_TIMEOUT_SECONDS:-120}"
@@ -197,9 +201,8 @@ if [ "$RAG_EMBEDDING_BACKEND" = "ollama" ] && [ -z "${RAG_OLLAMA_BASE_URL:-}" ];
 fi
 export RAG_OLLAMA_EMBEDDING_MODEL="${RAG_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
 export RAG_PDF_WORKERS="${RAG_PDF_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}"
-# Chunks per ingest batch, and so per Qdrant reuse lookup and upsert. The GPU still encodes
-# in RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE mini-batches; larger ingest batches mainly cut
-# round trips through the tunnel.
+# Chunks per embedding call and per Qdrant reuse lookup. The GPU still encodes in
+# RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE mini-batches. Upsert size is RAG_QDRANT_BATCH_SIZE.
 export RAG_EMBED_BATCH_SIZE="${RAG_EMBED_BATCH_SIZE:-256}"
 
 if [ "$RAG_EMBEDDING_BACKEND" = "sentence-transformers" ]; then
