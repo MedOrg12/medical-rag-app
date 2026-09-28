@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 
 from medical_rag.chunking import chunk_pages
@@ -9,6 +11,7 @@ from medical_rag.config import Settings
 from medical_rag.documents import load_documents
 from medical_rag.embeddings import EmbeddingModel, make_embedding_model
 from medical_rag.ingestion import (
+    ExtractedDocument,
     IngestionOptions,
     ManifestStore,
     discover_source_files,
@@ -110,7 +113,8 @@ class StrokeRAG:
 
         timings: dict[str, float] = {}
         started = time.perf_counter()
-        files = discover_source_files(source)
+        workers = pdf_workers or self.settings.pdf_workers
+        files = discover_source_files(source, workers=workers)
         timings["discovery_seconds"] = round(time.perf_counter() - started, 4)
 
         if not files:
@@ -182,7 +186,7 @@ class StrokeRAG:
                 resume=resume,
                 failed_only=failed_only,
                 ocr_scanned=ocr_scanned,
-                pdf_workers=pdf_workers or self.settings.pdf_workers,
+                pdf_workers=workers,
             ),
         )
         timings["extraction_seconds"] = round(time.perf_counter() - extraction_start, 4)
@@ -193,23 +197,13 @@ class StrokeRAG:
         chunk_start = time.perf_counter()
         chunks_by_path: dict[str, list[Chunk]] = {}
         chunks: list[Chunk] = []
-        for document in documents:
-            document_chunks = chunk_pages(
-                document.pages,
-                chunk_size_chars=self.settings.chunk_size_chars,
-                chunk_overlap_chars=self.settings.chunk_overlap_chars,
-            )
-            for chunk in document_chunks:
-                chunk.metadata.update(
-                    {
-                        "source_hash": document.source.sha256,
-                        "source_size": document.source.size,
-                        "source_mtime_ns": document.source.mtime_ns,
-                        "parser_version": "pymupdf-sorted-text-v1",
-                        "chunk_size_chars": self.settings.chunk_size_chars,
-                        "chunk_overlap_chars": self.settings.chunk_overlap_chars,
-                    }
-                )
+        chunked = _chunk_documents(
+            documents,
+            chunk_size_chars=self.settings.chunk_size_chars,
+            chunk_overlap_chars=self.settings.chunk_overlap_chars,
+            workers=workers,
+        )
+        for document, document_chunks in zip(documents, chunked, strict=True):
             chunks_by_path[str(document.source.path)] = document_chunks
             chunks.extend(document_chunks)
         timings["chunking_seconds"] = round(time.perf_counter() - chunk_start, 4)
@@ -334,6 +328,45 @@ class StrokeRAG:
             raise FileNotFoundError(f"{location}. Run ingestion first.")
         self._store = load_vector_store(self.settings)
         return self._store
+
+
+def _chunk_documents(
+    documents: list[ExtractedDocument],
+    chunk_size_chars: int,
+    chunk_overlap_chars: int,
+    workers: int,
+) -> list[list[Chunk]]:
+    """Chunk each document, in document order. Chunk ids depend only on their own document,
+    so chunking documents in parallel processes gives exactly the sequential result."""
+    chunk = partial(
+        _chunk_document, chunk_size_chars=chunk_size_chars, chunk_overlap_chars=chunk_overlap_chars
+    )
+    if workers <= 1 or len(documents) < 2:
+        return [chunk(document) for document in documents]
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(chunk, documents, chunksize=max(1, len(documents) // (workers * 4))))
+
+
+def _chunk_document(
+    document: ExtractedDocument, chunk_size_chars: int, chunk_overlap_chars: int
+) -> list[Chunk]:
+    chunks = chunk_pages(
+        document.pages,
+        chunk_size_chars=chunk_size_chars,
+        chunk_overlap_chars=chunk_overlap_chars,
+    )
+    for chunk in chunks:
+        chunk.metadata.update(
+            {
+                "source_hash": document.source.sha256,
+                "source_size": document.source.size,
+                "source_mtime_ns": document.source.mtime_ns,
+                "parser_version": "pymupdf-sorted-text-v1",
+                "chunk_size_chars": chunk_size_chars,
+                "chunk_overlap_chars": chunk_overlap_chars,
+            }
+        )
+    return chunks
 
 
 def _vector_store_stats(stats: IngestStats) -> dict[str, float | int]:
