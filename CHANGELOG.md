@@ -41,6 +41,7 @@ This project follows Semantic Versioning for the application release number:
 - `/health` reports `active_embedding_model` as `null` with an `embedding_model_error` when the embedding service is unreachable, and `index_exists` as `null` with a `vector_store_error` when Qdrant is unreachable, instead of failing.
 - An unreachable Qdrant is now reported as an error rather than as a missing collection, so container startup no longer launches a full ingestion when the vector store is down.
 - `RAG_AUTO_INGEST_ON_STARTUP` is configurable in compose for query-only hosts.
+- Qdrant ingestion writes each batch on a background thread with `wait=False` while the next batch is embedded, then waits on the final upsert and checks the collection's point count, failing the run if any asynchronous write did not land. `index_write_seconds` now reports only write time not hidden behind embedding.
 
 ## [0.1.0] - 2026-08-10
 
