@@ -59,6 +59,65 @@ def test_settings_accept_sentence_transformers_environment(monkeypatch, tmp_path
     assert settings.sentence_transformers_batch_size == 32
 
 
+def test_settings_accept_remote_embedding_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_URL", "http://gpu-host:8100")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_TIMEOUT_SECONDS", "15.5")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_TOKEN", "secret")
+    monkeypatch.setenv(
+        "RAG_EMBEDDING_SERVICE_EXPECTED_MODEL",
+        "sentence-transformers:BAAI/bge-base-en-v1.5",
+    )
+    monkeypatch.setenv("RAG_REMOTE_EMBED_BATCH_SIZE", "17")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE", "128")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_MAX_TEXT_CHARS", "9000")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.embedding_service_url == "http://gpu-host:8100"
+    assert settings.embedding_service_timeout_seconds == 15.5
+    assert settings.embedding_service_token == "secret"
+    assert (
+        settings.embedding_service_expected_model
+        == "sentence-transformers:BAAI/bge-base-en-v1.5"
+    )
+    assert settings.remote_embed_batch_size == 17
+    assert settings.embedding_service_max_batch_size == 128
+    assert settings.embedding_service_max_text_chars == 9000
+
+    with_paths = settings.with_paths()
+    with_ingestion_options = settings.with_ingestion_options()
+    for copied in (with_paths, with_ingestion_options):
+        assert copied.embedding_service_url == settings.embedding_service_url
+        assert (
+            copied.embedding_service_timeout_seconds
+            == settings.embedding_service_timeout_seconds
+        )
+        assert copied.embedding_service_token == settings.embedding_service_token
+        assert (
+            copied.embedding_service_expected_model
+            == settings.embedding_service_expected_model
+        )
+        assert copied.remote_embed_batch_size == settings.remote_embed_batch_size
+        assert (
+            copied.embedding_service_max_batch_size
+            == settings.embedding_service_max_batch_size
+        )
+        assert (
+            copied.embedding_service_max_text_chars
+            == settings.embedding_service_max_text_chars
+        )
+
+
+def test_settings_empty_remote_embedding_token_values_become_none(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_TOKEN", "")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_EXPECTED_MODEL", "")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.embedding_service_token is None
+    assert settings.embedding_service_expected_model is None
+
+
 def test_settings_accept_qdrant_timeout_environment(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("RAG_QDRANT_TIMEOUT_SECONDS", "45.5")
 

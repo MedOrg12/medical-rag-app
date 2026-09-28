@@ -7,7 +7,7 @@ Clean stroke-focused retrieval-augmented generation system. The previous reposit
 - PDF, Markdown, and text ingestion
 - Page-aware chunking with stable chunk IDs
 - Local deterministic vector retrieval with no external service required
-- Optional Ollama, OpenAI-compatible API, or sentence-transformers embeddings
+- Optional Ollama, OpenAI-compatible API, sentence-transformers, or remote-service embeddings
 - Optional Ollama or OpenAI-compatible API chat generation
 - JSON vector index stored at `.rag/index.json`, or a Qdrant collection (`RAG_VECTOR_STORE=qdrant`)
 - FastAPI API and a browser RAG workbench
@@ -283,11 +283,18 @@ Environment variables:
 - `RAG_MANIFEST_PATH`: default `.rag/manifest.sqlite`
 - `RAG_EXTRACTION_CACHE_DIR`: default `.rag/extracted`
 - `RAG_EMBEDDING_CACHE_PATH`: default `.rag/embedding_cache.json`
-- `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, `api`, or `sentence-transformers`
+- `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, `api`, `sentence-transformers`, or `remote`
 - `RAG_GENERATION_BACKEND`: `extractive`, `ollama`, or `api`
 - `RAG_SENTENCE_TRANSFORMERS_MODEL`: default `BAAI/bge-base-en-v1.5`
 - `RAG_SENTENCE_TRANSFORMERS_DEVICE`: default `auto`; use `cuda` on GPU nodes
 - `RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE`: default `64`
+- `RAG_EMBEDDING_SERVICE_URL`: default `http://localhost:8100`
+- `RAG_EMBEDDING_SERVICE_TIMEOUT_SECONDS`: default `60`
+- `RAG_EMBEDDING_SERVICE_TOKEN`: optional bearer token for `/embed`
+- `RAG_EMBEDDING_SERVICE_EXPECTED_MODEL`: optional exact model name guard, for example `sentence-transformers:BAAI/bge-base-en-v1.5`
+- `RAG_REMOTE_EMBED_BATCH_SIZE`: default `64`
+- `RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE`: default `256`; server-side request limit
+- `RAG_EMBEDDING_SERVICE_MAX_TEXT_CHARS`: default `20000`; server-side request limit
 - `RAG_ANSWER_MODE`: `patient` or `clinician`
 - `RAG_OLLAMA_BASE_URL`: default `http://localhost:11434`
 - `RAG_OLLAMA_EMBEDDING_MODEL`: default `nomic-embed-text`
@@ -443,6 +450,7 @@ The `RAG_EMBEDDING_BACKEND` setting controls how chunks are embedded:
 | `ollama` | Always use Ollama semantic embeddings (requires Ollama running) |
 | `api` | Always use hosted OpenAI-compatible embeddings (requires `RAG_API_KEY`) |
 | `sentence-transformers` | Use a local sentence-transformers model, usually with CUDA on an HPC/GPU node |
+| `remote` | Use the standalone embedding service over HTTP |
 | `hash` | Bag-of-words hashing — fast, no network, non-semantic |
 
 Recommended Ollama embedding models:
@@ -488,6 +496,28 @@ RAG_EMBEDDING_BACKEND=ollama \
 RAG_FORCE_REINGEST=true \
 docker compose up -d --build medical-rag
 ```
+
+### Remote embedding service
+
+`remote` and `api` are both network backends but serve different purposes. `api` talks to a hosted
+OpenAI-compatible provider using its own model catalogue. `remote` talks to this project's own
+`embedder` service, which runs the same sentence-transformers model that Slurm ingestion used, so
+query vectors are guaranteed to match the collection.
+
+On the GPU host, start the embedding service:
+
+```bash
+docker compose --profile embedder up -d embedder
+```
+
+On the API host, point the app at that service:
+
+```bash
+export RAG_EMBEDDING_BACKEND=remote
+export RAG_EMBEDDING_SERVICE_URL=http://<gpu-host>:8100
+```
+
+The remote service's model name must match the model used for ingestion. With Qdrant, points are filtered by the exact `embedding_model` payload, so a model-name mismatch returns no results.
 
 The `RAG_HYBRID_ALPHA`, `RAG_MIN_RELEVANCE_SCORE`, and `RAG_RERANKER_BACKEND` settings control retrieval quality:
 
