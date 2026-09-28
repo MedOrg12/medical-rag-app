@@ -84,3 +84,12 @@ If the web app still appears to use the old JSON index, check `/health`. It shou
 `"vector_store_backend": "qdrant"` and the expected `qdrant_collection`. If it reports
 `json`, restart the app with `RAG_VECTOR_STORE=qdrant` and point `RAG_QDRANT_URL` at the
 same Qdrant service used by the Slurm job.
+
+## Job Duration Varies by Node
+
+The embedding phase includes importing torch, transformers, and sentence-transformers from
+the project virtual environment on the first model call. Those imports touch thousands of
+files and can take anywhere from a few seconds to a few minutes depending on how warm the
+network filesystem is on the assigned compute node. The `.err` log reports the import and
+model load times separately from encoding. The GPU work itself for ~1,700 chunks is about
+five seconds on an H100.
