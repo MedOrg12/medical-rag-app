@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -176,6 +177,75 @@ class ApiEmbeddingModel(EmbeddingModel):
 
 
 @dataclass
+class SentenceTransformersEmbeddingModel(EmbeddingModel):
+    model_name: str
+    device: str = "auto"
+    batch_size: int = 64
+    _model: object | None = field(default=None, init=False, repr=False)
+
+    @property
+    def name(self) -> str:
+        return f"sentence-transformers:{self.model_name}"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        model = self._load_model()
+        started = time.perf_counter()
+        vectors = model.encode(
+            texts,
+            batch_size=max(1, self.batch_size),
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        encoded = time.perf_counter()
+        result = vectors.tolist()
+        print(
+            f"sentence-transformers: encoded {len(texts)} texts "
+            f"(max {max(len(t) for t in texts)} chars) in {encoded - started:.2f}s, "
+            f"converted in {time.perf_counter() - encoded:.2f}s",
+            file=sys.stderr,
+        )
+        return result
+
+    def _load_model(self):
+        if self._model is not None:
+            return self._model
+        # Importing sentence-transformers pulls in torch and transformers, thousands of files.
+        # On network filesystems this alone can take minutes, so time it separately.
+        import_started = time.perf_counter()
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise RuntimeError(
+                "sentence-transformers is required for "
+                "RAG_EMBEDDING_BACKEND=sentence-transformers"
+            ) from exc
+
+        device = None if self.device == "auto" else self.device
+        if device is not None and device.startswith("cuda"):
+            import torch
+
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    f"RAG_SENTENCE_TRANSFORMERS_DEVICE={device!r} but torch {torch.__version__} "
+                    f"reports no usable CUDA device (torch.version.cuda={torch.version.cuda!r}). "
+                    "Check that the job has a GPU allocated and that the CUDA runtime is on the "
+                    "library path, or set RAG_SENTENCE_TRANSFORMERS_DEVICE=cpu explicitly."
+                )
+        started = time.perf_counter()
+        self._model = SentenceTransformer(self.model_name, device=device)
+        print(
+            f"sentence-transformers: imported libraries in {started - import_started:.1f}s, "
+            f"loaded {self.model_name} on device {self._model.device} in "
+            f"{time.perf_counter() - started:.1f}s",
+            file=sys.stderr,
+        )
+        return self._model
+
+
+@dataclass
 class CachedEmbeddingModel(EmbeddingModel):
     """Transparent disk-backed cache wrapping any EmbeddingModel.
 
@@ -319,6 +389,12 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
             model=settings.api_embedding_model,
             timeout_seconds=settings.request_timeout_seconds,
             max_retries=settings.api_max_retries,
+        )
+    elif backend in {"sentence-transformers", "sentence_transformers", "st"}:
+        inner = SentenceTransformersEmbeddingModel(
+            model_name=settings.sentence_transformers_model,
+            device=settings.sentence_transformers_device,
+            batch_size=settings.sentence_transformers_batch_size,
         )
     else:
         raise ValueError(f"Unsupported embedding backend: {backend!r}")
