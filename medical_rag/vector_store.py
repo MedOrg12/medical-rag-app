@@ -479,13 +479,29 @@ class QdrantVectorStore:
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="qdrant-upsert") as writer:
                 pending: deque[Future[Any]] = deque()
 
-                def upsert(points: list[Any], wait: bool) -> None:
+                point_model = _qdrant_models().PointStruct
+                vector_name = settings.qdrant_dense_vector_name
+
+                def upsert(points: list[tuple[str, list[float], dict[str, Any]]], wait: bool) -> None:
                     started = time.perf_counter()
-                    upsert_client.upsert(collection_name=collection, points=points, wait=wait)
+                    # Building the point models validates every float, so it runs here, off
+                    # the embedding loop, where it overlaps GPU time.
+                    upsert_client.upsert(
+                        collection_name=collection,
+                        points=[
+                            point_model(id=point_id, vector={vector_name: vector}, payload=payload)
+                            for point_id, vector, payload in points
+                        ],
+                        wait=wait,
+                    )
                     # Only this single writer thread updates it.
                     stats.upsert_busy_seconds += time.perf_counter() - started
 
-                def send(points: list[Any], request_bytes: int, final: bool = False) -> None:
+                def send(
+                    points: list[tuple[str, list[float], dict[str, Any]]],
+                    request_bytes: int,
+                    final: bool = False,
+                ) -> None:
                     while len(pending) >= _MAX_PENDING_UPSERTS:
                         pending.popleft().result()
                     stats.upsert_requests += 1
@@ -493,7 +509,7 @@ class QdrantVectorStore:
                     wait = final or stats.upsert_requests % _UPSERTS_PER_WAIT == 0
                     pending.append(writer.submit(upsert, points, wait))
 
-                buffered: list[Any] = []
+                buffered: list[tuple[str, list[float], dict[str, Any]]] = []
                 buffered_bytes = 0
                 for start in range(0, len(chunks), batch_size):
                     timer.enter("lookup")
@@ -539,14 +555,9 @@ class QdrantVectorStore:
                         restore_indexing_threshold = threshold_kb
 
                     timer.enter("point_build")
-                    for (_, chunk), vector in zip(missing, vectors, strict=True):
-                        point = _qdrant_point(
-                            settings=settings,
-                            chunk=chunk,
-                            dense_vector=vector,
-                            embedding_model=embedding_model.name,
-                        )
-                        point_bytes = _estimated_request_bytes(point.payload, len(vector))
+                    for (point_id, chunk), vector in zip(missing, vectors, strict=True):
+                        payload = _qdrant_payload(chunk, embedding_model.name)
+                        point_bytes = _estimated_request_bytes(payload, len(vector))
                         # Requests are only cut when the next point does not fit, so the
                         # buffer is never empty at the end and the last upsert can wait.
                         if buffered and (
@@ -557,7 +568,7 @@ class QdrantVectorStore:
                             send(buffered, buffered_bytes)
                             timer.enter("point_build")
                             buffered, buffered_bytes = [], 0
-                        buffered.append(point)
+                        buffered.append((point_id, vector, payload))
                         buffered_bytes += point_bytes
 
                 timer.enter("write_wait")
@@ -568,7 +579,10 @@ class QdrantVectorStore:
 
             timer.enter("cleanup")
             if collection_ready:
-                stats.stale_points_removed = store._delete_stale_points(client, current_ids)
+                # A collection this run created only holds this run's points, so scrolling
+                # through all of them for stale ones would find nothing.
+                if can_reuse:
+                    stats.stale_points_removed = store._delete_stale_points(client, current_ids)
                 stored = store.chunk_count()
                 if stored != len(current_ids):
                     raise RuntimeError(
@@ -770,23 +784,16 @@ def _qdrant_models() -> Any:
     return models
 
 
-def _qdrant_point(
-    settings: Settings, chunk: Chunk, dense_vector: list[float], embedding_model: str
-) -> Any:
-    models = _qdrant_models()
-    return models.PointStruct(
-        id=_point_id(chunk.id),
-        vector={settings.qdrant_dense_vector_name: dense_vector},
-        payload={
-            "chunk_id": chunk.id,
-            "text": chunk.text,
-            # Chunk ids only hash the first 120 characters of text, so the full-text hash is
-            # what lets ingestion tell "unchanged" from "changed past the id prefix".
-            "text_sha256": _text_sha256(chunk.text),
-            "metadata": chunk.metadata,
-            "embedding_model": embedding_model,
-        },
-    )
+def _qdrant_payload(chunk: Chunk, embedding_model: str) -> dict[str, Any]:
+    return {
+        "chunk_id": chunk.id,
+        "text": chunk.text,
+        # Chunk ids only hash the first 120 characters of text, so the full-text hash is
+        # what lets ingestion tell "unchanged" from "changed past the id prefix".
+        "text_sha256": _text_sha256(chunk.text),
+        "metadata": chunk.metadata,
+        "embedding_model": embedding_model,
+    }
 
 
 def _estimated_request_bytes(payload: dict[str, Any], dimensions: int) -> int:
