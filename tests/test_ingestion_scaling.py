@@ -27,6 +27,8 @@ def test_ingest_skips_unchanged_corpus_after_first_index(tmp_path) -> None:
     second = rag.ingest()
 
     assert first.skipped_unchanged is False
+    assert "manifest_seconds" in first.timings
+    assert first.timings["total_seconds"] >= first.timings["manifest_seconds"]
     assert second.skipped_unchanged is True
     assert second.files_changed == 0
     assert second.chunks == first.chunks

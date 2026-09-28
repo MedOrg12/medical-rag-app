@@ -116,6 +116,7 @@ class StrokeRAG:
         if not files:
             raise ValueError(f"No supported source files were found under {source}")
 
+        manifest_start = time.perf_counter()
         manifest = ManifestStore(self.settings.manifest_path)
         current_paths = {str(file.path) for file in files}
         deleted_paths = manifest.deleted_paths(current_paths)
@@ -134,6 +135,8 @@ class StrokeRAG:
             force=force or not resume,
             failed_only=failed_only,
         )
+        # Manifest time before extraction; the updates after indexing are added below.
+        manifest_seconds = time.perf_counter() - manifest_start
 
         # A requested collection rebuild must reach the vector store even when no file changed.
         rebuild_requested = (
@@ -146,6 +149,7 @@ class StrokeRAG:
             and vector_store_exists(self.settings)
         ):
             store = load_vector_store(self.settings)
+            timings["manifest_seconds"] = round(manifest_seconds, 4)
             total_seconds = round(time.perf_counter() - started, 4)
             timings["total_seconds"] = total_seconds
             return IngestionReport(
@@ -217,9 +221,9 @@ class StrokeRAG:
         timings["reuse_lookup_seconds"] = round(stats.lookup_seconds, 4)
         timings["embedding_seconds"] = round(stats.embedding_seconds, 4)
         timings["index_write_seconds"] = round(stats.write_seconds, 4)
-        timings["total_seconds"] = round(time.perf_counter() - started, 4)
         self._store = store
 
+        manifest_start = time.perf_counter()
         documents_by_path = {str(document.source.path): document for document in documents}
         for file in unique_files:
             if str(file.path) in failures:
@@ -236,6 +240,9 @@ class StrokeRAG:
                 embedding_model=self.embedding_model.name,
                 scanned_pages=document.scanned_pages,
             )
+        manifest_seconds += time.perf_counter() - manifest_start
+        timings["manifest_seconds"] = round(manifest_seconds, 4)
+        timings["total_seconds"] = round(time.perf_counter() - started, 4)
 
         return IngestionReport(
             source_path=str(source),
