@@ -61,6 +61,10 @@ prints the SSH target, forwarded port, and the relevant log path:
   points already hold a vector for the identical text and model, and only embeds the rest, so
   re-running over an unchanged corpus does no GPU work. The ingestion report shows
   `chunks_embedded` and `chunks_reused`.
+- Writes overlap embedding: each batch is upserted with `wait=False` on a background thread
+  while the GPU embeds the next one, with at most two upserts outstanding. The final upsert
+  waits, and the job then checks that the collection's point count matches the corpus, so a
+  write Qdrant acknowledged but failed to apply fails the job instead of leaving gaps.
 - `HF_HOME`: Hugging Face model cache. Defaults to `$PROJECT_DIR/.hf-cache` so the embedding
   model is downloaded once and reused by later jobs.
 - `RAG_QDRANT_TIMEOUT_SECONDS`: Qdrant request timeout. Defaults to `120` because collection

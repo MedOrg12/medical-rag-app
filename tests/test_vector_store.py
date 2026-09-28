@@ -220,6 +220,78 @@ def test_qdrant_ingest_streams_in_batches_and_reports_counts(monkeypatch, tmp_pa
     assert all("text_sha256" in point.payload for point in stored.values())
 
 
+def test_qdrant_ingest_only_waits_on_the_final_upsert(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(monkeypatch)
+    chunks = [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(5)]
+
+    _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks)
+
+    upserts = [kwargs for name, kwargs in _calls() if name == "upsert"]
+    assert [call["wait"] for call in upserts] == [False, False, True]
+
+
+def test_qdrant_ingest_embeds_next_batch_while_previous_upsert_is_in_flight(
+    monkeypatch, tmp_path
+) -> None:
+    import threading
+
+    _use_fake_qdrant(monkeypatch)
+    first_upsert_started = threading.Event()
+    release_upserts = threading.Event()
+    embedded_during_upsert: list[str] = []
+    original_upsert = _FakeQdrantClient.upsert
+
+    def slow_upsert(self, **kwargs) -> None:
+        first_upsert_started.set()
+        assert release_upserts.wait(timeout=5), "embedding never overlapped the upsert"
+        original_upsert(self, **kwargs)
+
+    class _OverlapModel(_CountingModel):
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            if first_upsert_started.is_set():
+                embedded_during_upsert.extend(texts)
+                release_upserts.set()
+            return super().embed(texts)
+
+    monkeypatch.setattr(_FakeQdrantClient, "upsert", slow_upsert)
+    chunks = [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(6)]
+
+    _, stats = _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks, _OverlapModel())
+
+    assert embedded_during_upsert == ["chunk 4", "chunk 5"]
+    assert stats.chunks_embedded == 6
+    assert len(_FakeQdrantClient.existing["points"]) == 6
+
+
+def test_qdrant_ingest_surfaces_background_upsert_failures(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(monkeypatch)
+
+    def failing_upsert(self, **kwargs) -> None:
+        raise ConnectionError("qdrant went away")
+
+    monkeypatch.setattr(_FakeQdrantClient, "upsert", failing_upsert)
+    chunks = [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(5)]
+
+    with pytest.raises(ConnectionError, match="qdrant went away"):
+        _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks)
+
+
+def test_qdrant_ingest_fails_when_async_writes_did_not_land(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(monkeypatch)
+    original_upsert = _FakeQdrantClient.upsert
+
+    def lossy_upsert(self, **kwargs) -> None:
+        # Acknowledged but never applied, as a wait=False upsert can be on the server.
+        if kwargs["wait"]:
+            original_upsert(self, **kwargs)
+
+    monkeypatch.setattr(_FakeQdrantClient, "upsert", lossy_upsert)
+    chunks = [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(5)]
+
+    with pytest.raises(RuntimeError, match="holds 1 points after ingestion, expected 5"):
+        _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks)
+
+
 def test_qdrant_ingest_reuses_unchanged_points_and_removes_stale_ones(monkeypatch, tmp_path) -> None:
     from medical_rag.vector_store import _point_id
 
