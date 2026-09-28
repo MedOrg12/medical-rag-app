@@ -153,6 +153,8 @@ Tuning knobs:
 
 Keep embedding workers conservative with local Ollama. PDF parsing can be parallelized, but local model embedding usually benefits more from batching than from high concurrency.
 
+For GPU-cluster ingestion into Qdrant, see `docs/SLURM_INGESTION.md` and the Slurm template at `scripts/slurm_ingest_qdrant.sbatch`.
+
 ## API
 
 ```bash
