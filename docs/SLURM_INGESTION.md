@@ -112,6 +112,41 @@ phases that add up exactly: `setup`, `lookup` (reuse checks), `embedding`, `poin
 long the writer thread spent in upsert calls, so comparing it with `write_wait_seconds` shows
 how much write time overlapped embedding.
 
+## Benchmarking
+
+`scripts/bench_ingest.py` compares commits (or settings) on the cluster without copying job
+ids around. Run it from the login node in the repository:
+
+```bash
+scripts/bench_ingest.py submit --commit old=9a54a78 --commit new=HEAD \
+  --corpus ../stress-test-pdfs --repeats 2 \
+  --sweep RAG_QDRANT_BATCH_SIZE=256,1024 \
+  --env RAG_QDRANT_SSH_USER=fir_ssh_tunnel
+scripts/bench_ingest.py report      # latest run; re-run as jobs finish
+scripts/bench_ingest.py list
+```
+
+Each commit is checked out into `.bench/worktrees/`, and each job runs that commit's own
+ingest script through `scripts/bench_ingest_job.sbatch`, which:
+
+- uses a fresh collection and a fresh scratch directory, so no job reuses another's vectors or
+  parsed text,
+- waits until no Qdrant collection is being optimized before starting (up to
+  `BENCH_IDLE_TIMEOUT`, default 1800 s; the report flags jobs that started while it was busy),
+- snapshots Qdrant telemetry before and after, so the report shows server-side upsert time and
+  bytes written for the collection, separately from time spent in the tunnel and client,
+- deletes the collection afterwards so its background indexing cannot slow the next job.
+
+Jobs run one at a time (`afterany` chain) and alternate commit order between repeats, so a
+drift in the shared host's load affects both commits equally. `--dry-run` prints the plan;
+`--sbatch-arg=--time=06:00:00` passes extra sbatch options; `--env BENCH_PYSPY=true` records a
+py-spy profile per job as `profile.speedscope.json` (install `py-spy` into the venv first;
+`BENCH_PYSPY_RATE` sets samples per second, default 20 to keep multi-hour profiles small; open
+it at speedscope.app). Python reuses thread ids, so the upsert writer thread can show up under
+the name of qdrant-client's earlier `_check_compatibility` thread; `--runner local` runs the jobs
+on the current machine without Slurm. Note that commits before the upsert-size change use
+`RAG_QDRANT_BATCH_SIZE` as their upsert size too, but report timings in less detail.
+
 ## After Ingestion
 
 Point the API service at the same collection and a remote embedding service. Queries must

@@ -20,3 +20,6 @@ vector_db/
 *.log
 logs/
 .DS_Store
+
+# Benchmark runs and commit worktrees (scripts/bench_ingest.py)
+.bench/
