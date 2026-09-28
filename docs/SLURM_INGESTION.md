@@ -42,9 +42,9 @@ prints the SSH target, forwarded port, and the relevant log path:
 - `PYTHON_BIN`: Python executable used to create `VENV_DIR`. Defaults to `python3`.
 - `RAG_BOOTSTRAP_PYTHON_DEPS`: install Python dependencies inside the job. Defaults to `true`.
 - `RAG_CORPUS_DIR`: PDF/text corpus path.
-- `RAG_SCRATCH_DIR`: directory for the manifest, extracted-text cache, and embedding cache.
-  Defaults to `$PROJECT_DIR/.rag-slurm`. Keep it on shared storage rather than `SLURM_TMPDIR`,
-  which is wiped when the job ends; without it every run re-parses the whole corpus.
+- `RAG_SCRATCH_DIR`: directory for the manifest and extracted-text cache. Defaults to
+  `$PROJECT_DIR/.rag-slurm`. Keep it on shared storage rather than `SLURM_TMPDIR`, which is
+  wiped when the job ends; without it every run re-parses the whole corpus.
 - `RAG_QDRANT_URL`: shared Qdrant endpoint.
 - `RAG_QDRANT_SSH_TUNNEL`: open the Qdrant SSH tunnel. Defaults to `true`.
 - `RAG_QDRANT_SSH_HOST`: SSH host for the tunnel. Defaults to `134.87.8.87`.
@@ -57,6 +57,10 @@ prints the SSH target, forwarded port, and the relevant log path:
   collection and deletes stale points. Set `true` to drop and rebuild it; this is required when
   switching to an embedding model with a different dimension. The job refuses to write into a
   collection whose vector size or name does not match.
+- There is no separate embedding cache. Before embedding each batch the job asks Qdrant which
+  points already hold a vector for the identical text and model, and only embeds the rest, so
+  re-running over an unchanged corpus does no GPU work. The ingestion report shows
+  `chunks_embedded` and `chunks_reused`.
 - `HF_HOME`: Hugging Face model cache. Defaults to `$PROJECT_DIR/.hf-cache` so the embedding
   model is downloaded once and reused by later jobs.
 - `RAG_QDRANT_TIMEOUT_SECONDS`: Qdrant request timeout. Defaults to `120` because collection

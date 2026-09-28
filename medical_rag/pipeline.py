@@ -19,7 +19,7 @@ from medical_rag.reranker import Reranker, make_reranker
 from medical_rag.types import Chunk, Citation, IngestionReport, RagAnswer, SearchResult
 from medical_rag.vector_store import (
     VectorStoreBackend,
-    build_vector_store,
+    ingest_vector_store,
     load_vector_store,
     vector_store_exists,
 )
@@ -74,8 +74,7 @@ class StrokeRAG:
         if not chunks:
             raise ValueError(f"No chunks could be created from {source}")
 
-        store = build_vector_store(self.settings, chunks, self.embedding_model)
-        store.save()
+        store, stats = ingest_vector_store(self.settings, chunks, self.embedding_model)
         self._store = store
 
         return IngestionReport(
@@ -85,6 +84,12 @@ class StrokeRAG:
             chunks=len(chunks),
             index_path=str(self.settings.index_path),
             embedding_model=self.embedding_model.name,
+            chunks_embedded=stats.chunks_embedded,
+            chunks_reused=stats.chunks_reused,
+            timings={
+                "embedding_seconds": round(stats.embedding_seconds, 4),
+                "index_write_seconds": round(stats.write_seconds, 4),
+            },
         )
 
     def _ingest_incremental(
@@ -134,7 +139,7 @@ class StrokeRAG:
                 source_path=str(source),
                 documents=len(unique_files),
                 pages=0,
-                chunks=len(store.chunks),
+                chunks=store.chunk_count(),
                 index_path=str(self.settings.index_path),
                 embedding_model=self.embedding_model.name,
                 files_discovered=len(files),
@@ -195,13 +200,9 @@ class StrokeRAG:
         if not chunks:
             raise ValueError(f"No chunks could be created from {source}")
 
-        embedding_start = time.perf_counter()
-        store = build_vector_store(self.settings, chunks, self.embedding_model)
-        timings["embedding_seconds"] = round(time.perf_counter() - embedding_start, 4)
-
-        save_start = time.perf_counter()
-        store.save()
-        timings["index_write_seconds"] = round(time.perf_counter() - save_start, 4)
+        store, stats = ingest_vector_store(self.settings, chunks, self.embedding_model)
+        timings["embedding_seconds"] = round(stats.embedding_seconds, 4)
+        timings["index_write_seconds"] = round(stats.write_seconds, 4)
         timings["total_seconds"] = round(time.perf_counter() - started, 4)
         self._store = store
 
@@ -237,6 +238,8 @@ class StrokeRAG:
             duplicate_files=len(files) - len(unique_files),
             deleted_files=len(deleted_paths),
             scanned_pages=sum(document.scanned_pages for document in documents),
+            chunks_embedded=stats.chunks_embedded,
+            chunks_reused=stats.chunks_reused,
             skipped_unchanged=False,
             manifest_path=str(self.settings.manifest_path),
             extraction_cache_dir=str(self.settings.extraction_cache_dir),

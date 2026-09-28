@@ -11,7 +11,6 @@ def _settings(tmp_path, corpus):
         chunk_overlap_chars=40,
         manifest_path=tmp_path / ".rag" / "manifest.sqlite",
         extraction_cache_dir=tmp_path / ".rag" / "extracted",
-        embedding_cache_path=tmp_path / ".rag" / "embedding_cache.json",
     )
 
 

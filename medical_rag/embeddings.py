@@ -10,7 +10,6 @@ import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from medical_rag.config import Settings
 
@@ -354,76 +353,6 @@ class SentenceTransformersEmbeddingModel(EmbeddingModel):
         return self._model
 
 
-@dataclass
-class CachedEmbeddingModel(EmbeddingModel):
-    """Transparent disk-backed cache wrapping any EmbeddingModel.
-
-    Cache file format (JSON):
-        {"schema_version": 1, "model_name": "...", "entries": {"<sha256>": [...]}}
-
-    Entries are invalidated when the wrapped model's name changes.
-    """
-
-    inner: EmbeddingModel
-    cache_path: Path
-    batch_size: int = 64
-    _cache: dict[str, list[float]] = field(default_factory=dict, init=False, repr=False)
-    _loaded: bool = field(default=False, init=False, repr=False)
-
-    @property
-    def name(self) -> str:
-        return self.inner.name
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        # Loading the cache needs the wrapped model's name, which for the remote backend is a
-        # network call. Defer it to the first embed so constructing the model (and therefore
-        # the API app) never depends on the embedding service being up.
-        self._load()
-        results: list[list[float] | None] = [None] * len(texts)
-        misses: list[tuple[int, str]] = []
-
-        for i, text in enumerate(texts):
-            cached = self._cache.get(hashlib.sha256(text.encode()).hexdigest())
-            if cached is not None:
-                results[i] = cached
-            else:
-                misses.append((i, text))
-
-        if misses:
-            for batch in _batches(misses, max(1, self.batch_size)):
-                new_vectors = self.inner.embed([t for _, t in batch])
-                for (i, text), vector in zip(batch, new_vectors):
-                    self._cache[hashlib.sha256(text.encode()).hexdigest()] = vector
-                    results[i] = vector
-            self._save()
-
-        return results  # type: ignore[return-value]
-
-    def _load(self) -> None:
-        if self._loaded:
-            return
-        model_name = self.inner.name  # may raise; leave _loaded False so the next call retries
-        self._loaded = True
-        if not self.cache_path.exists():
-            return
-        try:
-            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
-            if payload.get("model_name") != model_name:
-                return  # model changed → stale, ignore
-            self._cache = payload.get("entries", {})
-        except (json.JSONDecodeError, KeyError, OSError):
-            pass
-
-    def _save(self) -> None:
-        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "schema_version": 1,
-            "model_name": self.inner.name,
-            "entries": self._cache,
-        }
-        self.cache_path.write_text(json.dumps(payload), encoding="utf-8")
-
-
 def _ollama_available(base_url: str, timeout: float = 2.0) -> bool:
     """Probe Ollama /api/tags endpoint; return True if reachable."""
     return bool(list_ollama_models(base_url, timeout=timeout))
@@ -521,20 +450,7 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
     else:
         raise ValueError(f"Unsupported embedding backend: {backend!r}")
 
-    if settings.embedding_cache_path is not None:
-        return (
-            CachedEmbeddingModel(
-                inner=inner,
-                cache_path=settings.embedding_cache_path,
-                batch_size=settings.embedding_batch_size,
-            ),
-            fallback_used,
-        )
     return inner, fallback_used
-
-
-def _batches(items: list[tuple[int, str]], batch_size: int) -> list[list[tuple[int, str]]]:
-    return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
 
 
 def _text_batches(items: list[str], batch_size: int) -> list[list[str]]:

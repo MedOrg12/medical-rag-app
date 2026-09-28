@@ -96,7 +96,6 @@ class Settings:
     answer_mode: str = "patient"
     temperature: float = 0.1
     request_timeout_seconds: float = 20.0
-    embedding_cache_path: Path | None = None
     manifest_path: Path | None = None
     extraction_cache_dir: Path | None = None
     pdf_workers: int = 1
@@ -171,9 +170,6 @@ class Settings:
             answer_mode=os.getenv("RAG_ANSWER_MODE", "patient").lower(),
             temperature=_env_float_compat(0.1, "RAG_TEMPERATURE", "TEMPERATURE"),
             request_timeout_seconds=_env_float("RAG_REQUEST_TIMEOUT_SECONDS", 20.0),
-            embedding_cache_path=_resolve_path(
-                root, os.getenv("RAG_EMBEDDING_CACHE_PATH", ".rag/embedding_cache.json")
-            ) if os.getenv("RAG_EMBEDDING_CACHE_PATH", ".rag/embedding_cache.json") else None,
             manifest_path=_resolve_path(
                 root, os.getenv("RAG_MANIFEST_PATH", ".rag/manifest.sqlite")
             ) if os.getenv("RAG_MANIFEST_PATH", ".rag/manifest.sqlite") else None,

@@ -15,7 +15,6 @@ services:
       RAG_INDEX_PATH: /app/.rag/index.json
       RAG_MANIFEST_PATH: /app/.rag/manifest.sqlite
       RAG_EXTRACTION_CACHE_DIR: /app/.rag/extracted
-      RAG_EMBEDDING_CACHE_PATH: /app/.rag/embedding_cache.json
       RAG_QDRANT_URL: ${RAG_QDRANT_URL:-http://qdrant:6333}
       RAG_QDRANT_API_KEY: ${RAG_QDRANT_API_KEY:-}
       RAG_QDRANT_COLLECTION: ${RAG_QDRANT_COLLECTION:-stroke_chunks}

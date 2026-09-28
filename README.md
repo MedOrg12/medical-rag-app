@@ -127,7 +127,7 @@ What this does:
 - Skips the whole run quickly when the corpus and index are unchanged.
 - Tracks file status in `.rag/manifest.sqlite`.
 - Caches extracted text in `.rag/extracted/`.
-- Caches embeddings in `.rag/embedding_cache.json`.
+- Reuses vectors already stored for unchanged chunks instead of re-embedding them.
 - Deduplicates identical files by SHA-256.
 - Records failed files so they can be retried with `--failed-only`.
 - Detects scanned PDF pages and records them without running slow OCR by default.
@@ -146,10 +146,9 @@ curl http://127.0.0.1:8000/ingest/status
 Tuning knobs:
 
 - `RAG_PDF_WORKERS`: parallel PDF extraction workers. Start with `2` to `4`.
-- `RAG_EMBED_BATCH_SIZE`: embedding batch size for cache misses. Start with `64`.
+- `RAG_EMBED_BATCH_SIZE`: how many chunks are embedded and written per batch. Start with `64`.
 - `RAG_MANIFEST_PATH`: manifest SQLite path.
 - `RAG_EXTRACTION_CACHE_DIR`: extracted text cache directory.
-- `RAG_EMBEDDING_CACHE_PATH`: embedding cache path.
 
 Keep embedding workers conservative with local Ollama. PDF parsing can be parallelized, but local model embedding usually benefits more from batching than from high concurrency.
 
@@ -282,7 +281,6 @@ Environment variables:
 - `RAG_EMBED_BATCH_SIZE`: default `64`
 - `RAG_MANIFEST_PATH`: default `.rag/manifest.sqlite`
 - `RAG_EXTRACTION_CACHE_DIR`: default `.rag/extracted`
-- `RAG_EMBEDDING_CACHE_PATH`: default `.rag/embedding_cache.json`
 - `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, `api`, `sentence-transformers`, or `remote`
 - `RAG_GENERATION_BACKEND`: `extractive`, `ollama`, or `api`
 - `RAG_SENTENCE_TRANSFORMERS_MODEL`: default `BAAI/bge-base-en-v1.5`
@@ -352,7 +350,7 @@ Answer quality is directly tied to what has been indexed. The system can only ci
 1. Copy PDF files into `pdfs/`
 2. Delete the stale index:
    ```bash
-   rm -f .rag/index.json .rag/embedding_cache.json
+   rm -f .rag/index.json
    ```
 3. Restart and re-ingest via the UI or `POST /ingest`
 

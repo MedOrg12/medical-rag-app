@@ -69,12 +69,10 @@ PY
         FORCE_ARG="--force"
     else
         CURRENT_EMBEDDING_MODEL="$(python3 - <<'PY'
-from dataclasses import replace
-
 from medical_rag.config import Settings
 from medical_rag.embeddings import make_embedding_model
 
-model, _ = make_embedding_model(replace(Settings.from_env(), embedding_cache_path=None))
+model, _ = make_embedding_model(Settings.from_env())
 print(model.name)
 PY
 )"

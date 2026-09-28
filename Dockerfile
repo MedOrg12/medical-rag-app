@@ -27,7 +27,6 @@ ENV PYTHONUNBUFFERED=1 \
     RAG_INDEX_PATH=/app/.rag/index.json \
     RAG_MANIFEST_PATH=/app/.rag/manifest.sqlite \
     RAG_EXTRACTION_CACHE_DIR=/app/.rag/extracted \
-    RAG_EMBEDDING_CACHE_PATH=/app/.rag/embedding_cache.json \
     RAG_PDF_WORKERS=1 \
     RAG_EMBED_BATCH_SIZE=64 \
     RAG_EMBEDDING_BACKEND=auto \

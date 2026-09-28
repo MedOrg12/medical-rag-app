@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import time
 import uuid
-from dataclasses import asdict
+from collections.abc import Iterable, Iterator
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
@@ -18,14 +21,10 @@ SCHEMA_VERSION = 1
 
 class VectorStoreBackend(Protocol):
     @property
-    def chunks(self) -> list[Chunk]:
-        ...
-
-    @property
     def retrieval_mode(self) -> str:
         ...
 
-    def save(self) -> None:
+    def chunk_count(self) -> int:
         ...
 
     def search(
@@ -42,13 +41,42 @@ class VectorStoreBackend(Protocol):
         ...
 
 
-def build_vector_store(
+@dataclass
+class IngestStats:
+    """What an ingestion run did, so reports can show reuse and per-stage timings."""
+
+    chunks_total: int = 0
+    chunks_embedded: int = 0
+    chunks_reused: int = 0
+    stale_points_removed: int = 0
+    embedding_seconds: float = 0.0
+    write_seconds: float = 0.0
+
+
+def ingest_vector_store(
     settings: Settings, chunks: list[Chunk], embedding_model: EmbeddingModel
-) -> VectorStoreBackend:
+) -> tuple[VectorStoreBackend, IngestStats]:
+    """Embed ``chunks`` and write them to the configured backend, streaming in batches.
+
+    Vectors already present for an identical chunk (same id, same text, same embedding
+    model) are reused instead of re-embedded, so re-running over an unchanged corpus
+    costs no embedding work. Memory stays proportional to the batch size for Qdrant.
+    """
+    batch_size = max(1, settings.embedding_batch_size)
     if settings.vector_store_backend == "json":
-        return VectorStore.build(path=settings.index_path, chunks=chunks, embedding_model=embedding_model)
+        return VectorStore.ingest(
+            path=settings.index_path,
+            chunks=chunks,
+            embedding_model=embedding_model,
+            batch_size=batch_size,
+        )
     if settings.vector_store_backend == "qdrant":
-        return QdrantVectorStore.build(settings=settings, chunks=chunks, embedding_model=embedding_model)
+        return QdrantVectorStore.ingest(
+            settings=settings,
+            chunks=chunks,
+            embedding_model=embedding_model,
+            batch_size=batch_size,
+        )
     raise ValueError(f"Unsupported vector store backend: {settings.vector_store_backend!r}")
 
 
@@ -87,11 +115,67 @@ class VectorStore:
     def retrieval_mode(self) -> str:
         return "hybrid" if self._bm25 is not None else "vector"
 
+    def chunk_count(self) -> int:
+        return len(self.chunks)
+
     @classmethod
     def build(cls, path: Path, chunks: list[Chunk], embedding_model: EmbeddingModel) -> VectorStore:
         vectors = embedding_model.embed([chunk.text for chunk in chunks])
         bm25 = BM25Index.build(chunks)
         return cls(path=path, chunks=chunks, vectors=vectors, embedding_model=embedding_model.name, bm25=bm25)
+
+    @classmethod
+    def ingest(
+        cls,
+        path: Path,
+        chunks: list[Chunk],
+        embedding_model: EmbeddingModel,
+        batch_size: int,
+    ) -> tuple[VectorStore, IngestStats]:
+        """Rebuild the index, reusing vectors from the existing file for unchanged chunks."""
+        stats = IngestStats(chunks_total=len(chunks))
+        existing: dict[str, tuple[str, list[float]]] = {}
+        if path.exists():
+            try:
+                previous = cls.load(path)
+            except (ValueError, OSError, KeyError):
+                previous = None
+            if previous is not None and previous.embedding_model == embedding_model.name:
+                existing = {
+                    chunk.id: (chunk.text, vector)
+                    for chunk, vector in zip(previous.chunks, previous.vectors, strict=True)
+                }
+
+        vectors: list[list[float] | None] = [None] * len(chunks)
+        missing: list[int] = []
+        for index, chunk in enumerate(chunks):
+            match = existing.get(chunk.id)
+            if match is not None and match[0] == chunk.text:
+                vectors[index] = match[1]
+            else:
+                missing.append(index)
+        stats.chunks_reused = len(chunks) - len(missing)
+
+        embed_started = time.perf_counter()
+        for start in range(0, len(missing), batch_size):
+            batch = missing[start : start + batch_size]
+            embedded = embedding_model.embed([chunks[index].text for index in batch])
+            for index, vector in zip(batch, embedded, strict=True):
+                vectors[index] = vector
+        stats.chunks_embedded = len(missing)
+        stats.embedding_seconds = time.perf_counter() - embed_started
+
+        write_started = time.perf_counter()
+        store = cls(
+            path=path,
+            chunks=chunks,
+            vectors=[vector for vector in vectors if vector is not None],
+            embedding_model=embedding_model.name,
+            bm25=BM25Index.build(chunks),
+        )
+        store.save()
+        stats.write_seconds = time.perf_counter() - write_started
+        return store, stats
 
     @classmethod
     def load(cls, path: Path) -> VectorStore:
@@ -203,29 +287,34 @@ class VectorStore:
         return results
 
     def source_summaries(self) -> list[dict[str, Any]]:
-        summaries: dict[str, dict[str, Any]] = {}
-        for chunk in self.chunks:
-            source_id = chunk.metadata.get("source_id", "unknown")
-            entry = summaries.setdefault(
-                source_id,
-                {
-                    "source_id": source_id,
-                    "title": chunk.metadata.get("title", source_id),
-                    "source_path": chunk.metadata.get("source_path"),
-                    "chunks": 0,
-                    "pages": set(),
-                },
-            )
-            entry["chunks"] += 1
-            if chunk.metadata.get("page") is not None:
-                entry["pages"].add(chunk.metadata["page"])
+        return _summarize_sources(chunk.metadata for chunk in self.chunks)
 
-        results = []
-        for entry in summaries.values():
-            pages = sorted(entry.pop("pages"))
-            entry["pages"] = pages
-            results.append(entry)
-        return sorted(results, key=lambda item: str(item["source_id"]).lower())
+
+def _summarize_sources(metadata_items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate per-source chunk counts and pages without holding chunk text."""
+    summaries: dict[str, dict[str, Any]] = {}
+    for metadata in metadata_items:
+        source_id = metadata.get("source_id", "unknown")
+        entry = summaries.setdefault(
+            source_id,
+            {
+                "source_id": source_id,
+                "title": metadata.get("title", source_id),
+                "source_path": metadata.get("source_path"),
+                "chunks": 0,
+                "pages": set(),
+            },
+        )
+        entry["chunks"] += 1
+        if metadata.get("page") is not None:
+            entry["pages"].add(metadata["page"])
+
+    results = []
+    for entry in summaries.values():
+        pages = sorted(entry.pop("pages"))
+        entry["pages"] = pages
+        results.append(entry)
+    return sorted(results, key=lambda item: str(item["source_id"]).lower())
 
 
 def _dot(left: list[float], right: list[float]) -> float:
@@ -240,17 +329,9 @@ def _matches_filters(metadata: dict[str, Any], filters: dict[str, Any]) -> bool:
 
 
 class QdrantVectorStore:
-    def __init__(
-        self,
-        settings: Settings,
-        embedding_model_name: str | None = None,
-        chunks: list[Chunk] | None = None,
-        vectors: list[list[float]] | None = None,
-    ) -> None:
+    def __init__(self, settings: Settings, embedding_model_name: str | None = None) -> None:
         self.settings = settings
         self.embedding_model = embedding_model_name
-        self._chunks = chunks
-        self._vectors = vectors
         self._client: Any = None
 
     @property
@@ -262,21 +343,8 @@ class QdrantVectorStore:
         return self._client
 
     @property
-    def chunks(self) -> list[Chunk]:
-        if self._chunks is None:
-            self._chunks = self._scroll_chunks()
-        return self._chunks
-
-    @property
     def retrieval_mode(self) -> str:
         return "vector"
-
-    @classmethod
-    def build(
-        cls, settings: Settings, chunks: list[Chunk], embedding_model: EmbeddingModel
-    ) -> QdrantVectorStore:
-        vectors = embedding_model.embed([chunk.text for chunk in chunks])
-        return cls(settings, embedding_model_name=embedding_model.name, chunks=chunks, vectors=vectors)
 
     @classmethod
     def load(cls, settings: Settings) -> QdrantVectorStore:
@@ -299,33 +367,104 @@ class QdrantVectorStore:
                 f"{settings.qdrant_collection!r}: {exc}"
             ) from exc
 
-    def save(self) -> None:
-        if self._chunks is None or self._vectors is None:
-            return
-        if not self._chunks:
-            return
+    @classmethod
+    def ingest(
+        cls,
+        settings: Settings,
+        chunks: list[Chunk],
+        embedding_model: EmbeddingModel,
+        batch_size: int,
+    ) -> tuple[QdrantVectorStore, IngestStats]:
+        """Stream ``chunks`` into the collection one batch at a time.
 
-        self._ensure_collection(len(self._vectors[0]))
-        client = self.client
-        points = [
-            _qdrant_point(
-                settings=self.settings,
-                chunk=chunk,
-                dense_vector=vector,
-                embedding_model=self.embedding_model or "",
-            )
-            for chunk, vector in zip(self._chunks, self._vectors, strict=True)
-        ]
-        batch_size = max(1, self.settings.qdrant_batch_size)
-        for start in range(0, len(points), batch_size):
+        For each batch the collection is asked which point ids already hold a vector for
+        the identical text and embedding model; only the rest are embedded and upserted.
+        Afterwards, points whose id is not in the current corpus are deleted, so the
+        collection mirrors the corpus without a separate embedding cache.
+        """
+        store = cls(settings, embedding_model_name=embedding_model.name)
+        client = store.client
+        collection = settings.qdrant_collection
+        stats = IngestStats(chunks_total=len(chunks))
+
+        collection_ready = bool(client.collection_exists(collection))
+        if collection_ready and settings.qdrant_recreate_collection:
+            client.delete_collection(collection, timeout=_qdrant_timeout(settings))
+            collection_ready = False
+        collection_validated = False
+
+        current_ids: set[str] = set()
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            point_ids = [_point_id(chunk.id) for chunk in batch]
+            current_ids.update(point_ids)
+
+            reusable: set[str] = set()
+            if collection_ready:
+                reusable = store._reusable_point_ids(point_ids, batch)
+            missing = [
+                (point_id, chunk)
+                for point_id, chunk in zip(point_ids, batch, strict=True)
+                if point_id not in reusable
+            ]
+            stats.chunks_reused += len(batch) - len(missing)
+            if not missing:
+                continue
+
+            embed_started = time.perf_counter()
+            vectors = embedding_model.embed([chunk.text for _, chunk in missing])
+            stats.embedding_seconds += time.perf_counter() - embed_started
+            stats.chunks_embedded += len(missing)
+
+            write_started = time.perf_counter()
+            if not collection_validated:
+                # Needs a real vector to know the dimension; runs once per ingest.
+                store._ensure_collection(len(vectors[0]))
+                collection_ready = True
+                collection_validated = True
             client.upsert(
-                collection_name=self.settings.qdrant_collection,
-                points=points[start : start + batch_size],
+                collection_name=collection,
+                points=[
+                    _qdrant_point(
+                        settings=settings,
+                        chunk=chunk,
+                        dense_vector=vector,
+                        embedding_model=embedding_model.name,
+                    )
+                    for (_, chunk), vector in zip(missing, vectors, strict=True)
+                ],
             )
-        # Point ids derive deterministically from chunk ids, so re-ingesting an unchanged
-        # source overwrites its points in place. Anything left over belongs to a source that
-        # was deleted or re-chunked and must go, so the collection mirrors the current corpus.
-        self._delete_stale_points(client, {point.id for point in points})
+            stats.write_seconds += time.perf_counter() - write_started
+
+        if collection_ready:
+            write_started = time.perf_counter()
+            stats.stale_points_removed = store._delete_stale_points(client, current_ids)
+            stats.write_seconds += time.perf_counter() - write_started
+        return store, stats
+
+    def _reusable_point_ids(self, point_ids: list[str], batch: list[Chunk]) -> set[str]:
+        """Ids in ``point_ids`` whose stored point was embedded from the same text by the
+        same model. Payload is limited to the two tags, so the round trip is small."""
+        expected = {
+            point_id: _text_sha256(chunk.text)
+            for point_id, chunk in zip(point_ids, batch, strict=True)
+        }
+        records = self.client.retrieve(
+            collection_name=self.settings.qdrant_collection,
+            ids=point_ids,
+            with_payload=["embedding_model", "text_sha256"],
+            with_vectors=False,
+        )
+        reusable: set[str] = set()
+        for record in records:
+            payload = record.payload or {}
+            point_id = str(record.id)
+            if (
+                payload.get("embedding_model") == self.embedding_model
+                and payload.get("text_sha256") == expected.get(point_id)
+            ):
+                reusable.add(point_id)
+        return reusable
 
     def _delete_stale_points(self, client: Any, current_ids: set[str]) -> int:
         models = _qdrant_models()
@@ -350,6 +489,10 @@ class QdrantVectorStore:
             )
         return len(stale)
 
+    def chunk_count(self) -> int:
+        result = self.client.count(collection_name=self.settings.qdrant_collection, exact=True)
+        return int(getattr(result, "count", result))
+
     def search(
         self,
         query: str,
@@ -373,51 +516,41 @@ class QdrantVectorStore:
         return [_search_result_from_point(point, rank) for rank, point in enumerate(points, start=1)]
 
     def source_summaries(self) -> list[dict[str, Any]]:
-        summaries: dict[str, dict[str, Any]] = {}
-        for chunk in self.chunks:
-            source_id = chunk.metadata.get("source_id", "unknown")
-            entry = summaries.setdefault(
-                source_id,
-                {
-                    "source_id": source_id,
-                    "title": chunk.metadata.get("title", source_id),
-                    "source_path": chunk.metadata.get("source_path"),
-                    "chunks": 0,
-                    "pages": set(),
-                },
-            )
-            entry["chunks"] += 1
-            if chunk.metadata.get("page") is not None:
-                entry["pages"].add(chunk.metadata["page"])
+        # Only the metadata sub-document is fetched: chunk text is by far the largest part
+        # of each payload and a full scroll of it would not fit on a small query host.
+        return _summarize_sources(self._scroll_metadata())
 
-        results = []
-        for entry in summaries.values():
-            pages = sorted(entry.pop("pages"))
-            entry["pages"] = pages
-            results.append(entry)
-        return sorted(results, key=lambda item: str(item["source_id"]).lower())
+    def _scroll_metadata(self) -> Iterator[dict[str, Any]]:
+        offset = None
+        while True:
+            points, offset = self.client.scroll(
+                collection_name=self.settings.qdrant_collection,
+                limit=1024,
+                offset=offset,
+                with_payload=["metadata"],
+                with_vectors=False,
+            )
+            for point in points:
+                yield dict((point.payload or {}).get("metadata") or {})
+            if offset is None:
+                break
 
     def _ensure_collection(self, vector_size: int) -> None:
         client = self.client
         models = _qdrant_models()
-        timeout = _qdrant_timeout(self.settings)
-        exists = client.collection_exists(self.settings.qdrant_collection)
-        if exists and self.settings.qdrant_recreate_collection:
-            client.delete_collection(self.settings.qdrant_collection, timeout=timeout)
-            exists = False
-        if exists:
+        if client.collection_exists(self.settings.qdrant_collection):
             self._validate_existing_collection(client, vector_size)
-        else:
-            client.create_collection(
-                collection_name=self.settings.qdrant_collection,
-                vectors_config={
-                    self.settings.qdrant_dense_vector_name: models.VectorParams(
-                        size=vector_size,
-                        distance=models.Distance.COSINE,
-                    )
-                },
-                timeout=timeout,
-            )
+            return
+        client.create_collection(
+            collection_name=self.settings.qdrant_collection,
+            vectors_config={
+                self.settings.qdrant_dense_vector_name: models.VectorParams(
+                    size=vector_size,
+                    distance=models.Distance.COSINE,
+                )
+            },
+            timeout=_qdrant_timeout(self.settings),
+        )
 
     def _validate_existing_collection(self, client: Any, vector_size: int) -> None:
         """Fail early with a clear message if the live collection cannot accept these vectors."""
@@ -438,23 +571,6 @@ class QdrantVectorStore:
                 f"model produces {vector_size} dimensions. Set RAG_QDRANT_RECREATE_COLLECTION=true to "
                 "rebuild it, or use a different collection."
             )
-
-    def _scroll_chunks(self) -> list[Chunk]:
-        client = self.client
-        chunks: list[Chunk] = []
-        offset = None
-        while True:
-            points, offset = client.scroll(
-                collection_name=self.settings.qdrant_collection,
-                limit=256,
-                offset=offset,
-                with_payload=True,
-                with_vectors=False,
-            )
-            chunks.extend(_chunk_from_payload(point.payload or {}) for point in points)
-            if offset is None:
-                break
-        return chunks
 
 
 def _qdrant_client(settings: Settings) -> Any:
@@ -495,6 +611,9 @@ def _qdrant_point(
         payload={
             "chunk_id": chunk.id,
             "text": chunk.text,
+            # Chunk ids only hash the first 120 characters of text, so the full-text hash is
+            # what lets ingestion tell "unchanged" from "changed past the id prefix".
+            "text_sha256": _text_sha256(chunk.text),
             "metadata": chunk.metadata,
             "embedding_model": embedding_model,
         },
@@ -503,6 +622,10 @@ def _qdrant_point(
 
 def _point_id(chunk_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
+
+
+def _text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _qdrant_filter(filters: dict[str, Any] | None, embedding_model: str) -> Any:
