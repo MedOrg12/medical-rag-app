@@ -65,6 +65,19 @@ prints the SSH target, forwarded port, and the relevant log path:
   while the GPU embeds the next one, with at most two upserts outstanding. The final upsert
   waits, and the job then checks that the collection's point count matches the corpus, so a
   write Qdrant acknowledged but failed to apply fails the job instead of leaving gaps.
+- HNSW indexing is paused on the collection while points stream in and restored when the job
+  ends (including on failure), so Qdrant builds the index once instead of repeatedly
+  re-indexing segments on its disk. Searches still work meanwhile, and Qdrant builds the index
+  in the background after the job exits. If the job is killed before it can restore
+  indexing, the next ingest that writes anything restores it.
+- Batches whose collection was created by this run skip the reuse lookup, since nothing in a
+  new collection can be reused.
+- `RAG_QDRANT_PREFER_GRPC`: send Qdrant traffic over gRPC instead of REST. Defaults to `false`.
+  gRPC ships vectors as packed floats rather than JSON and was about 25% faster for writes in
+  local benchmarks. It needs the Qdrant host to publish its gRPC port (`6334` in
+  `docker-compose.yml`); when tunnelling, the job opens a second tunnel for it.
+- `RAG_QDRANT_GRPC_LOCAL_PORT` / `RAG_QDRANT_GRPC_REMOTE_PORT`: gRPC tunnel ports. Both
+  default to `6334`.
 - `HF_HOME`: Hugging Face model cache. Defaults to `$PROJECT_DIR/.hf-cache` so the embedding
   model is downloaded once and reused by later jobs.
 - `RAG_QDRANT_TIMEOUT_SECONDS`: Qdrant request timeout. Defaults to `120` because collection
@@ -80,7 +93,10 @@ prints the SSH target, forwarded port, and the relevant log path:
 - `RAG_OLLAMA_REMOTE_HOST`: host visible from the SSH server. Defaults to `127.0.0.1`.
 - `RAG_OLLAMA_REMOTE_PORT`: remote Ollama port. Defaults to `11434`.
 - `RAG_PDF_WORKERS`: PDF extraction workers. Defaults to `SLURM_CPUS_PER_TASK`.
-- `RAG_EMBED_BATCH_SIZE`: embedding batch size.
+- `RAG_EMBED_BATCH_SIZE`: chunks per ingest batch, and so per Qdrant reuse lookup and
+  upsert. Defaults to `256` in the job. The GPU still encodes in
+  `RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE` mini-batches; larger ingest batches mainly cut round
+  trips through the tunnel.
 
 ## After Ingestion
 

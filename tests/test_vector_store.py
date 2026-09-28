@@ -37,11 +37,17 @@ class _FakeQdrantClient:
     instances: list["_FakeQdrantClient"] = []
     # Class-level so tests can seed a pre-existing collection before the store constructs clients.
     existing: dict | None = None
+    # Every call across all clients, in order; ingestion upserts through its own client.
+    log: list[tuple[str, dict]] = []
 
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs
         self.calls: list[tuple[str, dict]] = []
         _FakeQdrantClient.instances.append(self)
+
+    def _record(self, name: str, kwargs: dict) -> None:
+        self.calls.append((name, kwargs))
+        _FakeQdrantClient.log.append((name, kwargs))
 
     @property
     def _collection(self) -> dict | None:
@@ -58,15 +64,31 @@ class _FakeQdrantClient:
             vector_name: SimpleNamespace(size=size)
             for vector_name, size in self._collection["vectors"].items()
         }
-        return SimpleNamespace(config=SimpleNamespace(params=SimpleNamespace(vectors=vectors)))
+        optimizer_config = SimpleNamespace(
+            indexing_threshold=self._collection.get("indexing_threshold", 10000)
+        )
+        return SimpleNamespace(
+            config=SimpleNamespace(
+                params=SimpleNamespace(vectors=vectors), optimizer_config=optimizer_config
+            )
+        )
+
+    def close(self) -> None:
+        self._record("close", {})
+
+    def update_collection(self, **kwargs) -> bool:
+        self._record("update_collection", kwargs)
+        assert self._collection is not None
+        self._collection["indexing_threshold"] = kwargs["optimizers_config"].indexing_threshold
+        return True
 
     def delete_collection(self, name: str, **kwargs) -> bool:
-        self.calls.append(("delete_collection", kwargs))
+        self._record("delete_collection", kwargs)
         _FakeQdrantClient.existing = None
         return True
 
     def create_collection(self, **kwargs) -> bool:
-        self.calls.append(("create_collection", kwargs))
+        self._record("create_collection", kwargs)
         _FakeQdrantClient.existing = {
             "vectors": {name: params.size for name, params in kwargs["vectors_config"].items()},
             "points": {},
@@ -74,7 +96,7 @@ class _FakeQdrantClient:
         return True
 
     def upsert(self, **kwargs) -> None:
-        self.calls.append(("upsert", kwargs))
+        self._record("upsert", kwargs)
         assert self._collection is not None
         for point in kwargs["points"]:
             self._collection["points"][point.id] = point
@@ -82,7 +104,7 @@ class _FakeQdrantClient:
     def retrieve(self, **kwargs):
         from types import SimpleNamespace
 
-        self.calls.append(("retrieve", kwargs))
+        self._record("retrieve", kwargs)
         assert self._collection is not None
         assert kwargs["with_vectors"] is False
         keys = kwargs["with_payload"]
@@ -104,7 +126,7 @@ class _FakeQdrantClient:
     def scroll(self, **kwargs):
         from types import SimpleNamespace
 
-        self.calls.append(("scroll", kwargs))
+        self._record("scroll", kwargs)
         assert self._collection is not None
         with_payload = kwargs.get("with_payload", False)
         records = []
@@ -118,7 +140,7 @@ class _FakeQdrantClient:
         return records, None
 
     def delete(self, **kwargs) -> None:
-        self.calls.append(("delete", kwargs))
+        self._record("delete", kwargs)
         assert self._collection is not None
         for point_id in kwargs["points_selector"].points:
             self._collection["points"].pop(point_id, None)
@@ -168,12 +190,13 @@ def _use_fake_qdrant(monkeypatch, existing: dict | None = None) -> None:
     import qdrant_client
 
     _FakeQdrantClient.instances.clear()
+    _FakeQdrantClient.log.clear()
     _FakeQdrantClient.existing = existing
     monkeypatch.setattr(qdrant_client, "QdrantClient", _FakeQdrantClient)
 
 
 def _calls() -> list[tuple[str, dict]]:
-    return [call for client in _FakeQdrantClient.instances for call in client.calls]
+    return list(_FakeQdrantClient.log)
 
 
 def _call_names() -> list[str]:
@@ -290,6 +313,104 @@ def test_qdrant_ingest_fails_when_async_writes_did_not_land(monkeypatch, tmp_pat
 
     with pytest.raises(RuntimeError, match="holds 1 points after ingestion, expected 5"):
         _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks)
+
+
+def _indexing_thresholds() -> list[int]:
+    return [
+        kwargs["optimizers_config"].indexing_threshold
+        for name, kwargs in _calls()
+        if name == "update_collection"
+    ]
+
+
+def test_qdrant_ingest_skips_reuse_lookup_for_a_collection_it_created(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(monkeypatch)
+    chunks = [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(5)]
+
+    _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks)
+
+    assert "retrieve" not in _call_names()
+
+
+def test_qdrant_ingest_pauses_indexing_during_the_load_and_restores_it(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(
+        monkeypatch, existing={"vectors": {"dense": 8}, "points": {}, "indexing_threshold": 20000}
+    )
+    chunks = [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(5)]
+
+    _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks)
+
+    names = _call_names()
+    update_indexes = [i for i, name in enumerate(names) if name == "update_collection"]
+    upsert_indexes = [i for i, name in enumerate(names) if name == "upsert"]
+    assert _indexing_thresholds() == [0, 20000]
+    assert update_indexes[0] < upsert_indexes[0] and upsert_indexes[-1] < update_indexes[1]
+    assert _FakeQdrantClient.existing["indexing_threshold"] == 20000
+
+
+def test_qdrant_ingest_restores_indexing_when_a_write_fails(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(monkeypatch)
+
+    def failing_upsert(self, **kwargs) -> None:
+        raise ConnectionError("qdrant went away")
+
+    monkeypatch.setattr(_FakeQdrantClient, "upsert", failing_upsert)
+    chunks = [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(5)]
+
+    with pytest.raises(ConnectionError):
+        _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks)
+
+    assert _indexing_thresholds() == [0, 10000]
+
+
+def test_qdrant_ingest_recovers_indexing_left_paused_by_a_killed_run(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(
+        monkeypatch, existing={"vectors": {"dense": 8}, "points": {}, "indexing_threshold": 0}
+    )
+    chunks = [Chunk(id="c1", text="stroke", metadata={"source_id": "a"})]
+
+    _ingest(_qdrant_settings(tmp_path), chunks)
+
+    assert _FakeQdrantClient.existing["indexing_threshold"] == 10000
+
+
+def test_qdrant_ingest_leaves_indexing_alone_when_nothing_is_written(monkeypatch, tmp_path) -> None:
+    point = _fake_point("c1", "stroke", source_id="a")
+    _use_fake_qdrant(monkeypatch, existing={"vectors": {"dense": 8}, "points": {point.id: point}})
+
+    _ingest(_qdrant_settings(tmp_path), [Chunk(id="c1", text="stroke", metadata={"source_id": "a"})])
+
+    assert "update_collection" not in _call_names()
+
+
+def test_qdrant_ingest_upserts_through_a_client_that_skips_inference_scanning(
+    monkeypatch, tmp_path
+) -> None:
+    _use_fake_qdrant(monkeypatch)
+    chunks = [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(5)]
+
+    store, _ = _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks)
+
+    upserting = [
+        client
+        for client in _FakeQdrantClient.instances
+        if any(name == "upsert" for name, _ in client.calls)
+    ]
+    assert len(upserting) == 1
+    assert upserting[0].kwargs["cloud_inference"] is True
+    assert upserting[0].calls[-1][0] == "close"
+    assert store.client.kwargs["cloud_inference"] is False
+
+
+def test_qdrant_client_uses_grpc_when_configured(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(monkeypatch)
+    settings = _qdrant_settings(tmp_path, qdrant_prefer_grpc=True, qdrant_grpc_port=16334)
+
+    _ingest(settings, [Chunk(id="c1", text="stroke", metadata={"source_id": "a"})])
+
+    for client in _FakeQdrantClient.instances:
+        assert client.kwargs["prefer_grpc"] is True
+        assert client.kwargs["grpc_port"] == 16334
 
 
 def test_qdrant_ingest_reuses_unchanged_points_and_removes_stale_ones(monkeypatch, tmp_path) -> None:
@@ -444,7 +565,8 @@ def test_qdrant_store_reuses_one_client_across_calls(monkeypatch, tmp_path) -> N
     store.chunk_count()
     store.source_summaries()
 
-    assert len(_FakeQdrantClient.instances) == 1
+    query_clients = [c for c in _FakeQdrantClient.instances if not c.kwargs["cloud_inference"]]
+    assert len(query_clients) == 1
 
 
 def test_json_ingest_reuses_vectors_from_existing_index(tmp_path) -> None:

@@ -111,6 +111,8 @@ class Settings:
     qdrant_batch_size: int = 128
     qdrant_recreate_collection: bool = False
     qdrant_timeout_seconds: float = 120.0
+    qdrant_prefer_grpc: bool = False
+    qdrant_grpc_port: int = 6334
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> "Settings":
@@ -190,6 +192,9 @@ class Settings:
             qdrant_recreate_collection=os.getenv("RAG_QDRANT_RECREATE_COLLECTION", "false").lower()
             in {"1", "true", "yes", "on"},
             qdrant_timeout_seconds=_env_float("RAG_QDRANT_TIMEOUT_SECONDS", 120.0),
+            qdrant_prefer_grpc=os.getenv("RAG_QDRANT_PREFER_GRPC", "false").lower()
+            in {"1", "true", "yes", "on"},
+            qdrant_grpc_port=_env_int("RAG_QDRANT_GRPC_PORT", 6334),
         )
 
     def with_paths(

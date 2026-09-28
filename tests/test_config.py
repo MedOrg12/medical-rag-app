@@ -158,3 +158,15 @@ def test_settings_copy_helpers_preserve_every_field(tmp_path) -> None:
             if field.name in overridden[name]:
                 continue
             assert getattr(copied, field.name) == getattr(settings, field.name), field.name
+
+
+def test_settings_read_qdrant_grpc_environment(monkeypatch, tmp_path) -> None:
+    assert Settings.from_env(tmp_path).qdrant_prefer_grpc is False
+    assert Settings.from_env(tmp_path).qdrant_grpc_port == 6334
+
+    monkeypatch.setenv("RAG_QDRANT_PREFER_GRPC", "true")
+    monkeypatch.setenv("RAG_QDRANT_GRPC_PORT", "16334")
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.qdrant_prefer_grpc is True
+    assert settings.qdrant_grpc_port == 16334

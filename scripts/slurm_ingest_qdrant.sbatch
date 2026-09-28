@@ -39,12 +39,17 @@ if [ -f "$VENV_DIR/bin/activate" ]; then
 fi
 
 QDRANT_TUNNEL_PID=""
+QDRANT_GRPC_TUNNEL_PID=""
 OLLAMA_TUNNEL_PID=""
 JOB_ID="${SLURM_JOB_ID:-manual}"
 cleanup() {
   if [ -n "$QDRANT_TUNNEL_PID" ] && kill -0 "$QDRANT_TUNNEL_PID" 2>/dev/null; then
     kill "$QDRANT_TUNNEL_PID"
     wait "$QDRANT_TUNNEL_PID" 2>/dev/null || true
+  fi
+  if [ -n "$QDRANT_GRPC_TUNNEL_PID" ] && kill -0 "$QDRANT_GRPC_TUNNEL_PID" 2>/dev/null; then
+    kill "$QDRANT_GRPC_TUNNEL_PID"
+    wait "$QDRANT_GRPC_TUNNEL_PID" 2>/dev/null || true
   fi
   if [ -n "$OLLAMA_TUNNEL_PID" ] && kill -0 "$OLLAMA_TUNNEL_PID" 2>/dev/null; then
     kill "$OLLAMA_TUNNEL_PID"
@@ -144,6 +149,15 @@ if [ "${RAG_QDRANT_SSH_TUNNEL:-true}" = "true" ]; then
 
   start_tunnel "qdrant" "$RAG_QDRANT_LOCAL_PORT" "$RAG_QDRANT_REMOTE_HOST" "$RAG_QDRANT_REMOTE_PORT" QDRANT_TUNNEL_PID
   export RAG_QDRANT_URL="${RAG_QDRANT_URL:-http://127.0.0.1:${RAG_QDRANT_LOCAL_PORT}}"
+
+  # gRPC needs the Qdrant host to publish its gRPC port (6334) as well as REST.
+  if [ "${RAG_QDRANT_PREFER_GRPC:-false}" = "true" ]; then
+    RAG_QDRANT_GRPC_LOCAL_PORT="${RAG_QDRANT_GRPC_LOCAL_PORT:-6334}"
+    RAG_QDRANT_GRPC_REMOTE_PORT="${RAG_QDRANT_GRPC_REMOTE_PORT:-6334}"
+
+    start_tunnel "qdrant-grpc" "$RAG_QDRANT_GRPC_LOCAL_PORT" "$RAG_QDRANT_REMOTE_HOST" "$RAG_QDRANT_GRPC_REMOTE_PORT" QDRANT_GRPC_TUNNEL_PID
+    export RAG_QDRANT_GRPC_PORT="$RAG_QDRANT_GRPC_LOCAL_PORT"
+  fi
 fi
 
 export RAG_VECTOR_STORE="${RAG_VECTOR_STORE:-qdrant}"
@@ -154,6 +168,7 @@ export RAG_QDRANT_BATCH_SIZE="${RAG_QDRANT_BATCH_SIZE:-128}"
 export RAG_QDRANT_RECREATE_COLLECTION="${RAG_QDRANT_RECREATE_COLLECTION:-false}"
 # Collection create/delete on the shared Qdrant host can take well over the 5s client default.
 export RAG_QDRANT_TIMEOUT_SECONDS="${RAG_QDRANT_TIMEOUT_SECONDS:-120}"
+export RAG_QDRANT_PREFER_GRPC="${RAG_QDRANT_PREFER_GRPC:-false}"
 
 export RAG_CORPUS_DIR
 export RAG_MANIFEST_PATH="${RAG_MANIFEST_PATH:-$RAG_SCRATCH_DIR/manifest.sqlite}"
@@ -182,7 +197,10 @@ if [ "$RAG_EMBEDDING_BACKEND" = "ollama" ] && [ -z "${RAG_OLLAMA_BASE_URL:-}" ];
 fi
 export RAG_OLLAMA_EMBEDDING_MODEL="${RAG_OLLAMA_EMBEDDING_MODEL:-nomic-embed-text}"
 export RAG_PDF_WORKERS="${RAG_PDF_WORKERS:-${SLURM_CPUS_PER_TASK:-1}}"
-export RAG_EMBED_BATCH_SIZE="${RAG_EMBED_BATCH_SIZE:-64}"
+# Chunks per ingest batch, and so per Qdrant reuse lookup and upsert. The GPU still encodes
+# in RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE mini-batches; larger ingest batches mainly cut
+# round trips through the tunnel.
+export RAG_EMBED_BATCH_SIZE="${RAG_EMBED_BATCH_SIZE:-256}"
 
 if [ "$RAG_EMBEDDING_BACKEND" = "sentence-transformers" ]; then
   echo "--- GPU visibility ---"
