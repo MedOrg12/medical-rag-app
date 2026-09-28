@@ -58,6 +58,8 @@ class IngestionReport:
     duplicate_files: int = 0
     deleted_files: int = 0
     scanned_pages: int = 0
+    chunks_embedded: int = 0
+    chunks_reused: int = 0
     skipped_unchanged: bool = False
     manifest_path: str | None = None
     extraction_cache_dir: str | None = None

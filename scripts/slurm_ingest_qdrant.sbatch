@@ -158,7 +158,6 @@ export RAG_QDRANT_TIMEOUT_SECONDS="${RAG_QDRANT_TIMEOUT_SECONDS:-120}"
 export RAG_CORPUS_DIR
 export RAG_MANIFEST_PATH="${RAG_MANIFEST_PATH:-$RAG_SCRATCH_DIR/manifest.sqlite}"
 export RAG_EXTRACTION_CACHE_DIR="${RAG_EXTRACTION_CACHE_DIR:-$RAG_SCRATCH_DIR/extracted}"
-export RAG_EMBEDDING_CACHE_PATH="${RAG_EMBEDDING_CACHE_PATH:-$RAG_SCRATCH_DIR/embedding_cache.json}"
 
 # Keep the model cache with the project so it survives across jobs instead of re-downloading.
 export HF_HOME="${HF_HOME:-$PROJECT_DIR/.hf-cache}"

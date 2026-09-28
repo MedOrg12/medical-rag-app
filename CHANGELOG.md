@@ -23,6 +23,10 @@ This project follows Semantic Versioning for the application release number:
 - Standalone GPU embedding service (`embedder` compose profile) and a `remote` embedding backend so the API host never loads torch.
 - `RAG_QDRANT_TIMEOUT_SECONDS`, `QDRANT_DATA_DIR`, and `QDRANT_WAL_CAPACITY_MB` for slow-disk Qdrant hosts.
 
+### Removed
+
+- The JSON embedding cache (`RAG_EMBEDDING_CACHE_PATH`, `.rag/embedding_cache.json`). It was rewritten in full on every cache miss, including every user question on query-only hosts, and could not hold a corpus of thousands of PDFs. Vector reuse now comes from the vector store itself.
+
 ### Changed
 
 - Docker and `.env.example` now default `RAG_EMBEDDING_BACKEND` to `auto`.
@@ -31,7 +35,9 @@ This project follows Semantic Versioning for the application release number:
 - Corpus discovery now excludes `SOURCES.md` planning/checklist files so they do not appear as medical citations.
 - Live pytest evals now require `RUN_LIVE_EVAL=1`, while eval data validation still runs normally.
 - `RAG_QDRANT_RECREATE_COLLECTION` now defaults to `false`; ingestion writes into the existing collection.
+- Ingestion now streams chunks to the vector store in `RAG_EMBED_BATCH_SIZE` batches and reuses vectors already stored for unchanged chunks (same id, text, and model) instead of re-embedding them. The report includes `chunks_embedded` and `chunks_reused`.
 - The Slurm job keeps its scratch directory on shared storage (`$PROJECT_DIR/.rag-slurm`) instead of `SLURM_TMPDIR`, so the manifest and extracted-text cache survive between jobs.
+- `/sources` on the Qdrant backend fetches only chunk metadata, so it no longer loads every chunk's text into memory.
 - `/health` reports `active_embedding_model` as `null` with an `embedding_model_error` when the embedding service is unreachable, and `index_exists` as `null` with a `vector_store_error` when Qdrant is unreachable, instead of failing.
 - An unreachable Qdrant is now reported as an error rather than as a missing collection, so container startup no longer launches a full ingestion when the vector store is down.
 - `RAG_AUTO_INGEST_ON_STARTUP` is configurable in compose for query-only hosts.
