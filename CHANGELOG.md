@@ -49,6 +49,7 @@ This project follows Semantic Versioning for the application release number:
 - The Slurm job defaults `RAG_EMBED_BATCH_SIZE` to `256` to cut Qdrant round trips through the tunnel.
 - Qdrant upserts are sized by `RAG_QDRANT_BATCH_SIZE` (now default `1024`) independently of the embedding batch, and split to stay under the new `RAG_QDRANT_MAX_REQUEST_MB` (default `32`, Qdrant's REST request limit).
 - The ingestion report's new `vector_store` section splits vector-store time into phases that add up to its wall time, including the reuse lookups (`reuse_lookup_seconds` in `timings`), and records background upsert time and request counts.
+- `scripts/bench_ingest.py` and `scripts/bench_ingest_job.sbatch` benchmark ingestion across commits on Slurm with fresh collections, an idle-Qdrant check, and Qdrant telemetry per job.
 
 ## [0.1.0] - 2026-08-10
 
