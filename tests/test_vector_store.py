@@ -253,6 +253,20 @@ def test_qdrant_ingest_only_waits_on_the_final_upsert(monkeypatch, tmp_path) -> 
     assert [call["wait"] for call in upserts] == [False, False, True]
 
 
+def test_qdrant_ingest_waits_periodically_to_bound_the_server_backlog(
+    monkeypatch, tmp_path
+) -> None:
+    import medical_rag.vector_store as vector_store
+
+    _use_fake_qdrant(monkeypatch)
+    monkeypatch.setattr(vector_store, "_UPSERTS_PER_WAIT", 2)
+
+    _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), _many_chunks(10))
+
+    upserts = [kwargs for name, kwargs in _calls() if name == "upsert"]
+    assert [call["wait"] for call in upserts] == [False, True, False, True, True]
+
+
 def test_qdrant_ingest_embeds_next_batch_while_previous_upsert_is_in_flight(
     monkeypatch, tmp_path
 ) -> None:
@@ -332,35 +346,53 @@ def test_qdrant_ingest_skips_reuse_lookup_for_a_collection_it_created(monkeypatc
     assert "retrieve" not in _call_names()
 
 
-def test_qdrant_ingest_pauses_indexing_during_the_load_and_restores_it(monkeypatch, tmp_path) -> None:
-    _use_fake_qdrant(
-        monkeypatch, existing={"vectors": {"dense": 8}, "points": {}, "indexing_threshold": 20000}
-    )
-    chunks = [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(5)]
+def _many_chunks(count: int = 40) -> list[Chunk]:
+    # With 8-dim float32 vectors, a 1 KB indexing threshold is 32 points, so the pause
+    # (at half the threshold) triggers once 16 points have been written.
+    return [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(count)]
 
-    _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks)
+
+def test_qdrant_ingest_pauses_indexing_during_a_large_load_and_restores_it(
+    monkeypatch, tmp_path
+) -> None:
+    _use_fake_qdrant(
+        monkeypatch, existing={"vectors": {"dense": 8}, "points": {}, "indexing_threshold": 1}
+    )
+
+    _ingest(_qdrant_settings(tmp_path, embedding_batch_size=10), _many_chunks())
 
     names = _call_names()
     update_indexes = [i for i, name in enumerate(names) if name == "update_collection"]
     upsert_indexes = [i for i, name in enumerate(names) if name == "upsert"]
-    assert _indexing_thresholds() == [0, 20000]
+    assert _indexing_thresholds() == [0, 1]
     assert update_indexes[0] < upsert_indexes[0] and upsert_indexes[-1] < update_indexes[1]
-    assert _FakeQdrantClient.existing["indexing_threshold"] == 20000
+    assert _FakeQdrantClient.existing["indexing_threshold"] == 1
+
+
+def test_qdrant_ingest_leaves_indexing_alone_for_a_small_load(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(
+        monkeypatch, existing={"vectors": {"dense": 8}, "points": {}, "indexing_threshold": 1}
+    )
+
+    _ingest(_qdrant_settings(tmp_path, embedding_batch_size=10), _many_chunks(15))
+
+    assert "update_collection" not in _call_names()
 
 
 def test_qdrant_ingest_restores_indexing_when_a_write_fails(monkeypatch, tmp_path) -> None:
-    _use_fake_qdrant(monkeypatch)
+    _use_fake_qdrant(
+        monkeypatch, existing={"vectors": {"dense": 8}, "points": {}, "indexing_threshold": 1}
+    )
 
     def failing_upsert(self, **kwargs) -> None:
         raise ConnectionError("qdrant went away")
 
     monkeypatch.setattr(_FakeQdrantClient, "upsert", failing_upsert)
-    chunks = [Chunk(id=f"c{i}", text=f"chunk {i}", metadata={"source_id": "a"}) for i in range(5)]
 
     with pytest.raises(ConnectionError):
-        _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks)
+        _ingest(_qdrant_settings(tmp_path, embedding_batch_size=10), _many_chunks())
 
-    assert _indexing_thresholds() == [0, 10000]
+    assert _indexing_thresholds() == [0, 1]
 
 
 def test_qdrant_ingest_recovers_indexing_left_paused_by_a_killed_run(monkeypatch, tmp_path) -> None:

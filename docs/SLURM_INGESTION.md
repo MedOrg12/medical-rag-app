@@ -62,19 +62,22 @@ prints the SSH target, forwarded port, and the relevant log path:
   re-running over an unchanged corpus does no GPU work. The ingestion report shows
   `chunks_embedded` and `chunks_reused`.
 - Writes overlap embedding: each batch is upserted with `wait=False` on a background thread
-  while the GPU embeds the next one, with at most two upserts outstanding. The final upsert
-  waits, and the job then checks that the collection's point count matches the corpus, so a
+  while the GPU embeds the next one, with at most two upserts outstanding. Every eighth upsert
+  and the final one wait, which keeps Qdrant's backlog of acknowledged-but-unapplied writes
+  bounded so no single wait has to drain the whole run. The job then checks that the collection's point count matches the corpus, so a
   write Qdrant acknowledged but failed to apply fails the job instead of leaving gaps.
-- HNSW indexing is paused on the collection while points stream in and restored when the job
-  ends (including on failure), so Qdrant builds the index once instead of repeatedly
-  re-indexing segments on its disk. Searches still work meanwhile, and Qdrant builds the index
+- Once a run has written about half of Qdrant's indexing threshold (roughly 1,700 768-dim
+  vectors at the default), HNSW indexing is paused on the collection and restored when the
+  job ends (including on failure), so Qdrant builds the index once instead of repeatedly
+  re-indexing segments on its disk. Smaller incremental runs leave the collection config
+  alone, since Qdrant would not index that little new data during the load anyway. Searches still work meanwhile, and Qdrant builds the index
   in the background after the job exits. If the job is killed before it can restore
   indexing, the next ingest that writes anything restores it.
 - Batches whose collection was created by this run skip the reuse lookup, since nothing in a
   new collection can be reused.
 - `RAG_QDRANT_PREFER_GRPC`: send Qdrant traffic over gRPC instead of REST. Defaults to `false`.
-  gRPC ships vectors as packed floats rather than JSON and was about 25% faster for writes in
-  local benchmarks. It needs the Qdrant host to publish its gRPC port (`6334` in
+  gRPC ships vectors as packed floats rather than JSON, which saves serialization work and
+  bytes through the tunnel; its effect on the shared host has not been measured. It needs the Qdrant host to publish its gRPC port (`6334` in
   `docker-compose.yml`); when tunnelling, the job opens a second tunnel for it.
 - `RAG_QDRANT_GRPC_LOCAL_PORT` / `RAG_QDRANT_GRPC_REMOTE_PORT`: gRPC tunnel ports. Both
   default to `6334`.
