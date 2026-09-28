@@ -127,3 +127,21 @@ def test_parallel_chunking_matches_sequential(tmp_path) -> None:
 
     assert parallel == sequential
     assert sum(len(chunks) for chunks in parallel) > len(documents)
+
+
+def test_manifest_batch_writes_drive_change_detection(tmp_path) -> None:
+    from medical_rag.ingestion import ManifestStore, SourceFile
+
+    manifest = ManifestStore(tmp_path / "manifest.sqlite")
+    files = [SourceFile(path=tmp_path / f"d{n}.pdf", sha256=f"{n:064d}", size=n, mtime_ns=n) for n in range(3)]
+    duplicate = SourceFile(path=tmp_path / "copy.pdf", sha256=files[0].sha256, size=0, mtime_ns=0, duplicate_of=str(files[0].path))
+    settings = {"chunk_size_chars": 300, "chunk_overlap_chars": 40, "embedding_model": "m"}
+
+    manifest.mark_indexed_many([(file, 2, 5, 0) for file in files], **settings)
+    manifest.mark_duplicates([duplicate])
+    edited = SourceFile(path=files[1].path, sha256=files[1].sha256, size=99, mtime_ns=files[1].mtime_ns)
+
+    changed = manifest.changed_files([files[0], edited, files[2], duplicate], force=False, failed_only=False, **settings)
+
+    assert changed == [edited]
+    assert manifest.deleted_paths({str(file.path) for file in files}) == [str(duplicate.path)]

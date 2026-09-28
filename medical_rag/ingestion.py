@@ -127,11 +127,14 @@ class ManifestStore:
         if force:
             return [file for file in files if not file.duplicate_of]
 
+        # One query for every row: a connection per file is slow on shared storage.
+        with self._connect() as connection:
+            rows = {row["path"]: row for row in connection.execute("SELECT * FROM documents")}
         changed = []
         for file in files:
             if file.duplicate_of:
                 continue
-            row = self._get(file.path)
+            row = rows.get(str(file.path))
             if row is None:
                 if failed_only:
                     continue
@@ -169,9 +172,10 @@ class ManifestStore:
                     ("deleted", now, path),
                 )
 
-    def mark_duplicate(self, file: SourceFile) -> None:
+    def mark_duplicates(self, files: list[SourceFile]) -> None:
+        now = time.time()
         with self._connect() as connection:
-            connection.execute(
+            connection.executemany(
                 """
                 INSERT INTO documents (
                     path, sha256, size, mtime_ns, status, duplicate_of, pages, chunks, error,
@@ -185,22 +189,25 @@ class ManifestStore:
                     duplicate_of = excluded.duplicate_of,
                     updated_at = excluded.updated_at
                 """,
-                (
-                    str(file.path),
-                    file.sha256,
-                    file.size,
-                    file.mtime_ns,
-                    "duplicate",
-                    file.duplicate_of,
-                    0,
-                    0,
-                    None,
-                    PARSER_VERSION,
-                    0,
-                    0,
-                    "",
-                    time.time(),
-                ),
+                [
+                    (
+                        str(file.path),
+                        file.sha256,
+                        file.size,
+                        file.mtime_ns,
+                        "duplicate",
+                        file.duplicate_of,
+                        0,
+                        0,
+                        None,
+                        PARSER_VERSION,
+                        0,
+                        0,
+                        "",
+                        now,
+                    )
+                    for file in files
+                ],
             )
 
     def mark_indexed(
@@ -213,8 +220,25 @@ class ManifestStore:
         embedding_model: str,
         scanned_pages: int = 0,
     ) -> None:
+        self.mark_indexed_many(
+            [(file, pages, chunks, scanned_pages)],
+            chunk_size_chars=chunk_size_chars,
+            chunk_overlap_chars=chunk_overlap_chars,
+            embedding_model=embedding_model,
+        )
+
+    def mark_indexed_many(
+        self,
+        files: list[tuple[SourceFile, int, int, int]],
+        chunk_size_chars: int,
+        chunk_overlap_chars: int,
+        embedding_model: str,
+    ) -> None:
+        """Record ``(file, pages, chunks, scanned_pages)`` entries in one transaction; a
+        commit per file costs a sync each on shared storage."""
+        now = time.time()
         with self._connect() as connection:
-            connection.execute(
+            connection.executemany(
                 """
                 INSERT INTO documents (
                     path, sha256, size, mtime_ns, status, duplicate_of, pages, chunks, error,
@@ -237,23 +261,26 @@ class ManifestStore:
                     scanned_pages = excluded.scanned_pages,
                     updated_at = excluded.updated_at
                 """,
-                (
-                    str(file.path),
-                    file.sha256,
-                    file.size,
-                    file.mtime_ns,
-                    "indexed",
-                    None,
-                    pages,
-                    chunks,
-                    None,
-                    PARSER_VERSION,
-                    chunk_size_chars,
-                    chunk_overlap_chars,
-                    embedding_model,
-                    scanned_pages,
-                    time.time(),
-                ),
+                [
+                    (
+                        str(file.path),
+                        file.sha256,
+                        file.size,
+                        file.mtime_ns,
+                        "indexed",
+                        None,
+                        pages,
+                        chunks,
+                        None,
+                        PARSER_VERSION,
+                        chunk_size_chars,
+                        chunk_overlap_chars,
+                        embedding_model,
+                        scanned_pages,
+                        now,
+                    )
+                    for file, pages, chunks, scanned_pages in files
+                ],
             )
 
     def mark_failed(self, file: SourceFile, error: str) -> None:
@@ -289,13 +316,6 @@ class ManifestStore:
                     time.time(),
                 ),
             )
-
-    def _get(self, path: Path) -> sqlite3.Row | None:
-        with self._connect() as connection:
-            return connection.execute(
-                "SELECT * FROM documents WHERE path = ?",
-                (str(path),),
-            ).fetchone()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path)
