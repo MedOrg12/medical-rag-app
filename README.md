@@ -8,7 +8,7 @@ Clean stroke-focused retrieval-augmented generation system. The previous reposit
 - Page-aware chunking with stable chunk IDs
 - Local deterministic vector retrieval with no external service required
 - Optional Ollama or OpenAI-compatible API embeddings and chat generation
-- JSON vector index stored at `.rag/index.json`
+- JSON vector index stored at `.rag/index.json`, or a Qdrant collection (`RAG_VECTOR_STORE=qdrant`)
 - FastAPI API and a browser RAG workbench
 - CLI commands for ingesting and asking questions
 - Focused tests for the core RAG path
@@ -290,6 +290,16 @@ Environment variables:
 - `RAG_API_KEY`: API key for hosted OpenAI-compatible generation or embeddings; `OPENAI_API_KEY` is also accepted
 - `RAG_API_GENERATION_MODEL`: default `gpt-4o-mini`
 - `RAG_API_EMBEDDING_MODEL`: default `text-embedding-3-small`
+- `RAG_VECTOR_STORE`: `json` or `qdrant`
+- `RAG_QDRANT_URL`: default `http://localhost:6333`
+- `RAG_QDRANT_DENSE_VECTOR_NAME`: default `dense`; the named vector the collection stores
+- `RAG_QDRANT_API_KEY`: optional Qdrant API key
+- `RAG_QDRANT_COLLECTION`: default `stroke_chunks`
+- `RAG_QDRANT_BATCH_SIZE`: default `128`
+- `RAG_QDRANT_RECREATE_COLLECTION`: default `false`. Ingestion upserts into the existing collection and
+  removes points whose source was deleted or re-chunked. Set `true` to drop and rebuild it, which is
+  required when the embedding dimension or vector name changes.
+- `RAG_QDRANT_TIMEOUT_SECONDS`: default `120`. Qdrant request timeout; collection creation on the shared host can take 5-10 seconds.
 
 Legacy Docker variables from the previous app are also accepted where they map cleanly:
 `PDF_FOLDER`, `VECTOR_DB_PATH`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `OLLAMA_BASE_URL`,

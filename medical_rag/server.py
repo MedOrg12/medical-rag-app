@@ -107,10 +107,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ollama_model_name_matches(app_settings.ollama_embedding_model, model)
             for model in ollama_models
         )
+        # The Qdrant backend has to ask the server whether the collection exists.
+        try:
+            index_exists: bool | None = rag.index_exists()
+            vector_store_error: str | None = None
+        except Exception as exc:  # noqa: BLE001 - surface any backend failure in health
+            index_exists = None
+            vector_store_error = str(exc)
         return {
             "status": "ok",
-            "index_exists": rag.index_exists(),
+            "index_exists": index_exists,
+            "vector_store_error": vector_store_error,
             "index_path": str(app_settings.index_path),
+            "vector_store_backend": app_settings.vector_store_backend,
+            "qdrant_url": app_settings.qdrant_url
+            if app_settings.vector_store_backend == "qdrant"
+            else None,
+            "qdrant_collection": app_settings.qdrant_collection
+            if app_settings.vector_store_backend == "qdrant"
+            else None,
             "corpus_dir": str(app_settings.corpus_dir),
             "embedding_backend": app_settings.embedding_backend,
             "active_embedding_model": rag.embedding_model.name,

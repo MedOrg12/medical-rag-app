@@ -94,6 +94,14 @@ class Settings:
     min_relevance_score: float = 0.0
     reranker_backend: str = "lexical"
     hybrid_alpha: float = 0.5
+    vector_store_backend: str = "json"
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "stroke_chunks"
+    qdrant_dense_vector_name: str = "dense"
+    qdrant_batch_size: int = 128
+    qdrant_recreate_collection: bool = False
+    qdrant_timeout_seconds: float = 120.0
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> "Settings":
@@ -145,6 +153,15 @@ class Settings:
             min_relevance_score=_env_float("RAG_MIN_RELEVANCE_SCORE", 0.0),
             reranker_backend=os.getenv("RAG_RERANKER_BACKEND", "lexical").lower(),
             hybrid_alpha=_env_float("RAG_HYBRID_ALPHA", 0.5),
+            vector_store_backend=os.getenv("RAG_VECTOR_STORE", "json").lower(),
+            qdrant_url=os.getenv("RAG_QDRANT_URL", "http://localhost:6333"),
+            qdrant_api_key=os.getenv("RAG_QDRANT_API_KEY") or None,
+            qdrant_collection=os.getenv("RAG_QDRANT_COLLECTION", "stroke_chunks"),
+            qdrant_dense_vector_name=os.getenv("RAG_QDRANT_DENSE_VECTOR_NAME", "dense"),
+            qdrant_batch_size=_env_int("RAG_QDRANT_BATCH_SIZE", 128),
+            qdrant_recreate_collection=os.getenv("RAG_QDRANT_RECREATE_COLLECTION", "false").lower()
+            in {"1", "true", "yes", "on"},
+            qdrant_timeout_seconds=_env_float("RAG_QDRANT_TIMEOUT_SECONDS", 120.0),
         )
 
     def with_paths(

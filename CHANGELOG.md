@@ -18,6 +18,7 @@ This project follows Semantic Versioning for the application release number:
 - `/eval/questions` and `/eval/run` API endpoints for evaluation metadata and execution.
 - Package-level eval suite data under `medical_rag/eval_data.json`.
 - Health metadata for active embedding model, Ollama/API availability, and embedding fallback state.
+- Qdrant vector store backend (`RAG_VECTOR_STORE=qdrant`) with idempotent upserts into an existing collection, stale-point cleanup, and vector-config validation.
 
 ### Changed
 
@@ -26,6 +27,7 @@ This project follows Semantic Versioning for the application release number:
 - Eval pass/fail now requires in-scope answers to include enough expected answer terms, rather than passing on citation matches alone.
 - Corpus discovery now excludes `SOURCES.md` planning/checklist files so they do not appear as medical citations.
 - Live pytest evals now require `RUN_LIVE_EVAL=1`, while eval data validation still runs normally.
+- `RAG_QDRANT_RECREATE_COLLECTION` now defaults to `false`; ingestion writes into the existing collection.
 
 ## [0.1.0] - 2026-08-10
 

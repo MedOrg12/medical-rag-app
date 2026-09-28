@@ -45,6 +45,31 @@ def test_with_ingestion_options_preserves_answer_mode(tmp_path) -> None:
 
     assert updated.pdf_workers == 4
     assert updated.answer_mode == "clinician"
+def test_settings_accept_qdrant_timeout_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_QDRANT_TIMEOUT_SECONDS", "45.5")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.qdrant_timeout_seconds == 45.5
+    assert settings.with_paths().qdrant_timeout_seconds == 45.5
+    assert settings.with_ingestion_options().qdrant_timeout_seconds == 45.5
+
+
+def test_settings_default_qdrant_timeout_exceeds_client_default(tmp_path) -> None:
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.qdrant_timeout_seconds > 5
+
+
+def test_settings_default_to_writing_into_existing_qdrant_collection(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("RAG_QDRANT_RECREATE_COLLECTION", raising=False)
+
+    assert Settings.from_env(tmp_path).qdrant_recreate_collection is False
+
+    monkeypatch.setenv("RAG_QDRANT_RECREATE_COLLECTION", "true")
+    assert Settings.from_env(tmp_path).qdrant_recreate_collection is True
+
+
 def test_settings_copy_helpers_preserve_every_field(tmp_path) -> None:
     from dataclasses import fields
 
