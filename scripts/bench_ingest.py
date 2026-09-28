@@ -213,7 +213,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     columns = [
         ("#", "index"), ("commit", "label"), ("params", "params_text"), ("state", "state"),
         ("job_s", "job_wall_s"), ("total_s", "total_s"), ("disc_s", "discovery_s"),
-        ("extract_s", "extraction_s"), ("chunk_s", "chunking_s"), ("manifest_s", "manifest_s"),
+        ("extract_s", "extraction_s"), ("chunk_s", "chunking_s"), ("src_wait_s", "source_wait_s"),
+        ("manifest_s", "manifest_s"),
         ("vector_s", "vector_s"), ("lookup_s", "lookup_s"), ("embed_s", "embed_s"), ("wr_wait_s", "write_wait_s"), ("wr_other_s", "write_other_s"),
         ("upsert_busy_s", "upsert_busy_s"), ("srv_upsert_s", "server_upsert_s"),
         ("srv_io_mb", "server_io_write_mb"), ("reqs", "upsert_requests"),
@@ -226,7 +227,8 @@ def cmd_report(args: argparse.Namespace) -> int:
     _print_table(
         [("params", "params_text"), ("commit", "label"), ("ok", "ok"), ("total_s", "total_s"),
          ("range", "range"), ("job_s", "job_wall_s"), ("disc_s", "discovery_s"),
-         ("chunk_s", "chunking_s"), ("manifest_s", "manifest_s"), ("vector_s", "vector_s"),
+         ("chunk_s", "chunking_s"), ("src_wait_s", "source_wait_s"), ("manifest_s", "manifest_s"),
+         ("vector_s", "vector_s"),
          ("embed_s", "embed_s"), ("wr_wait_s", "write_wait_s"), ("ratio", "ratio")],
         summary,
     )
@@ -264,7 +266,9 @@ def _job_row(job: dict[str, Any], states: dict[str, str]) -> dict[str, Any]:
         timings = report.get("timings") or {}
         vector = report.get("vector_store") or {}
         row["total_s"] = timings.get("total_seconds")
-        for stage in ("discovery", "extraction", "chunking", "manifest"):
+        # From the streaming change on, extraction and chunking overlap the vector store and
+        # are reported as source_wait (the part not hidden) instead.
+        for stage in ("discovery", "extraction", "chunking", "source_wait", "manifest"):
             row[f"{stage}_s"] = timings.get(f"{stage}_seconds", "-")
         row["chunks_embedded"] = report.get("chunks_embedded", "-")
         row["embed_s"] = timings.get("embedding_seconds")
@@ -312,7 +316,10 @@ def _summarize(rows: list[dict[str, Any]], labels: list[str]) -> list[dict[str, 
             if totals:
                 entry["total_s"] = _round(statistics.median(totals))
                 entry["range"] = f"{min(totals):.0f}-{max(totals):.0f}"
-                for key in ("job_wall_s", "discovery_s", "chunking_s", "manifest_s", "vector_s", "embed_s", "write_wait_s"):
+                for key in (
+                    "job_wall_s", "discovery_s", "chunking_s", "source_wait_s", "manifest_s",
+                    "vector_s", "embed_s", "write_wait_s",
+                ):
                     values = [row[key] for row in ok if isinstance(row.get(key), (int, float))]
                     entry[key] = _round(statistics.median(values)) if values else "-"
                 baseline.setdefault(params_text, entry["total_s"])

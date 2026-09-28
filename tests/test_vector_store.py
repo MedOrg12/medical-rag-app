@@ -299,6 +299,7 @@ def test_qdrant_ingest_phases_account_for_all_of_the_loop_time(monkeypatch, tmp_
 
     phases = (
         stats.setup_seconds
+        + stats.source_wait_seconds
         + stats.lookup_seconds
         + stats.embedding_seconds
         + stats.point_build_seconds
@@ -306,7 +307,9 @@ def test_qdrant_ingest_phases_account_for_all_of_the_loop_time(monkeypatch, tmp_
         + stats.cleanup_seconds
     )
     assert stats.total_seconds == pytest.approx(phases)
-    assert stats.write_seconds == pytest.approx(phases - stats.lookup_seconds - stats.embedding_seconds)
+    assert stats.write_seconds == pytest.approx(
+        phases - stats.source_wait_seconds - stats.lookup_seconds - stats.embedding_seconds
+    )
     assert stats.embedding_seconds >= 0.05
     assert 0.9 * wall <= stats.total_seconds <= wall
     assert stats.upsert_requests == 5 and stats.upsert_busy_seconds > 0
@@ -319,6 +322,15 @@ def test_qdrant_ingest_skips_the_stale_scan_on_a_collection_it_created(monkeypat
 
     assert "scroll" not in _call_names()
     assert stats.stale_points_removed == 0
+
+
+def test_qdrant_ingest_consumes_a_lazy_chunk_stream(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(monkeypatch)
+
+    _, stats = _ingest(_qdrant_settings(tmp_path), (chunk for chunk in _many_chunks(5)))
+
+    assert stats.chunks_total == 5 and stats.chunks_embedded == 5
+    assert len(_FakeQdrantClient.existing["points"]) == 5
 
 
 def test_qdrant_ingest_only_waits_on_the_final_upsert(monkeypatch, tmp_path) -> None:

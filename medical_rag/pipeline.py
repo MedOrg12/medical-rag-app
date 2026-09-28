@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import itertools
 import time
-from concurrent.futures import ProcessPoolExecutor
+from collections.abc import Iterator
 from dataclasses import asdict
-from functools import partial
 from pathlib import Path
 
 from medical_rag.chunking import chunk_pages
@@ -11,11 +11,11 @@ from medical_rag.config import Settings
 from medical_rag.documents import load_documents
 from medical_rag.embeddings import EmbeddingModel, make_embedding_model
 from medical_rag.ingestion import (
-    ExtractedDocument,
+    ChunkedDocument,
     IngestionOptions,
     ManifestStore,
     discover_source_files,
-    load_extracted_documents,
+    iter_chunked_documents,
 )
 from medical_rag.llm import SAFETY_NOTICE, Generator, make_generator
 from medical_rag.relevance import expand_query_for_retrieval, filter_results_for_question
@@ -174,42 +174,53 @@ class StrokeRAG:
                 timings=timings,
             )
 
-        extraction_start = time.perf_counter()
-        documents, failures = load_extracted_documents(
-            unique_files,
-            cache_dir=self.settings.extraction_cache_dir,
-            manifest=manifest,
-            options=IngestionOptions(
-                force=force or not resume,
-                resume=resume,
-                failed_only=failed_only,
-                ocr_scanned=ocr_scanned,
-                pdf_workers=workers,
-            ),
-        )
-        timings["extraction_seconds"] = round(time.perf_counter() - extraction_start, 4)
+        documents: list[ChunkedDocument] = []
+        chunk_counts: dict[str, int] = {}
+        failures: dict[str, str] = {}
 
-        if not documents:
-            raise ValueError(f"No supported text was extracted from {source}")
+        def chunk_stream() -> Iterator[Chunk]:
+            """Chunks in document order as extraction finishes, so embedding overlaps it.
+            Records each document's outcome on the way through."""
+            for document in iter_chunked_documents(
+                unique_files,
+                cache_dir=self.settings.extraction_cache_dir,
+                options=IngestionOptions(
+                    force=force or not resume,
+                    resume=resume,
+                    failed_only=failed_only,
+                    ocr_scanned=ocr_scanned,
+                    pdf_workers=workers,
+                ),
+                chunk_size_chars=self.settings.chunk_size_chars,
+                chunk_overlap_chars=self.settings.chunk_overlap_chars,
+            ):
+                path = str(document.source.path)
+                if document.error is not None:
+                    failures[path] = document.error
+                    manifest.mark_failed(document.source, document.error)
+                    continue
+                chunks, document.chunks = document.chunks, []  # the vector store owns them now
+                documents.append(document)
+                chunk_counts[path] = len(chunks)
+                yield from chunks
 
-        chunk_start = time.perf_counter()
-        chunks_by_path: dict[str, list[Chunk]] = {}
-        chunks: list[Chunk] = []
-        chunked = _chunk_documents(
-            documents,
-            chunk_size_chars=self.settings.chunk_size_chars,
-            chunk_overlap_chars=self.settings.chunk_overlap_chars,
-            workers=workers,
-        )
-        for document, document_chunks in zip(documents, chunked, strict=True):
-            chunks_by_path[str(document.source.path)] = document_chunks
-            chunks.extend(document_chunks)
-        timings["chunking_seconds"] = round(time.perf_counter() - chunk_start, 4)
-
-        if not chunks:
+        chunks = chunk_stream()
+        # Wait for the first chunk before touching the vector store: with nothing to ingest,
+        # stale-point cleanup would otherwise empty an existing collection.
+        first_chunk = next(chunks, None)
+        if first_chunk is None:
+            if not documents:
+                raise ValueError(f"No supported text was extracted from {source}")
             raise ValueError(f"No chunks could be created from {source}")
 
-        store, stats = ingest_vector_store(self.settings, chunks, self.embedding_model)
+        store, stats = ingest_vector_store(
+            self.settings, itertools.chain([first_chunk], chunks), self.embedding_model
+        )
+        # Extraction and chunking overlap the vector store; what was not hidden behind it
+        # is the time the ingest loop waited on them. The worker totals show the work done.
+        timings["source_wait_seconds"] = round(stats.source_wait_seconds, 4)
+        timings["extraction_worker_seconds"] = round(sum(d.extraction_seconds for d in documents), 4)
+        timings["chunking_worker_seconds"] = round(sum(d.chunking_seconds for d in documents), 4)
         timings["reuse_lookup_seconds"] = round(stats.lookup_seconds, 4)
         timings["embedding_seconds"] = round(stats.embedding_seconds, 4)
         timings["index_write_seconds"] = round(stats.write_seconds, 4)
@@ -224,8 +235,7 @@ class StrokeRAG:
             document = documents_by_path.get(str(file.path))
             if document is None:
                 continue
-            chunk_count = len(chunks_by_path.get(str(file.path), []))
-            indexed.append((file, len(document.pages), chunk_count, document.scanned_pages))
+            indexed.append((file, document.pages, chunk_counts[str(file.path)], document.scanned_pages))
         manifest.mark_indexed_many(
             indexed,
             chunk_size_chars=self.settings.chunk_size_chars,
@@ -239,8 +249,8 @@ class StrokeRAG:
         return IngestionReport(
             source_path=str(source),
             documents=len(documents),
-            pages=sum(len(document.pages) for document in documents),
-            chunks=len(chunks),
+            pages=sum(document.pages for document in documents),
+            chunks=stats.chunks_total,
             index_path=str(self.settings.index_path),
             embedding_model=self.embedding_model.name,
             files_discovered=len(files),
@@ -326,45 +336,6 @@ class StrokeRAG:
             raise FileNotFoundError(f"{location}. Run ingestion first.")
         self._store = load_vector_store(self.settings)
         return self._store
-
-
-def _chunk_documents(
-    documents: list[ExtractedDocument],
-    chunk_size_chars: int,
-    chunk_overlap_chars: int,
-    workers: int,
-) -> list[list[Chunk]]:
-    """Chunk each document, in document order. Chunk ids depend only on their own document,
-    so chunking documents in parallel processes gives exactly the sequential result."""
-    chunk = partial(
-        _chunk_document, chunk_size_chars=chunk_size_chars, chunk_overlap_chars=chunk_overlap_chars
-    )
-    if workers <= 1 or len(documents) < 2:
-        return [chunk(document) for document in documents]
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(chunk, documents, chunksize=max(1, len(documents) // (workers * 4))))
-
-
-def _chunk_document(
-    document: ExtractedDocument, chunk_size_chars: int, chunk_overlap_chars: int
-) -> list[Chunk]:
-    chunks = chunk_pages(
-        document.pages,
-        chunk_size_chars=chunk_size_chars,
-        chunk_overlap_chars=chunk_overlap_chars,
-    )
-    for chunk in chunks:
-        chunk.metadata.update(
-            {
-                "source_hash": document.source.sha256,
-                "source_size": document.source.size,
-                "source_mtime_ns": document.source.mtime_ns,
-                "parser_version": "pymupdf-sorted-text-v1",
-                "chunk_size_chars": chunk_size_chars,
-                "chunk_overlap_chars": chunk_overlap_chars,
-            }
-        )
-    return chunks
 
 
 def _vector_store_stats(stats: IngestStats) -> dict[str, float | int]:

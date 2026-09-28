@@ -10,6 +10,7 @@ from collections.abc import Iterable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -82,6 +83,9 @@ class IngestStats:
     # the writer + cleanup. Sums with embedding and lookup time.
     write_seconds: float = 0.0
     setup_seconds: float = 0.0
+    # Waiting for the next chunks from upstream extraction and chunking, which now run
+    # alongside the ingest loop.
+    source_wait_seconds: float = 0.0
     lookup_seconds: float = 0.0
     point_build_seconds: float = 0.0
     write_wait_seconds: float = 0.0
@@ -111,9 +115,12 @@ class _PhaseTimer:
 
 
 def ingest_vector_store(
-    settings: Settings, chunks: list[Chunk], embedding_model: EmbeddingModel
+    settings: Settings, chunks: Iterable[Chunk], embedding_model: EmbeddingModel
 ) -> tuple[VectorStoreBackend, IngestStats]:
     """Embed ``chunks`` and write them to the configured backend, streaming in batches.
+
+    ``chunks`` may be a lazy stream; the Qdrant backend consumes it batch by batch, so
+    embedding can start before upstream extraction has finished.
 
     Vectors already present for an identical chunk (same id, same text, same embedding
     model) are reused instead of re-embedded, so re-running over an unchanged corpus
@@ -123,7 +130,7 @@ def ingest_vector_store(
     if settings.vector_store_backend == "json":
         return VectorStore.ingest(
             path=settings.index_path,
-            chunks=chunks,
+            chunks=list(chunks),
             embedding_model=embedding_model,
             batch_size=batch_size,
         )
@@ -428,7 +435,7 @@ class QdrantVectorStore:
     def ingest(
         cls,
         settings: Settings,
-        chunks: list[Chunk],
+        chunks: Iterable[Chunk],
         embedding_model: EmbeddingModel,
         batch_size: int,
     ) -> tuple[QdrantVectorStore, IngestStats]:
@@ -451,7 +458,7 @@ class QdrantVectorStore:
         paused and restored afterwards, so Qdrant builds the index once instead of
         re-indexing segments on its disk during the load.
         """
-        stats = IngestStats(chunks_total=len(chunks))
+        stats = IngestStats()
         timer = _PhaseTimer(stats)
         timer.enter("setup")
         store = cls(settings, embedding_model_name=embedding_model.name)
@@ -511,9 +518,15 @@ class QdrantVectorStore:
 
                 buffered: list[tuple[str, list[float], dict[str, Any]]] = []
                 buffered_bytes = 0
-                for start in range(0, len(chunks), batch_size):
+                chunk_stream = iter(chunks)
+                while True:
+                    timer.enter("source_wait")
+                    batch = list(islice(chunk_stream, batch_size))
+                    if not batch:
+                        break
+                    stats.chunks_total += len(batch)
+
                     timer.enter("lookup")
-                    batch = chunks[start : start + batch_size]
                     point_ids = [_point_id(chunk.id) for chunk in batch]
                     current_ids.update(point_ids)
 
@@ -602,7 +615,12 @@ class QdrantVectorStore:
             + stats.write_wait_seconds
             + stats.cleanup_seconds
         )
-        stats.total_seconds = stats.write_seconds + stats.lookup_seconds + stats.embedding_seconds
+        stats.total_seconds = (
+            stats.write_seconds
+            + stats.source_wait_seconds
+            + stats.lookup_seconds
+            + stats.embedding_seconds
+        )
         return store, stats
 
     def _indexing_threshold_kb(self) -> int:

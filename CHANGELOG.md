@@ -53,6 +53,7 @@ This project follows Semantic Versioning for the application release number:
 - The Slurm job no longer passes `--force`, so PDFs with cached extracted text are not re-parsed; set `RAG_INGEST_FORCE=true` to re-parse everything. A run with `RAG_QDRANT_RECREATE_COLLECTION=true` now rebuilds the collection even when no file changed.
 - Ingestion hashes files during discovery on `RAG_PDF_WORKERS` threads and chunks documents on `RAG_PDF_WORKERS` processes; Qdrant points are built on the upsert thread, and the stale-point scan is skipped for a collection the run created. The resulting collection is unchanged.
 - The ingestion manifest is read with one query and written in one transaction per step, instead of opening a connection and committing per file, which was slow with the manifest on shared storage. `manifest_seconds` in the report covers all manifest work.
+- PDF extraction and chunking stream into embedding: documents are parsed and chunked on `RAG_PDF_WORKERS` processes, a bounded window ahead, while earlier ones are embedded, instead of parsing the whole corpus first. The report's `extraction_seconds` and `chunking_seconds` are replaced by `source_wait_seconds` (time embedding waited on them) and the per-worker totals `extraction_worker_seconds` and `chunking_worker_seconds`.
 
 ## [0.1.0] - 2026-08-10
 
