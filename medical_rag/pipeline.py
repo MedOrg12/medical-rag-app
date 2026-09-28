@@ -126,9 +126,7 @@ class StrokeRAG:
         deleted_paths = manifest.deleted_paths(current_paths)
         manifest.mark_deleted(deleted_paths)
 
-        for file in files:
-            if file.duplicate_of:
-                manifest.mark_duplicate(file)
+        manifest.mark_duplicates([file for file in files if file.duplicate_of])
 
         unique_files = [file for file in files if not file.duplicate_of]
         changed_files = manifest.changed_files(
@@ -219,21 +217,21 @@ class StrokeRAG:
 
         manifest_start = time.perf_counter()
         documents_by_path = {str(document.source.path): document for document in documents}
+        indexed = []
         for file in unique_files:
             if str(file.path) in failures:
                 continue
             document = documents_by_path.get(str(file.path))
             if document is None:
                 continue
-            manifest.mark_indexed(
-                file=file,
-                pages=len(document.pages),
-                chunks=len(chunks_by_path.get(str(file.path), [])),
-                chunk_size_chars=self.settings.chunk_size_chars,
-                chunk_overlap_chars=self.settings.chunk_overlap_chars,
-                embedding_model=self.embedding_model.name,
-                scanned_pages=document.scanned_pages,
-            )
+            chunk_count = len(chunks_by_path.get(str(file.path), []))
+            indexed.append((file, len(document.pages), chunk_count, document.scanned_pages))
+        manifest.mark_indexed_many(
+            indexed,
+            chunk_size_chars=self.settings.chunk_size_chars,
+            chunk_overlap_chars=self.settings.chunk_overlap_chars,
+            embedding_model=self.embedding_model.name,
+        )
         manifest_seconds += time.perf_counter() - manifest_start
         timings["manifest_seconds"] = round(manifest_seconds, 4)
         timings["total_seconds"] = round(time.perf_counter() - started, 4)

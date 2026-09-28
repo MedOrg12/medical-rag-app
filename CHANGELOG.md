@@ -52,6 +52,7 @@ This project follows Semantic Versioning for the application release number:
 - `scripts/bench_ingest.py` and `scripts/bench_ingest_job.sbatch` benchmark ingestion across commits on Slurm with fresh collections, an idle-Qdrant check, and Qdrant telemetry per job.
 - The Slurm job no longer passes `--force`, so PDFs with cached extracted text are not re-parsed; set `RAG_INGEST_FORCE=true` to re-parse everything. A run with `RAG_QDRANT_RECREATE_COLLECTION=true` now rebuilds the collection even when no file changed.
 - Ingestion hashes files during discovery on `RAG_PDF_WORKERS` threads and chunks documents on `RAG_PDF_WORKERS` processes; Qdrant points are built on the upsert thread, and the stale-point scan is skipped for a collection the run created. The resulting collection is unchanged.
+- The ingestion manifest is read with one query and written in one transaction per step, instead of opening a connection and committing per file, which was slow with the manifest on shared storage. `manifest_seconds` in the report covers all manifest work.
 
 ## [0.1.0] - 2026-08-10
 
