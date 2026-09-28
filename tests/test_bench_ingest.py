@@ -47,7 +47,13 @@ def test_job_row_reads_new_and_old_reports(tmp_path) -> None:
         json.dumps(
             {
                 "chunks_embedded": 10,
-                "timings": {"total_seconds": 50.0, "embedding_seconds": 20.0, "reuse_lookup_seconds": 1.0},
+                "timings": {
+                    "total_seconds": 50.0,
+                    "discovery_seconds": 4.0,
+                    "manifest_seconds": 2.0,
+                    "embedding_seconds": 20.0,
+                    "reuse_lookup_seconds": 1.0,
+                },
                 "vector_store": {
                     "total_seconds": 30.0,
                     "write_wait_seconds": 5.0,
@@ -71,6 +77,8 @@ def test_job_row_reads_new_and_old_reports(tmp_path) -> None:
 
     assert (new["state"], new["vector_s"], new["write_other_s"], new["upsert_requests"]) == ("OK", 30.0, 4.0, 3)
     assert (old["state"], old["vector_s"], old["write_wait_s"]) == ("OK", 60.0, 40.0)
+    assert (new["discovery_s"], new["manifest_s"], new["chunking_s"]) == (4.0, 2.0, "-")
+    assert (old["job_wall_s"], old["manifest_s"]) == (95.0, "-")
 
 
 def test_job_row_marks_failed_jobs(tmp_path) -> None:
