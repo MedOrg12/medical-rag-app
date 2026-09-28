@@ -28,7 +28,41 @@ if [ "${RAG_AUTO_INGEST_ON_STARTUP:-true}" = "true" ]; then
     SHOULD_INGEST="false"
     FORCE_ARG=""
 
-    if [ ! -f "${RAG_INDEX_PATH:-/app/.rag/index.json}" ]; then
+    if [ "${RAG_VECTOR_STORE:-json}" = "qdrant" ]; then
+        if [ "${RAG_FORCE_REINGEST:-false}" = "true" ]; then
+            SHOULD_INGEST="true"
+            FORCE_ARG="--force"
+        else
+            # Exit codes: 0 collection exists, 1 collection missing, 2 Qdrant unreachable.
+            set +e
+            python3 - <<'PY'
+import sys
+
+from medical_rag.config import Settings
+from medical_rag.vector_store import vector_store_exists
+
+try:
+    exists = vector_store_exists(Settings.from_env())
+except RuntimeError as exc:
+    print(exc, file=sys.stderr)
+    raise SystemExit(2)
+raise SystemExit(0 if exists else 1)
+PY
+            QDRANT_CHECK=$?
+            set -e
+            case "${QDRANT_CHECK}" in
+                0)
+                    echo "Qdrant collection already exists at ${RAG_QDRANT_URL:-http://qdrant:6333}/${RAG_QDRANT_COLLECTION:-stroke_chunks}"
+                    ;;
+                1)
+                    SHOULD_INGEST="true"
+                    ;;
+                *)
+                    echo "Qdrant is not reachable; skipping startup ingestion. The server will start so ingestion can be retried from the UI or API."
+                    ;;
+            esac
+        fi
+    elif [ ! -f "${RAG_INDEX_PATH:-/app/.rag/index.json}" ]; then
         SHOULD_INGEST="true"
     elif [ "${RAG_FORCE_REINGEST:-false}" = "true" ]; then
         SHOULD_INGEST="true"

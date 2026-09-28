@@ -19,6 +19,7 @@ This project follows Semantic Versioning for the application release number:
 - Package-level eval suite data under `medical_rag/eval_data.json`.
 - Health metadata for active embedding model, Ollama/API availability, and embedding fallback state.
 - Qdrant vector store backend (`RAG_VECTOR_STORE=qdrant`) with idempotent upserts into an existing collection, stale-point cleanup, and vector-config validation.
+- `RAG_QDRANT_TIMEOUT_SECONDS`, `QDRANT_DATA_DIR`, and `QDRANT_WAL_CAPACITY_MB` for slow-disk Qdrant hosts.
 
 ### Changed
 
@@ -28,6 +29,8 @@ This project follows Semantic Versioning for the application release number:
 - Corpus discovery now excludes `SOURCES.md` planning/checklist files so they do not appear as medical citations.
 - Live pytest evals now require `RUN_LIVE_EVAL=1`, while eval data validation still runs normally.
 - `RAG_QDRANT_RECREATE_COLLECTION` now defaults to `false`; ingestion writes into the existing collection.
+- An unreachable Qdrant is now reported as an error rather than as a missing collection, so container startup no longer launches a full ingestion when the vector store is down.
+- `RAG_AUTO_INGEST_ON_STARTUP` is configurable in compose for query-only hosts.
 
 ## [0.1.0] - 2026-08-10
 
