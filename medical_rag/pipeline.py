@@ -135,7 +135,16 @@ class StrokeRAG:
             failed_only=failed_only,
         )
 
-        if not changed_files and not deleted_paths and vector_store_exists(self.settings):
+        # A requested collection rebuild must reach the vector store even when no file changed.
+        rebuild_requested = (
+            self.settings.vector_store_backend == "qdrant" and self.settings.qdrant_recreate_collection
+        )
+        if (
+            not changed_files
+            and not deleted_paths
+            and not rebuild_requested
+            and vector_store_exists(self.settings)
+        ):
             store = load_vector_store(self.settings)
             total_seconds = round(time.perf_counter() - started, 4)
             timings["total_seconds"] = total_seconds

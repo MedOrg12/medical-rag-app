@@ -254,8 +254,15 @@ PY
   echo "----------------------"
 fi
 
+# Without --force, PDFs whose extracted text is already cached in RAG_SCRATCH_DIR are not
+# re-parsed. Every document still reaches the vector store, so the result is the same.
+INGEST_ARGS=()
+if [ "${RAG_INGEST_FORCE:-false}" = "true" ]; then
+  INGEST_ARGS+=(--force)
+fi
+
 python -m medical_rag.cli ingest \
   --source "$RAG_CORPUS_DIR" \
-  --force \
   --pdf-workers "$RAG_PDF_WORKERS" \
-  --embed-batch-size "$RAG_EMBED_BATCH_SIZE"
+  --embed-batch-size "$RAG_EMBED_BATCH_SIZE" \
+  ${INGEST_ARGS[@]+"${INGEST_ARGS[@]}"}

@@ -47,3 +47,37 @@ def test_ingest_deduplicates_identical_files(tmp_path) -> None:
     assert report.files_discovered == 2
     assert report.duplicate_files == 1
     assert report.documents == 1
+
+
+def test_requested_qdrant_rebuild_runs_even_when_nothing_changed(monkeypatch, tmp_path) -> None:
+    import dataclasses
+
+    import medical_rag.pipeline as pipeline
+    from medical_rag.vector_store import IngestStats
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "stroke.txt").write_text("Stroke symptoms include arm weakness.", encoding="utf-8")
+    ingested: list[int] = []
+
+    class _Store:
+        def chunk_count(self) -> int:
+            return 1
+
+    def fake_ingest(settings, chunks, embedding_model):
+        ingested.append(len(chunks))
+        return _Store(), IngestStats(chunks_total=len(chunks), chunks_embedded=len(chunks))
+
+    monkeypatch.setattr(pipeline, "ingest_vector_store", fake_ingest)
+    monkeypatch.setattr(pipeline, "vector_store_exists", lambda settings: True)
+    monkeypatch.setattr(pipeline, "load_vector_store", lambda settings: _Store())
+    settings = dataclasses.replace(_settings(tmp_path, corpus), vector_store_backend="qdrant")
+
+    StrokeRAG(settings).ingest()
+    unchanged = StrokeRAG(settings).ingest()
+    rebuild = StrokeRAG(dataclasses.replace(settings, qdrant_recreate_collection=True)).ingest()
+
+    assert unchanged.skipped_unchanged is True
+    assert rebuild.skipped_unchanged is False
+    assert rebuild.files_from_cache == 1, "a rebuild without --force reuses extracted text"
+    assert ingested == [1, 1]
