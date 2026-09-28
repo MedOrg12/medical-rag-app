@@ -112,7 +112,9 @@ prints the SSH target, forwarded port, and the relevant log path:
   be rejected; keep this at or below the server's setting.
 
 The ingestion report's `vector_store` section splits the vector-store stage's wall time into
-phases that add up exactly: `setup`, `lookup` (reuse checks), `embedding`, `point_build`,
+phases that add up exactly: `setup`, `source_wait` (waiting for PDFs to be parsed and chunked,
+which run on `RAG_PDF_WORKERS` processes alongside embedding), `lookup` (reuse checks),
+`embedding`, `point_build`,
 `write_wait` (stuck behind the background writer) and `cleanup`. `upsert_busy_seconds` is how
 long the writer thread spent in upsert calls, so comparing it with `write_wait_seconds` shows
 how much write time overlapped embedding.

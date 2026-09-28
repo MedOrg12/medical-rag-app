@@ -67,6 +67,7 @@ def test_requested_qdrant_rebuild_runs_even_when_nothing_changed(monkeypatch, tm
             return 1
 
     def fake_ingest(settings, chunks, embedding_model):
+        chunks = list(chunks)
         ingested.append(len(chunks))
         return _Store(), IngestStats(chunks_total=len(chunks), chunks_embedded=len(chunks))
 
@@ -100,33 +101,65 @@ def test_parallel_discovery_matches_sequential_including_duplicate_choice(tmp_pa
     assert [file.duplicate_of for file in parallel if file.duplicate_of][:1] == [str(corpus / "doc00.txt")]
 
 
-def test_parallel_chunking_matches_sequential(tmp_path) -> None:
-    from medical_rag.ingestion import ExtractedDocument, SourceFile
-    from medical_rag.pipeline import _chunk_documents
-    from medical_rag.types import PageText
+def test_streamed_extraction_matches_sequential_and_keeps_document_order(tmp_path) -> None:
+    from medical_rag.ingestion import (
+        IngestionOptions,
+        discover_source_files,
+        iter_chunked_documents,
+    )
 
-    documents = [
-        ExtractedDocument(
-            source=SourceFile(path=tmp_path / f"d{n}.pdf", sha256=f"{n:064d}", size=n, mtime_ns=n),
-            pages=[
-                PageText(
-                    source_id=f"d{n}.pdf",
-                    source_path=str(tmp_path / f"d{n}.pdf"),
-                    title=f"Doc {n}",
-                    page_number=page,
-                    text=" ".join(f"Sentence {n}.{page}.{i} about stroke care." for i in range(40)),
-                )
-                for page in range(1, 4)
-            ],
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    for n in range(10):
+        text = " ".join(f"Sentence {n}.{i} about stroke care and rehabilitation." for i in range(60))
+        (corpus / f"doc{n:02d}.txt").write_text(text, encoding="utf-8")
+    files = discover_source_files(corpus)
+
+    def run(workers: int, cache: str) -> list:
+        return list(
+            iter_chunked_documents(
+                files,
+                cache_dir=tmp_path / cache,
+                options=IngestionOptions(pdf_workers=workers),
+                chunk_size_chars=300,
+                chunk_overlap_chars=40,
+            )
         )
-        for n in range(6)
-    ]
 
-    sequential = _chunk_documents(documents, chunk_size_chars=300, chunk_overlap_chars=40, workers=1)
-    parallel = _chunk_documents(documents, chunk_size_chars=300, chunk_overlap_chars=40, workers=3)
+    sequential = run(1, "seq")
+    parallel = run(3, "par")
 
-    assert parallel == sequential
-    assert sum(len(chunks) for chunks in parallel) > len(documents)
+    assert [d.source for d in parallel] == files
+    assert [d.chunks for d in parallel] == [d.chunks for d in sequential]
+    assert all(d.error is None and len(d.chunks) > 1 for d in parallel)
+    assert all(d.from_cache for d in run(3, "par")), "a second pass reads the extraction cache"
+
+
+def test_streamed_extraction_records_failures_and_continues(tmp_path) -> None:
+    from medical_rag.ingestion import (
+        IngestionOptions,
+        discover_source_files,
+        iter_chunked_documents,
+    )
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "a.txt").write_text("Stroke symptoms include arm weakness.", encoding="utf-8")
+    (corpus / "b.pdf").write_bytes(b"%PDF-1.4 not really a pdf")
+    (corpus / "c.txt").write_text("Rapid treatment improves outcomes.", encoding="utf-8")
+
+    documents = list(
+        iter_chunked_documents(
+            discover_source_files(corpus),
+            cache_dir=tmp_path / "cache",
+            options=IngestionOptions(pdf_workers=2),
+            chunk_size_chars=300,
+            chunk_overlap_chars=40,
+        )
+    )
+
+    assert [d.source.path.name for d in documents] == ["a.txt", "b.pdf", "c.txt"]
+    assert [d.error is not None for d in documents] == [False, True, False]
 
 
 def test_manifest_batch_writes_drive_change_detection(tmp_path) -> None:
@@ -145,3 +178,17 @@ def test_manifest_batch_writes_drive_change_detection(tmp_path) -> None:
 
     assert changed == [edited]
     assert manifest.deleted_paths({str(file.path) for file in files}) == [str(duplicate.path)]
+
+
+def test_ingest_never_reaches_the_vector_store_when_nothing_was_extracted(monkeypatch, tmp_path) -> None:
+    import pytest
+
+    import medical_rag.pipeline as pipeline
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "broken.pdf").write_bytes(b"%PDF-1.4 not really a pdf")
+    monkeypatch.setattr(pipeline, "ingest_vector_store", lambda *args: pytest.fail("vector store touched"))
+
+    with pytest.raises(ValueError, match="No supported text was extracted"):
+        StrokeRAG(_settings(tmp_path, corpus)).ingest()
