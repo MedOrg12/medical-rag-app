@@ -1,8 +1,13 @@
+from dataclasses import replace
+
+import pytest
+
 from medical_rag.config import Settings
 from medical_rag.embeddings import (
     ApiEmbeddingModel,
     HashingEmbeddingModel,
     OllamaEmbeddingModel,
+    SentenceTransformersEmbeddingModel,
     make_embedding_model,
     ollama_model_name_matches,
 )
@@ -133,3 +138,39 @@ def test_api_embedding_backend_requires_api_key(tmp_path) -> None:
         assert "RAG_API_KEY" in str(exc)
     else:
         raise AssertionError("Expected API embeddings without an API key to fail")
+def test_sentence_transformers_backend_selection_is_lazy(tmp_path) -> None:
+    settings = replace(
+        Settings.from_env(tmp_path),
+        embedding_backend="sentence-transformers",
+        sentence_transformers_model="BAAI/bge-small-en-v1.5",
+        sentence_transformers_device="cuda",
+        sentence_transformers_batch_size=16,
+        embedding_cache_path=None,
+    )
+
+    model, fallback_used = make_embedding_model(settings)
+
+    assert fallback_used is False
+    assert isinstance(model, SentenceTransformersEmbeddingModel)
+    assert model.name == "sentence-transformers:BAAI/bge-small-en-v1.5"
+    assert model.device == "cuda"
+    assert model.batch_size == 16
+
+
+def test_sentence_transformers_refuses_cuda_when_unavailable(monkeypatch) -> None:
+    import sys
+    import types
+
+    from medical_rag.embeddings import SentenceTransformersEmbeddingModel
+
+    fake_torch = types.SimpleNamespace(
+        __version__="0.0-test",
+        version=types.SimpleNamespace(cuda=None),
+        cuda=types.SimpleNamespace(is_available=lambda: False),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=object))
+    model = SentenceTransformersEmbeddingModel(model_name="BAAI/bge-base-en-v1.5", device="cuda")
+
+    with pytest.raises(RuntimeError, match="no usable CUDA device"):
+        model.embed(["stroke"])
