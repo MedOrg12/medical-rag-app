@@ -59,3 +59,20 @@ def test_with_ingestion_options_preserves_answer_mode(tmp_path) -> None:
     assert updated.api_max_output_tokens == 600
     assert updated.api_reasoning_effort == "low"
     assert updated.api_max_retries == 3
+
+
+def test_settings_copy_helpers_preserve_every_field(tmp_path) -> None:
+    from dataclasses import fields
+
+    settings = Settings.from_env(tmp_path)
+    copies = {
+        "with_paths": settings.with_paths(corpus_dir=tmp_path / "other"),
+        "with_ingestion_options": settings.with_ingestion_options(pdf_workers=3),
+    }
+    overridden = {"with_paths": {"corpus_dir"}, "with_ingestion_options": {"pdf_workers"}}
+
+    for name, copied in copies.items():
+        for field in fields(Settings):
+            if field.name in overridden[name]:
+                continue
+            assert getattr(copied, field.name) == getattr(settings, field.name), field.name
