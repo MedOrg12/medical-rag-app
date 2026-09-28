@@ -30,6 +30,12 @@ _MAX_PENDING_UPSERTS = 2
 # run and the final wait would have to drain all of it inside a single request timeout.
 _UPSERTS_PER_WAIT = 8
 
+# Upper bound on the JSON size of one float in a REST upsert body (e.g. "-1.2345678901234567e-05,"),
+# plus per-point framing (id, vector name, braces), used to keep requests under Qdrant's
+# service.max_request_size_mb. Measured 768-dim bge vectors average ~22 bytes per float.
+_JSON_BYTES_PER_FLOAT = 24
+_JSON_BYTES_PER_POINT = 128
+
 # Qdrant's own default HNSW indexing threshold (KB of vectors per segment), restored when a
 # collection is found with indexing still paused by an ingest that was killed mid-run.
 _DEFAULT_INDEXING_THRESHOLD_KB = 10000
@@ -59,16 +65,49 @@ class VectorStoreBackend(Protocol):
 
 @dataclass
 class IngestStats:
-    """What an ingestion run did, so reports can show reuse and per-stage timings."""
+    """What an ingestion run did, so reports can show reuse and per-stage timings.
+
+    For Qdrant, the ``*_seconds`` phases split the ingest loop's wall time with nothing left
+    over: each moment is charged to exactly one phase, and ``total_seconds`` is their sum.
+    Writes run on a background thread, so ``write_wait_seconds`` is only the time the loop
+    was stuck behind them; ``upsert_busy_seconds`` is how long the writer itself was busy.
+    """
 
     chunks_total: int = 0
     chunks_embedded: int = 0
     chunks_reused: int = 0
     stale_points_removed: int = 0
     embedding_seconds: float = 0.0
-    # Qdrant writes overlap embedding, so this is only the time the ingest loop spent
-    # blocked on writes (not hidden behind embedding), and it sums with embedding time.
+    # Main-thread time on write-side work: for Qdrant, setup + point building + waiting on
+    # the writer + cleanup. Sums with embedding and lookup time.
     write_seconds: float = 0.0
+    setup_seconds: float = 0.0
+    lookup_seconds: float = 0.0
+    point_build_seconds: float = 0.0
+    write_wait_seconds: float = 0.0
+    cleanup_seconds: float = 0.0
+    total_seconds: float = 0.0
+    upsert_requests: int = 0
+    upsert_busy_seconds: float = 0.0
+    upsert_request_mb: float = 0.0
+
+
+class _PhaseTimer:
+    """Charges elapsed wall time to whichever phase is current, so phases never overlap
+    and always add up to the total, leaving no unexplained time."""
+
+    def __init__(self, stats: IngestStats) -> None:
+        self._stats = stats
+        self._phase: str | None = None
+        self._since = time.perf_counter()
+
+    def enter(self, phase: str | None) -> None:
+        now = time.perf_counter()
+        if self._phase is not None:
+            field = f"{self._phase}_seconds"
+            setattr(self._stats, field, getattr(self._stats, field) + now - self._since)
+        self._phase = phase
+        self._since = now
 
 
 def ingest_vector_store(
@@ -395,26 +434,29 @@ class QdrantVectorStore:
     ) -> tuple[QdrantVectorStore, IngestStats]:
         """Stream ``chunks`` into the collection one batch at a time.
 
-        For each batch the collection is asked which point ids already hold a vector for
-        the identical text and embedding model; only the rest are embedded and upserted.
+        For each ``batch_size`` batch the collection is asked which point ids already hold a
+        vector for the identical text and embedding model; only the rest are embedded.
         Afterwards, points whose id is not in the current corpus are deleted, so the
         collection mirrors the corpus without a separate embedding cache.
 
-        Upserts run on a background thread with ``wait=False`` so the next batch is being
-        embedded while the previous one is written. The final upsert uses ``wait=True``:
-        Qdrant applies a shard's updates in order, so once it returns every earlier
-        batch has been applied too, and the point count is checked against the corpus to
-        catch an asynchronous write that was acknowledged but never applied.
+        Embedded points are upserted in requests of up to ``qdrant_batch_size`` points, cut
+        short to stay under ``qdrant_max_request_mb``. Upserts run on a background thread
+        with ``wait=False`` so embedding continues while earlier points are written. Every
+        ``_UPSERTS_PER_WAIT``-th upsert and the last one use ``wait=True``: Qdrant applies
+        a shard's updates in order, so that bounds its apply backlog, and once the last one
+        returns everything has been applied. The point count is then checked against the
+        corpus to catch an asynchronous write that was acknowledged but never applied.
 
         Once a run has written enough to cross Qdrant's indexing threshold, HNSW indexing is
         paused and restored afterwards, so Qdrant builds the index once instead of
-        re-indexing segments on its disk during the load. Every ``_UPSERTS_PER_WAIT``-th
-        upsert also waits, which bounds how far Qdrant's apply backlog can fall behind.
+        re-indexing segments on its disk during the load.
         """
+        stats = IngestStats(chunks_total=len(chunks))
+        timer = _PhaseTimer(stats)
+        timer.enter("setup")
         store = cls(settings, embedding_model_name=embedding_model.name)
         client = store.client
         collection = settings.qdrant_collection
-        stats = IngestStats(chunks_total=len(chunks))
 
         collection_ready = bool(client.collection_exists(collection))
         if collection_ready and settings.qdrant_recreate_collection:
@@ -428,32 +470,33 @@ class QdrantVectorStore:
         indexing_paused = False
         pause_indexing_at_bytes = 0
         written_vector_bytes = 0
+        max_request_points = max(1, settings.qdrant_batch_size)
+        max_request_bytes = int(settings.qdrant_max_request_mb * 1024 * 1024)
 
         current_ids: set[str] = set()
         upsert_client = _qdrant_client(settings, for_bulk_upsert=True)
         try:
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="qdrant-upsert") as writer:
                 pending: deque[Future[Any]] = deque()
-                # The latest batch is held back one step so the last one can go out with wait=True.
-                held_points: list[Any] | None = None
 
-                upserts_sent = 0
+                def upsert(points: list[Any], wait: bool) -> None:
+                    started = time.perf_counter()
+                    upsert_client.upsert(collection_name=collection, points=points, wait=wait)
+                    # Only this single writer thread updates it.
+                    stats.upsert_busy_seconds += time.perf_counter() - started
 
-                def send(points: list[Any], final: bool = False) -> None:
-                    nonlocal upserts_sent
+                def send(points: list[Any], request_bytes: int, final: bool = False) -> None:
                     while len(pending) >= _MAX_PENDING_UPSERTS:
                         pending.popleft().result()
-                    upserts_sent += 1
-                    pending.append(
-                        writer.submit(
-                            upsert_client.upsert,
-                            collection_name=collection,
-                            points=points,
-                            wait=final or upserts_sent % _UPSERTS_PER_WAIT == 0,
-                        )
-                    )
+                    stats.upsert_requests += 1
+                    stats.upsert_request_mb += request_bytes / (1024 * 1024)
+                    wait = final or stats.upsert_requests % _UPSERTS_PER_WAIT == 0
+                    pending.append(writer.submit(upsert, points, wait))
 
+                buffered: list[Any] = []
+                buffered_bytes = 0
                 for start in range(0, len(chunks), batch_size):
+                    timer.enter("lookup")
                     batch = chunks[start : start + batch_size]
                     point_ids = [_point_id(chunk.id) for chunk in batch]
                     current_ids.update(point_ids)
@@ -470,12 +513,11 @@ class QdrantVectorStore:
                     if not missing:
                         continue
 
-                    embed_started = time.perf_counter()
+                    timer.enter("embedding")
                     vectors = embedding_model.embed([chunk.text for _, chunk in missing])
-                    stats.embedding_seconds += time.perf_counter() - embed_started
                     stats.chunks_embedded += len(missing)
 
-                    write_started = time.perf_counter()
+                    timer.enter("setup")
                     if not collection_validated:
                         # Needs a real vector to know the dimension; runs once per ingest.
                         store._ensure_collection(len(vectors[0]))
@@ -495,31 +537,39 @@ class QdrantVectorStore:
                         store._set_indexing_threshold(0)
                         indexing_paused = True
                         restore_indexing_threshold = threshold_kb
-                    if held_points is not None:
-                        send(held_points)
-                    held_points = [
-                        _qdrant_point(
+
+                    timer.enter("point_build")
+                    for (_, chunk), vector in zip(missing, vectors, strict=True):
+                        point = _qdrant_point(
                             settings=settings,
                             chunk=chunk,
                             dense_vector=vector,
                             embedding_model=embedding_model.name,
                         )
-                        for (_, chunk), vector in zip(missing, vectors, strict=True)
-                    ]
-                    stats.write_seconds += time.perf_counter() - write_started
+                        point_bytes = _estimated_request_bytes(point.payload, len(vector))
+                        # Requests are only cut when the next point does not fit, so the
+                        # buffer is never empty at the end and the last upsert can wait.
+                        if buffered and (
+                            len(buffered) >= max_request_points
+                            or buffered_bytes + point_bytes > max_request_bytes
+                        ):
+                            timer.enter("write_wait")
+                            send(buffered, buffered_bytes)
+                            timer.enter("point_build")
+                            buffered, buffered_bytes = [], 0
+                        buffered.append(point)
+                        buffered_bytes += point_bytes
 
-                write_started = time.perf_counter()
-                if held_points is not None:
-                    send(held_points, final=True)
+                timer.enter("write_wait")
+                if buffered:
+                    send(buffered, buffered_bytes, final=True)
                 while pending:
                     pending.popleft().result()
-                stats.write_seconds += time.perf_counter() - write_started
 
+            timer.enter("cleanup")
             if collection_ready:
-                write_started = time.perf_counter()
                 stats.stale_points_removed = store._delete_stale_points(client, current_ids)
                 stored = store.chunk_count()
-                stats.write_seconds += time.perf_counter() - write_started
                 if stored != len(current_ids):
                     raise RuntimeError(
                         f"Qdrant collection {collection!r} holds {stored} points after ingestion, "
@@ -527,9 +577,18 @@ class QdrantVectorStore:
                         "the server. Check the Qdrant logs and re-run the ingest."
                     )
         finally:
+            timer.enter("cleanup")
             upsert_client.close()
             if restore_indexing_threshold is not None:
                 store._set_indexing_threshold(restore_indexing_threshold)
+            timer.enter(None)
+        stats.write_seconds = (
+            stats.setup_seconds
+            + stats.point_build_seconds
+            + stats.write_wait_seconds
+            + stats.cleanup_seconds
+        )
+        stats.total_seconds = stats.write_seconds + stats.lookup_seconds + stats.embedding_seconds
         return store, stats
 
     def _indexing_threshold_kb(self) -> int:
@@ -728,6 +787,12 @@ def _qdrant_point(
             "embedding_model": embedding_model,
         },
     )
+
+
+def _estimated_request_bytes(payload: dict[str, Any], dimensions: int) -> int:
+    """Upper bound on one point's share of a REST upsert body. ``json.dumps`` escapes
+    non-ASCII text, so it over- rather than under-counts the payload."""
+    return len(json.dumps(payload)) + dimensions * _JSON_BYTES_PER_FLOAT + _JSON_BYTES_PER_POINT
 
 
 def _point_id(chunk_id: str) -> str:

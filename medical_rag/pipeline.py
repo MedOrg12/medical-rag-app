@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 from medical_rag.chunking import chunk_pages
@@ -18,6 +19,7 @@ from medical_rag.relevance import expand_query_for_retrieval, filter_results_for
 from medical_rag.reranker import Reranker, make_reranker
 from medical_rag.types import Chunk, Citation, IngestionReport, RagAnswer, SearchResult
 from medical_rag.vector_store import (
+    IngestStats,
     VectorStoreBackend,
     ingest_vector_store,
     load_vector_store,
@@ -87,9 +89,11 @@ class StrokeRAG:
             chunks_embedded=stats.chunks_embedded,
             chunks_reused=stats.chunks_reused,
             timings={
+                "reuse_lookup_seconds": round(stats.lookup_seconds, 4),
                 "embedding_seconds": round(stats.embedding_seconds, 4),
                 "index_write_seconds": round(stats.write_seconds, 4),
             },
+            vector_store=_vector_store_stats(stats),
         )
 
     def _ingest_incremental(
@@ -201,6 +205,7 @@ class StrokeRAG:
             raise ValueError(f"No chunks could be created from {source}")
 
         store, stats = ingest_vector_store(self.settings, chunks, self.embedding_model)
+        timings["reuse_lookup_seconds"] = round(stats.lookup_seconds, 4)
         timings["embedding_seconds"] = round(stats.embedding_seconds, 4)
         timings["index_write_seconds"] = round(stats.write_seconds, 4)
         timings["total_seconds"] = round(time.perf_counter() - started, 4)
@@ -244,6 +249,7 @@ class StrokeRAG:
             manifest_path=str(self.settings.manifest_path),
             extraction_cache_dir=str(self.settings.extraction_cache_dir),
             timings=timings,
+            vector_store=_vector_store_stats(stats),
         )
 
     def ask(
@@ -312,6 +318,13 @@ class StrokeRAG:
             raise FileNotFoundError(f"{location}. Run ingestion first.")
         self._store = load_vector_store(self.settings)
         return self._store
+
+
+def _vector_store_stats(stats: IngestStats) -> dict[str, float | int]:
+    return {
+        key: round(value, 4) if isinstance(value, float) else value
+        for key, value in asdict(stats).items()
+    }
 
 
 def _citation(result: SearchResult, citation_id: int) -> Citation:

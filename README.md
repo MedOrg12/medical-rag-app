@@ -307,7 +307,9 @@ Environment variables:
 - `RAG_QDRANT_DENSE_VECTOR_NAME`: default `dense`; the named vector the collection stores
 - `RAG_QDRANT_API_KEY`: optional Qdrant API key
 - `RAG_QDRANT_COLLECTION`: default `stroke_chunks`
-- `RAG_QDRANT_BATCH_SIZE`: default `128`
+- `RAG_QDRANT_BATCH_SIZE`: default `1024`. Points per upsert request (and per stale-point delete).
+- `RAG_QDRANT_MAX_REQUEST_MB`: default `32`. Upserts are split to stay under this; keep it at or below
+  the Qdrant server's `service.max_request_size_mb` (default 32). A 768-dim point is about 18 KB of JSON.
 - `RAG_QDRANT_RECREATE_COLLECTION`: default `false`. Ingestion upserts into the existing collection and
   removes points whose source was deleted or re-chunked. Set `true` to drop and rebuild it, which is
   required when the embedding dimension or vector name changes.

@@ -96,10 +96,21 @@ prints the SSH target, forwarded port, and the relevant log path:
 - `RAG_OLLAMA_REMOTE_HOST`: host visible from the SSH server. Defaults to `127.0.0.1`.
 - `RAG_OLLAMA_REMOTE_PORT`: remote Ollama port. Defaults to `11434`.
 - `RAG_PDF_WORKERS`: PDF extraction workers. Defaults to `SLURM_CPUS_PER_TASK`.
-- `RAG_EMBED_BATCH_SIZE`: chunks per ingest batch, and so per Qdrant reuse lookup and
-  upsert. Defaults to `256` in the job. The GPU still encodes in
-  `RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE` mini-batches; larger ingest batches mainly cut round
-  trips through the tunnel.
+- `RAG_EMBED_BATCH_SIZE`: chunks per embedding call and per Qdrant reuse lookup. Defaults to
+  `256` in the job. The GPU still encodes in `RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE`
+  mini-batches.
+- `RAG_QDRANT_BATCH_SIZE`: points per upsert request. Defaults to `1024`; against the shared
+  host, write time fell from 3,384 s to 1,096 s going from 128 to 1024 on a 274k-chunk corpus.
+- `RAG_QDRANT_MAX_REQUEST_MB`: upserts are also split to stay under this size. Defaults to
+  `32`, Qdrant's default `service.max_request_size_mb`, which caps REST request bodies (gRPC
+  has no such limit). A 768-dim point is about 18 KB of JSON, so 2048 points (~35 MB) would
+  be rejected; keep this at or below the server's setting.
+
+The ingestion report's `vector_store` section splits the vector-store stage's wall time into
+phases that add up exactly: `setup`, `lookup` (reuse checks), `embedding`, `point_build`,
+`write_wait` (stuck behind the background writer) and `cleanup`. `upsert_busy_seconds` is how
+long the writer thread spent in upsert calls, so comparing it with `write_wait_seconds` shows
+how much write time overlapped embedding.
 
 ## After Ingestion
 

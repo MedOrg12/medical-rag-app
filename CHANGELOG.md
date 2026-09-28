@@ -47,6 +47,8 @@ This project follows Semantic Versioning for the application release number:
 - Qdrant ingestion pauses HNSW indexing once a run writes enough to cross the collection's indexing threshold, and restores it afterwards, including after a failed run or one that was killed mid-load. Small incremental runs leave the config alone.
 - Qdrant ingestion skips the per-batch reuse lookup when it created the collection itself.
 - The Slurm job defaults `RAG_EMBED_BATCH_SIZE` to `256` to cut Qdrant round trips through the tunnel.
+- Qdrant upserts are sized by `RAG_QDRANT_BATCH_SIZE` (now default `1024`) independently of the embedding batch, and split to stay under the new `RAG_QDRANT_MAX_REQUEST_MB` (default `32`, Qdrant's REST request limit).
+- The ingestion report's new `vector_store` section splits vector-store time into phases that add up to its wall time, including the reuse lookups (`reuse_lookup_seconds` in `timings`), and records background upsert time and request counts.
 
 ## [0.1.0] - 2026-08-10
 

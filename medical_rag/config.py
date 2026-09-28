@@ -108,7 +108,8 @@ class Settings:
     qdrant_api_key: str | None = None
     qdrant_collection: str = "stroke_chunks"
     qdrant_dense_vector_name: str = "dense"
-    qdrant_batch_size: int = 128
+    qdrant_batch_size: int = 1024
+    qdrant_max_request_mb: float = 32.0
     qdrant_recreate_collection: bool = False
     qdrant_timeout_seconds: float = 120.0
     qdrant_prefer_grpc: bool = False
@@ -188,7 +189,8 @@ class Settings:
             qdrant_api_key=os.getenv("RAG_QDRANT_API_KEY") or None,
             qdrant_collection=os.getenv("RAG_QDRANT_COLLECTION", "stroke_chunks"),
             qdrant_dense_vector_name=os.getenv("RAG_QDRANT_DENSE_VECTOR_NAME", "dense"),
-            qdrant_batch_size=_env_int("RAG_QDRANT_BATCH_SIZE", 128),
+            qdrant_batch_size=_env_int("RAG_QDRANT_BATCH_SIZE", 1024),
+            qdrant_max_request_mb=_env_float("RAG_QDRANT_MAX_REQUEST_MB", 32.0),
             qdrant_recreate_collection=os.getenv("RAG_QDRANT_RECREATE_COLLECTION", "false").lower()
             in {"1", "true", "yes", "on"},
             qdrant_timeout_seconds=_env_float("RAG_QDRANT_TIMEOUT_SECONDS", 120.0),
