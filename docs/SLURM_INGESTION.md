@@ -45,6 +45,10 @@ prints the SSH target, forwarded port, and the relevant log path:
 - `RAG_SCRATCH_DIR`: directory for the manifest and extracted-text cache. Defaults to
   `$PROJECT_DIR/.rag-slurm`. Keep it on shared storage rather than `SLURM_TMPDIR`, which is
   wiped when the job ends; without it every run re-parses the whole corpus.
+- `RAG_INGEST_FORCE`: defaults to `false`, so PDFs whose extracted text is cached in
+  `RAG_SCRATCH_DIR` are not re-parsed and a run over an unchanged corpus with an existing
+  collection does nothing. Set `true` to re-parse everything. All documents still reach the
+  vector store whenever anything changed, so stale-point cleanup is unaffected.
 - `RAG_QDRANT_URL`: shared Qdrant endpoint.
 - `RAG_QDRANT_SSH_TUNNEL`: open the Qdrant SSH tunnel. Defaults to `true`.
 - `RAG_QDRANT_SSH_HOST`: SSH host for the tunnel. Defaults to `134.87.8.87`.
