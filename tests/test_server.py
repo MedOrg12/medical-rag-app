@@ -79,3 +79,48 @@ def test_eval_run_endpoint_scores_selected_question(tmp_path) -> None:
     assert payload["summary"]["total_questions"] == 1
     assert payload["results"][0]["question_id"] == "q2"
     assert payload["results"][0]["retrieval_hit"] is True
+
+
+def test_health_survives_unreachable_remote_embedding_service(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="remote",
+        embedding_service_url="http://127.0.0.1:9",
+        embedding_service_timeout_seconds=1.0,
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["embedding_backend"] == "remote"
+    assert payload["active_embedding_model"] is None
+    assert "127.0.0.1:9" in payload["embedding_model_error"]
+
+
+def test_health_survives_unreachable_qdrant(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+        vector_store_backend="qdrant",
+        qdrant_url="http://127.0.0.1:9",
+        qdrant_timeout_seconds=1.0,
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["vector_store_backend"] == "qdrant"
+    assert payload["index_exists"] is None
+    assert "127.0.0.1:9" in payload["vector_store_error"]
+
+    ask = client.post("/ask", json={"question": "What is a stroke?"})
+    assert ask.status_code == 400
+    assert "Could not reach Qdrant" in ask.json()["detail"]

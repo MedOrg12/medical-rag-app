@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
@@ -75,6 +75,16 @@ class Settings:
     top_k: int = 5
     embedding_backend: str = "auto"
     hash_embedding_dimensions: int = 768
+    sentence_transformers_model: str = "BAAI/bge-base-en-v1.5"
+    sentence_transformers_device: str = "auto"
+    sentence_transformers_batch_size: int = 64
+    embedding_service_url: str = "http://localhost:8100"
+    embedding_service_timeout_seconds: float = 60.0
+    embedding_service_token: str | None = None
+    embedding_service_expected_model: str | None = None
+    remote_embed_batch_size: int = 64
+    embedding_service_max_batch_size: int = 256
+    embedding_service_max_text_chars: int = 20000
     ollama_base_url: str = "http://localhost:11434"
     ollama_embedding_model: str = "nomic-embed-text"
     generation_backend: str = "extractive"
@@ -86,7 +96,6 @@ class Settings:
     answer_mode: str = "patient"
     temperature: float = 0.1
     request_timeout_seconds: float = 20.0
-    embedding_cache_path: Path | None = None
     manifest_path: Path | None = None
     extraction_cache_dir: Path | None = None
     pdf_workers: int = 1
@@ -94,6 +103,17 @@ class Settings:
     min_relevance_score: float = 0.0
     reranker_backend: str = "lexical"
     hybrid_alpha: float = 0.5
+    vector_store_backend: str = "json"
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "stroke_chunks"
+    qdrant_dense_vector_name: str = "dense"
+    qdrant_batch_size: int = 1024
+    qdrant_max_request_mb: float = 32.0
+    qdrant_recreate_collection: bool = False
+    qdrant_timeout_seconds: float = 120.0
+    qdrant_prefer_grpc: bool = False
+    qdrant_grpc_port: int = 6334
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> "Settings":
@@ -110,6 +130,28 @@ class Settings:
             top_k=_env_int_compat(5, "RAG_TOP_K", "TOP_K"),
             embedding_backend=os.getenv("RAG_EMBEDDING_BACKEND", "auto").lower(),
             hash_embedding_dimensions=_env_int("RAG_HASH_EMBEDDING_DIMENSIONS", 768),
+            sentence_transformers_model=os.getenv(
+                "RAG_SENTENCE_TRANSFORMERS_MODEL", "BAAI/bge-base-en-v1.5"
+            ),
+            sentence_transformers_device=os.getenv("RAG_SENTENCE_TRANSFORMERS_DEVICE", "auto"),
+            sentence_transformers_batch_size=_env_int("RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE", 64),
+            embedding_service_url=os.getenv(
+                "RAG_EMBEDDING_SERVICE_URL", "http://localhost:8100"
+            ),
+            embedding_service_timeout_seconds=_env_float(
+                "RAG_EMBEDDING_SERVICE_TIMEOUT_SECONDS", 60.0
+            ),
+            embedding_service_token=os.getenv("RAG_EMBEDDING_SERVICE_TOKEN") or None,
+            embedding_service_expected_model=os.getenv(
+                "RAG_EMBEDDING_SERVICE_EXPECTED_MODEL"
+            ) or None,
+            remote_embed_batch_size=_env_int("RAG_REMOTE_EMBED_BATCH_SIZE", 64),
+            embedding_service_max_batch_size=_env_int(
+                "RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE", 256
+            ),
+            embedding_service_max_text_chars=_env_int(
+                "RAG_EMBEDDING_SERVICE_MAX_TEXT_CHARS", 20000
+            ),
             ollama_base_url=_first_env(
                 "RAG_OLLAMA_BASE_URL", "OLLAMA_BASE_URL", default="http://localhost:11434"
             ),
@@ -131,9 +173,6 @@ class Settings:
             answer_mode=os.getenv("RAG_ANSWER_MODE", "patient").lower(),
             temperature=_env_float_compat(0.1, "RAG_TEMPERATURE", "TEMPERATURE"),
             request_timeout_seconds=_env_float("RAG_REQUEST_TIMEOUT_SECONDS", 20.0),
-            embedding_cache_path=_resolve_path(
-                root, os.getenv("RAG_EMBEDDING_CACHE_PATH", ".rag/embedding_cache.json")
-            ) if os.getenv("RAG_EMBEDDING_CACHE_PATH", ".rag/embedding_cache.json") else None,
             manifest_path=_resolve_path(
                 root, os.getenv("RAG_MANIFEST_PATH", ".rag/manifest.sqlite")
             ) if os.getenv("RAG_MANIFEST_PATH", ".rag/manifest.sqlite") else None,
@@ -145,39 +184,28 @@ class Settings:
             min_relevance_score=_env_float("RAG_MIN_RELEVANCE_SCORE", 0.0),
             reranker_backend=os.getenv("RAG_RERANKER_BACKEND", "lexical").lower(),
             hybrid_alpha=_env_float("RAG_HYBRID_ALPHA", 0.5),
+            vector_store_backend=os.getenv("RAG_VECTOR_STORE", "json").lower(),
+            qdrant_url=os.getenv("RAG_QDRANT_URL", "http://localhost:6333"),
+            qdrant_api_key=os.getenv("RAG_QDRANT_API_KEY") or None,
+            qdrant_collection=os.getenv("RAG_QDRANT_COLLECTION", "stroke_chunks"),
+            qdrant_dense_vector_name=os.getenv("RAG_QDRANT_DENSE_VECTOR_NAME", "dense"),
+            qdrant_batch_size=_env_int("RAG_QDRANT_BATCH_SIZE", 1024),
+            qdrant_max_request_mb=_env_float("RAG_QDRANT_MAX_REQUEST_MB", 32.0),
+            qdrant_recreate_collection=os.getenv("RAG_QDRANT_RECREATE_COLLECTION", "false").lower()
+            in {"1", "true", "yes", "on"},
+            qdrant_timeout_seconds=_env_float("RAG_QDRANT_TIMEOUT_SECONDS", 120.0),
+            qdrant_prefer_grpc=os.getenv("RAG_QDRANT_PREFER_GRPC", "false").lower()
+            in {"1", "true", "yes", "on"},
+            qdrant_grpc_port=_env_int("RAG_QDRANT_GRPC_PORT", 6334),
         )
 
     def with_paths(
         self, corpus_dir: Path | None = None, index_path: Path | None = None
     ) -> "Settings":
-        return Settings(
-            root_dir=self.root_dir,
+        return replace(
+            self,
             corpus_dir=corpus_dir or self.corpus_dir,
             index_path=index_path or self.index_path,
-            chunk_size_chars=self.chunk_size_chars,
-            chunk_overlap_chars=self.chunk_overlap_chars,
-            top_k=self.top_k,
-            embedding_backend=self.embedding_backend,
-            hash_embedding_dimensions=self.hash_embedding_dimensions,
-            ollama_base_url=self.ollama_base_url,
-            ollama_embedding_model=self.ollama_embedding_model,
-            generation_backend=self.generation_backend,
-            ollama_generation_model=self.ollama_generation_model,
-            api_base_url=self.api_base_url,
-            api_key=self.api_key,
-            api_generation_model=self.api_generation_model,
-            api_embedding_model=self.api_embedding_model,
-            answer_mode=self.answer_mode,
-            temperature=self.temperature,
-            request_timeout_seconds=self.request_timeout_seconds,
-            embedding_cache_path=self.embedding_cache_path,
-            manifest_path=self.manifest_path,
-            extraction_cache_dir=self.extraction_cache_dir,
-            pdf_workers=self.pdf_workers,
-            embedding_batch_size=self.embedding_batch_size,
-            min_relevance_score=self.min_relevance_score,
-            reranker_backend=self.reranker_backend,
-            hybrid_alpha=self.hybrid_alpha,
         )
 
     def with_ingestion_options(
@@ -185,32 +213,8 @@ class Settings:
         pdf_workers: int | None = None,
         embedding_batch_size: int | None = None,
     ) -> "Settings":
-        return Settings(
-            root_dir=self.root_dir,
-            corpus_dir=self.corpus_dir,
-            index_path=self.index_path,
-            chunk_size_chars=self.chunk_size_chars,
-            chunk_overlap_chars=self.chunk_overlap_chars,
-            top_k=self.top_k,
-            embedding_backend=self.embedding_backend,
-            hash_embedding_dimensions=self.hash_embedding_dimensions,
-            ollama_base_url=self.ollama_base_url,
-            ollama_embedding_model=self.ollama_embedding_model,
-            generation_backend=self.generation_backend,
-            ollama_generation_model=self.ollama_generation_model,
-            api_base_url=self.api_base_url,
-            api_key=self.api_key,
-            api_generation_model=self.api_generation_model,
-            api_embedding_model=self.api_embedding_model,
-            answer_mode=self.answer_mode,
-            temperature=self.temperature,
-            request_timeout_seconds=self.request_timeout_seconds,
-            embedding_cache_path=self.embedding_cache_path,
-            manifest_path=self.manifest_path,
-            extraction_cache_dir=self.extraction_cache_dir,
+        return replace(
+            self,
             pdf_workers=pdf_workers or self.pdf_workers,
             embedding_batch_size=embedding_batch_size or self.embedding_batch_size,
-            min_relevance_score=self.min_relevance_score,
-            reranker_backend=self.reranker_backend,
-            hybrid_alpha=self.hybrid_alpha,
         )

@@ -5,12 +5,16 @@ import json
 import os
 import sqlite3
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from collections import deque
+from collections.abc import Iterator
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
-from medical_rag.documents import iter_source_files, is_supported_source_file, load_source_file
+from medical_rag.chunking import chunk_pages
+from medical_rag.documents import is_supported_source_file, iter_source_files, load_source_file
 from medical_rag.types import Chunk, PageText
 
 PARSER_VERSION = "pymupdf-sorted-text-v1"
@@ -45,6 +49,20 @@ class ExtractedDocument:
     pages: list[PageText]
     scanned_pages: int = 0
     from_cache: bool = False
+
+
+@dataclass
+class ChunkedDocument:
+    """One source file after extraction (or a cache hit) and chunking, or its failure."""
+
+    source: SourceFile
+    chunks: list[Chunk] = field(default_factory=list)
+    pages: int = 0
+    scanned_pages: int = 0
+    from_cache: bool = False
+    error: str | None = None
+    extraction_seconds: float = 0.0
+    chunking_seconds: float = 0.0
 
 
 @dataclass
@@ -127,11 +145,14 @@ class ManifestStore:
         if force:
             return [file for file in files if not file.duplicate_of]
 
+        # One query for every row: a connection per file is slow on shared storage.
+        with self._connect() as connection:
+            rows = {row["path"]: row for row in connection.execute("SELECT * FROM documents")}
         changed = []
         for file in files:
             if file.duplicate_of:
                 continue
-            row = self._get(file.path)
+            row = rows.get(str(file.path))
             if row is None:
                 if failed_only:
                     continue
@@ -169,9 +190,10 @@ class ManifestStore:
                     ("deleted", now, path),
                 )
 
-    def mark_duplicate(self, file: SourceFile) -> None:
+    def mark_duplicates(self, files: list[SourceFile]) -> None:
+        now = time.time()
         with self._connect() as connection:
-            connection.execute(
+            connection.executemany(
                 """
                 INSERT INTO documents (
                     path, sha256, size, mtime_ns, status, duplicate_of, pages, chunks, error,
@@ -185,22 +207,25 @@ class ManifestStore:
                     duplicate_of = excluded.duplicate_of,
                     updated_at = excluded.updated_at
                 """,
-                (
-                    str(file.path),
-                    file.sha256,
-                    file.size,
-                    file.mtime_ns,
-                    "duplicate",
-                    file.duplicate_of,
-                    0,
-                    0,
-                    None,
-                    PARSER_VERSION,
-                    0,
-                    0,
-                    "",
-                    time.time(),
-                ),
+                [
+                    (
+                        str(file.path),
+                        file.sha256,
+                        file.size,
+                        file.mtime_ns,
+                        "duplicate",
+                        file.duplicate_of,
+                        0,
+                        0,
+                        None,
+                        PARSER_VERSION,
+                        0,
+                        0,
+                        "",
+                        now,
+                    )
+                    for file in files
+                ],
             )
 
     def mark_indexed(
@@ -213,8 +238,25 @@ class ManifestStore:
         embedding_model: str,
         scanned_pages: int = 0,
     ) -> None:
+        self.mark_indexed_many(
+            [(file, pages, chunks, scanned_pages)],
+            chunk_size_chars=chunk_size_chars,
+            chunk_overlap_chars=chunk_overlap_chars,
+            embedding_model=embedding_model,
+        )
+
+    def mark_indexed_many(
+        self,
+        files: list[tuple[SourceFile, int, int, int]],
+        chunk_size_chars: int,
+        chunk_overlap_chars: int,
+        embedding_model: str,
+    ) -> None:
+        """Record ``(file, pages, chunks, scanned_pages)`` entries in one transaction; a
+        commit per file costs a sync each on shared storage."""
+        now = time.time()
         with self._connect() as connection:
-            connection.execute(
+            connection.executemany(
                 """
                 INSERT INTO documents (
                     path, sha256, size, mtime_ns, status, duplicate_of, pages, chunks, error,
@@ -237,23 +279,26 @@ class ManifestStore:
                     scanned_pages = excluded.scanned_pages,
                     updated_at = excluded.updated_at
                 """,
-                (
-                    str(file.path),
-                    file.sha256,
-                    file.size,
-                    file.mtime_ns,
-                    "indexed",
-                    None,
-                    pages,
-                    chunks,
-                    None,
-                    PARSER_VERSION,
-                    chunk_size_chars,
-                    chunk_overlap_chars,
-                    embedding_model,
-                    scanned_pages,
-                    time.time(),
-                ),
+                [
+                    (
+                        str(file.path),
+                        file.sha256,
+                        file.size,
+                        file.mtime_ns,
+                        "indexed",
+                        None,
+                        pages,
+                        chunks,
+                        None,
+                        PARSER_VERSION,
+                        chunk_size_chars,
+                        chunk_overlap_chars,
+                        embedding_model,
+                        scanned_pages,
+                        now,
+                    )
+                    for file, pages, chunks, scanned_pages in files
+                ],
             )
 
     def mark_failed(self, file: SourceFile, error: str) -> None:
@@ -289,13 +334,6 @@ class ManifestStore:
                     time.time(),
                 ),
             )
-
-    def _get(self, path: Path) -> sqlite3.Row | None:
-        with self._connect() as connection:
-            return connection.execute(
-                "SELECT * FROM documents WHERE path = ?",
-                (str(path),),
-            ).fetchone()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path)
@@ -339,14 +377,18 @@ class ManifestStore:
             )
 
 
-def discover_source_files(path: Path) -> list[SourceFile]:
+def discover_source_files(path: Path, workers: int = 1) -> list[SourceFile]:
     raw_files = iter_source_files(path)
     seen_hashes: dict[str, str] = {}
     files: list[SourceFile] = []
 
-    for raw_file in raw_files:
-        digest = sha256_file(raw_file)
-        stat = raw_file.stat()
+    # Hashing is dominated by file-open and read latency on shared storage, and hashlib
+    # releases the GIL, so threads overlap it. Results come back in input order, so the
+    # first copy of a duplicate in sorted order is still the one kept.
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        hashed = list(pool.map(_hash_and_stat, raw_files))
+
+    for raw_file, (digest, stat) in zip(raw_files, hashed, strict=True):
         duplicate_of = seen_hashes.get(digest)
         if duplicate_of is None:
             seen_hashes[digest] = str(raw_file)
@@ -362,55 +404,118 @@ def discover_source_files(path: Path) -> list[SourceFile]:
     return files
 
 
-def load_extracted_documents(
+def iter_chunked_documents(
     files: list[SourceFile],
     cache_dir: Path,
-    manifest: ManifestStore,
     options: IngestionOptions,
-) -> tuple[list[ExtractedDocument], dict[str, str]]:
+    chunk_size_chars: int,
+    chunk_overlap_chars: int,
+) -> Iterator[ChunkedDocument]:
+    """Extract (or load from the cache) and chunk ``files`` on worker processes, yielding
+    each document in input order as soon as it and every earlier one are ready.
+
+    This lets embedding start on the first documents while later ones are still being
+    parsed. Only a bounded window of documents is in flight, so memory does not grow with
+    the corpus when parsing outpaces embedding. Failures are yielded with ``error`` set.
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
-    documents: list[ExtractedDocument] = []
-    failures: dict[str, str] = {}
-    to_extract: list[SourceFile] = []
-
-    for file in files:
-        cached = None if options.force else _read_extraction_cache(file, cache_dir)
-        if cached is not None:
-            documents.append(cached)
-        else:
-            to_extract.append(file)
-
-    if not to_extract:
-        return documents, failures
-
+    job = partial(
+        _extract_and_chunk,
+        cache_dir=cache_dir,
+        force=options.force,
+        ocr_scanned=options.ocr_scanned,
+        chunk_size_chars=chunk_size_chars,
+        chunk_overlap_chars=chunk_overlap_chars,
+    )
     workers = max(1, options.pdf_workers)
     if workers == 1:
-        for file in to_extract:
-            try:
-                document = _extract_one(file, options.ocr_scanned)
-                _write_extraction_cache(document, cache_dir)
-                documents.append(document)
-            except Exception as exc:  # noqa: BLE001 - record and continue ingestion.
-                failures[str(file.path)] = str(exc)
-                manifest.mark_failed(file, str(exc))
-    else:
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(_extract_one_worker, _source_to_payload(file), options.ocr_scanned): file
-                for file in to_extract
-            }
-            for future in as_completed(futures):
-                file = futures[future]
-                try:
-                    document = _payload_to_document(future.result())
-                    _write_extraction_cache(document, cache_dir)
-                    documents.append(document)
-                except Exception as exc:  # noqa: BLE001 - record and continue ingestion.
-                    failures[str(file.path)] = str(exc)
-                    manifest.mark_failed(file, str(exc))
+        yield from map(job, files)
+        return
 
-    documents.sort(key=lambda item: str(item.source.path).lower())
-    return documents, failures
+    remaining = iter(files)
+    pending: deque[tuple[SourceFile, Future[ChunkedDocument]]] = deque()
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+
+        def submit_next() -> None:
+            file = next(remaining, None)
+            if file is not None:
+                pending.append((file, pool.submit(job, file)))
+
+        try:
+            for _ in range(workers * _DOCUMENTS_IN_FLIGHT_PER_WORKER):
+                submit_next()
+            while pending:
+                file, future = pending.popleft()
+                submit_next()
+                try:
+                    document = future.result()
+                except Exception as exc:  # noqa: BLE001 - e.g. a worker crash; record and continue.
+                    document = ChunkedDocument(source=file, error=str(exc))
+                yield document
+        finally:
+            # If ingestion stops early, don't parse the rest of the window before exiting.
+            for _, future in pending:
+                future.cancel()
+
+
+# Documents queued per extraction worker: enough to keep every worker busy while the
+# consumer is slow, without holding the whole corpus's chunks in memory.
+_DOCUMENTS_IN_FLIGHT_PER_WORKER = 4
+
+
+def chunk_document(
+    document: ExtractedDocument, chunk_size_chars: int, chunk_overlap_chars: int
+) -> list[Chunk]:
+    chunks = chunk_pages(
+        document.pages,
+        chunk_size_chars=chunk_size_chars,
+        chunk_overlap_chars=chunk_overlap_chars,
+    )
+    for chunk in chunks:
+        chunk.metadata.update(
+            {
+                "source_hash": document.source.sha256,
+                "source_size": document.source.size,
+                "source_mtime_ns": document.source.mtime_ns,
+                "parser_version": "pymupdf-sorted-text-v1",
+                "chunk_size_chars": chunk_size_chars,
+                "chunk_overlap_chars": chunk_overlap_chars,
+            }
+        )
+    return chunks
+
+
+def _extract_and_chunk(
+    file: SourceFile,
+    cache_dir: Path,
+    force: bool,
+    ocr_scanned: bool,
+    chunk_size_chars: int,
+    chunk_overlap_chars: int,
+) -> ChunkedDocument:
+    started = time.perf_counter()
+    try:
+        document = None if force else _read_extraction_cache(file, cache_dir)
+        if document is None:
+            document = _extract_one(file, ocr_scanned)
+            _write_extraction_cache(document, cache_dir)
+    except Exception as exc:  # noqa: BLE001 - record and continue ingestion.
+        return ChunkedDocument(source=file, error=str(exc))
+    extracted = time.perf_counter()
+    chunks = chunk_document(document, chunk_size_chars, chunk_overlap_chars)
+    return ChunkedDocument(
+        source=file,
+        chunks=chunks,
+        pages=len(document.pages),
+        scanned_pages=document.scanned_pages,
+        from_cache=document.from_cache,
+        extraction_seconds=extracted - started,
+        chunking_seconds=time.perf_counter() - extracted,
+    )
+
+
+def _hash_and_stat(path: Path) -> tuple[str, os.stat_result]:
+    return sha256_file(path), path.stat()
 
 
 def sha256_file(path: Path) -> str:
@@ -424,17 +529,6 @@ def sha256_file(path: Path) -> str:
 def _extract_one(file: SourceFile, ocr_scanned: bool) -> ExtractedDocument:
     pages, scanned_pages = load_source_file(file.path, ocr_scanned=ocr_scanned)
     return ExtractedDocument(source=file, pages=pages, scanned_pages=scanned_pages)
-
-
-def _extract_one_worker(file_payload: dict[str, Any], ocr_scanned: bool) -> dict[str, Any]:
-    file = SourceFile(
-        path=Path(file_payload["path"]),
-        sha256=file_payload["sha256"],
-        size=file_payload["size"],
-        mtime_ns=file_payload["mtime_ns"],
-        duplicate_of=file_payload.get("duplicate_of"),
-    )
-    return _document_to_payload(_extract_one(file, ocr_scanned))
 
 
 def _source_to_payload(file: SourceFile) -> dict[str, Any]:

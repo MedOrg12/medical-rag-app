@@ -7,7 +7,7 @@ and are correctly retrieved for diet-related questions.
 Both tests require:
   1. Diet PDFs downloaded into pdfs/ (see pdfs/SOURCES.md for the source list)
   2. Index rebuilt after adding the PDFs:
-       rm -f .rag/index.json .rag/embedding_cache.json
+       rm -f .rag/index.json
        python app.py   →   click Ingest (or POST /ingest)
 
 To skip if corpus is incomplete, tests check for the presence of a diet source in the
