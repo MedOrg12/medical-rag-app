@@ -1,3 +1,6 @@
+import io
+import urllib.error
+
 from medical_rag.config import Settings
 from medical_rag.embeddings import (
     ApiEmbeddingModel,
@@ -116,6 +119,65 @@ def test_api_embedding_model_posts_openai_compatible_request(monkeypatch) -> Non
     assert '"model": "embed-model"' in seen["body"]
     assert len(vectors) == 2
     assert round(_dot(vectors[0], vectors[0]), 6) == 1.0
+
+
+def test_api_embedding_network_error_includes_reason(monkeypatch) -> None:
+    def fake_urlopen(_request, timeout=None):  # noqa: ANN001, ARG001
+        raise urllib.error.URLError("network unreachable")
+
+    monkeypatch.setattr("medical_rag.embeddings.urllib.request.urlopen", fake_urlopen)
+    model = ApiEmbeddingModel(
+        base_url="https://api.example.test/v1",
+        api_key="secret",
+        model="embed-model",
+    )
+
+    try:
+        model.embed(["stroke"])
+    except RuntimeError as exc:
+        assert "network unreachable" in str(exc)
+    else:
+        raise AssertionError("Expected API embedding network error")
+
+
+def test_api_embedding_retries_transient_http_errors(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"data":[{"index":0,"embedding":[1,0]}]}'
+
+    def fake_urlopen(_request, timeout=None):  # noqa: ANN001, ARG001
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise urllib.error.HTTPError(
+                url="https://api.example.test/v1/embeddings",
+                code=503,
+                msg="Service Unavailable",
+                hdrs={},
+                fp=io.BytesIO(b'{"error":{"message":"overloaded"}}'),
+            )
+        return FakeResponse()
+
+    monkeypatch.setattr("medical_rag.embeddings.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("medical_rag.embeddings.time.sleep", lambda _seconds: None)
+    model = ApiEmbeddingModel(
+        base_url="https://api.example.test/v1",
+        api_key="secret",
+        model="embed-model",
+        max_retries=1,
+    )
+
+    vectors = model.embed(["stroke"])
+
+    assert len(vectors) == 1
+    assert calls["count"] == 2
 
 
 def test_api_embedding_backend_requires_api_key(tmp_path) -> None:

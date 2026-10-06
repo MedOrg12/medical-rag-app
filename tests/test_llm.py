@@ -1,3 +1,7 @@
+import io
+import json
+import urllib.error
+
 from medical_rag.config import Settings
 from medical_rag.llm import ApiGenerator, ExtractiveGenerator, FallbackGenerator, Generator, make_generator
 from medical_rag.types import Chunk, SearchResult
@@ -95,6 +99,121 @@ def test_api_generator_posts_openai_compatible_chat_request(monkeypatch) -> None
     assert seen["auth"] == "Bearer secret"
     assert '"model": "chat-model"' in seen["body"]
     assert "Dysphagia after stroke" in seen["body"]
+
+
+def test_api_generator_adds_gemini_latency_controls(monkeypatch) -> None:
+    seen = {}
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"choices":[{"message":{"content":"Trouble swallowing after stroke [1]."}}]}'
+
+    def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
+        seen["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr("medical_rag.llm.urllib.request.urlopen", fake_urlopen)
+    result = SearchResult(
+        chunk=Chunk(
+            id="dysphagia",
+            text="Dysphagia after stroke can involve difficulty swallowing.",
+            metadata={"source_id": "rehab.txt", "page": 1},
+        ),
+        score=0.5,
+        rank=1,
+    )
+    generator = ApiGenerator(
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        api_key="secret",
+        model="gemini-3.8-flash",
+        max_output_tokens=450,
+    )
+
+    generator.generate("What is dysphagia?", [result])
+
+    assert seen["body"]["max_tokens"] == 450
+    assert seen["body"]["reasoning_effort"] == "low"
+
+
+def test_api_generator_retries_transient_http_errors(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"choices":[{"message":{"content":"Recovered [1]."}}]}'
+
+    def fake_urlopen(_request, timeout=None):  # noqa: ANN001, ARG001
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise urllib.error.HTTPError(
+                url="https://api.example.test/v1/chat/completions",
+                code=503,
+                msg="Service Unavailable",
+                hdrs={},
+                fp=io.BytesIO(b'{"error":{"message":"overloaded"}}'),
+            )
+        return FakeResponse()
+
+    monkeypatch.setattr("medical_rag.llm.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("medical_rag.llm.time.sleep", lambda _seconds: None)
+    result = SearchResult(
+        chunk=Chunk(
+            id="dysphagia",
+            text="Dysphagia after stroke can involve difficulty swallowing.",
+            metadata={"source_id": "rehab.txt", "page": 1},
+        ),
+        score=0.5,
+        rank=1,
+    )
+    generator = ApiGenerator(
+        base_url="https://api.example.test/v1",
+        api_key="secret",
+        model="chat-model",
+        max_retries=1,
+    )
+
+    assert generator.generate("What is dysphagia?", [result]) == "Recovered [1]."
+    assert calls["count"] == 2
+
+
+def test_api_generator_network_error_includes_reason(monkeypatch) -> None:
+    def fake_urlopen(_request, timeout=None):  # noqa: ANN001, ARG001
+        raise urllib.error.URLError("temporary DNS failure")
+
+    monkeypatch.setattr("medical_rag.llm.urllib.request.urlopen", fake_urlopen)
+    result = SearchResult(
+        chunk=Chunk(
+            id="dysphagia",
+            text="Dysphagia after stroke can involve difficulty swallowing.",
+            metadata={"source_id": "rehab.txt", "page": 1},
+        ),
+        score=0.5,
+        rank=1,
+    )
+    generator = ApiGenerator(
+        base_url="https://api.example.test/v1",
+        api_key="secret",
+        model="chat-model",
+    )
+
+    try:
+        generator.generate("What is dysphagia?", [result])
+    except RuntimeError as exc:
+        assert "temporary DNS failure" in str(exc)
+    else:
+        raise AssertionError("Expected API generation network error")
 
 
 def test_api_generation_requires_api_key(tmp_path) -> None:

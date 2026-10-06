@@ -14,7 +14,11 @@ def test_settings_accept_legacy_docker_environment(monkeypatch, tmp_path) -> Non
     monkeypatch.setenv("RAG_API_KEY", "test-key")
     monkeypatch.setenv("RAG_API_GENERATION_MODEL", "api-chat")
     monkeypatch.setenv("RAG_API_EMBEDDING_MODEL", "api-embed")
+    monkeypatch.setenv("RAG_API_MAX_OUTPUT_TOKENS", "500")
+    monkeypatch.setenv("RAG_API_REASONING_EFFORT", "LOW")
+    monkeypatch.setenv("RAG_API_MAX_RETRIES", "4")
     monkeypatch.setenv("RAG_ANSWER_MODE", "clinician")
+    monkeypatch.setenv("RAG_REQUEST_TIMEOUT_SECONDS", "75")
 
     settings = Settings.from_env(tmp_path)
 
@@ -30,7 +34,11 @@ def test_settings_accept_legacy_docker_environment(monkeypatch, tmp_path) -> Non
     assert settings.api_key == "test-key"
     assert settings.api_generation_model == "api-chat"
     assert settings.api_embedding_model == "api-embed"
+    assert settings.api_max_output_tokens == 500
+    assert settings.api_reasoning_effort == "low"
+    assert settings.api_max_retries == 4
     assert settings.answer_mode == "clinician"
+    assert settings.request_timeout_seconds == 75
 
 
 def test_with_ingestion_options_preserves_answer_mode(tmp_path) -> None:
@@ -39,9 +47,15 @@ def test_with_ingestion_options_preserves_answer_mode(tmp_path) -> None:
         corpus_dir=tmp_path,
         index_path=tmp_path / "index.json",
         answer_mode="clinician",
+        api_max_output_tokens=600,
+        api_reasoning_effort="low",
+        api_max_retries=3,
     )
 
     updated = settings.with_ingestion_options(pdf_workers=4)
 
     assert updated.pdf_workers == 4
     assert updated.answer_mode == "clinician"
+    assert updated.api_max_output_tokens == 600
+    assert updated.api_reasoning_effort == "low"
+    assert updated.api_max_retries == 3

@@ -17,6 +17,10 @@ def test_health_reports_api_configuration_without_secret(tmp_path) -> None:
         api_base_url="https://api.example.test/v1",
         api_generation_model="chat-model",
         api_embedding_model="embed-model",
+        api_max_output_tokens=500,
+        api_reasoning_effort="low",
+        api_max_retries=3,
+        request_timeout_seconds=90,
     )
     client = TestClient(create_app(settings))
 
@@ -29,6 +33,10 @@ def test_health_reports_api_configuration_without_secret(tmp_path) -> None:
     assert payload["api_key_configured"] is True
     assert payload["api_generation_model"] == "chat-model"
     assert payload["api_embedding_model"] == "embed-model"
+    assert payload["api_max_output_tokens"] == 500
+    assert payload["api_reasoning_effort"] == "low"
+    assert payload["api_max_retries"] == 3
+    assert payload["request_timeout_seconds"] == 90
     assert "secret-key" not in response.text
 
 

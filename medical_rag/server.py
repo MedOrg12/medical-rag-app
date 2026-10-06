@@ -125,6 +125,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "api_key_configured": bool(app_settings.api_key),
             "api_generation_model": app_settings.api_generation_model,
             "api_embedding_model": app_settings.api_embedding_model,
+            "api_max_output_tokens": app_settings.api_max_output_tokens,
+            "api_reasoning_effort": app_settings.api_reasoning_effort,
+            "api_max_retries": app_settings.api_max_retries,
+            "request_timeout_seconds": app_settings.request_timeout_seconds,
         }
 
     @app.post("/ingest")

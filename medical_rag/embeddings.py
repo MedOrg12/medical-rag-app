@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
@@ -13,6 +14,7 @@ from pathlib import Path
 from medical_rag.config import Settings
 
 _TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_+-]*|\d+(?:\.\d+)?")
+_RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class EmbeddingModel(ABC):
@@ -117,6 +119,7 @@ class ApiEmbeddingModel(EmbeddingModel):
     api_key: str
     model: str
     timeout_seconds: float = 20.0
+    max_retries: int = 2
 
     @property
     def name(self) -> str:
@@ -136,13 +139,7 @@ class ApiEmbeddingModel(EmbeddingModel):
             },
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            raise RuntimeError(_api_error_message("embedding", exc)) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise RuntimeError(f"Could not get API embeddings from {self.base_url}") from exc
+        data = self._send_request(request)
 
         items = data.get("data")
         if not isinstance(items, list) or len(items) != len(texts):
@@ -159,6 +156,23 @@ class ApiEmbeddingModel(EmbeddingModel):
 
         indexed_items.sort(key=lambda item: item[0])
         return [_normalize([float(value) for value in embedding]) for _, embedding in indexed_items]
+
+    def _send_request(self, request: urllib.request.Request) -> dict:
+        attempts = max(0, self.max_retries) + 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                if _should_retry_http(exc, attempt, attempts):
+                    _sleep_before_retry(exc, attempt)
+                    continue
+                raise RuntimeError(_api_error_message("embedding", exc)) from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                raise RuntimeError(
+                    f"Could not get API embeddings from {self.base_url}: {_network_error_detail(exc)}"
+                ) from exc
+        raise RuntimeError("Could not get API embedding response from provider")
 
 
 @dataclass
@@ -304,6 +318,7 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
             api_key=settings.api_key,
             model=settings.api_embedding_model,
             timeout_seconds=settings.request_timeout_seconds,
+            max_retries=settings.api_max_retries,
         )
     else:
         raise ValueError(f"Unsupported embedding backend: {backend!r}")
@@ -338,10 +353,33 @@ def _normalize(vector: list[float]) -> list[float]:
 def _api_error_message(operation: str, exc: urllib.error.HTTPError) -> str:
     detail = ""
     try:
-        payload = json.loads(exc.read().decode("utf-8"))
-        message = (payload.get("error") or {}).get("message")
+        body = exc.read().decode("utf-8").strip()
+        payload = json.loads(body) if body else {}
+        message = (payload.get("error") or {}).get("message") if isinstance(payload, dict) else ""
         if isinstance(message, str) and message:
             detail = f": {message}"
+        elif body:
+            detail = f": {body[:500]}"
     except Exception:
         detail = ""
     return f"Could not get API {operation} response from provider ({exc.code}){detail}"
+
+
+def _should_retry_http(exc: urllib.error.HTTPError, attempt: int, attempts: int) -> bool:
+    return exc.code in _RETRYABLE_HTTP_STATUS_CODES and attempt < attempts - 1
+
+
+def _sleep_before_retry(exc: urllib.error.HTTPError, attempt: int) -> None:
+    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+    try:
+        delay = float(retry_after) if retry_after else min(2**attempt, 4)
+    except ValueError:
+        delay = min(2**attempt, 4)
+    time.sleep(max(0.0, delay))
+
+
+def _network_error_detail(exc: BaseException) -> str:
+    reason = getattr(exc, "reason", None)
+    if reason is not None:
+        return str(reason)
+    return str(exc) or exc.__class__.__name__

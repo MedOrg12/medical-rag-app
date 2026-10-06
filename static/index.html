@@ -1015,8 +1015,8 @@
         );
         setChip(
           els.generationChip,
-          payload.generation_backend === "ollama" ? "ok" : "warn",
-          payload.generation_model || payload.generation_backend || "Generation",
+          generationChipTone(payload),
+          activeGenerationLabel(payload),
         );
         const apiMode =
           payload.generation_backend === "api" || payload.embedding_backend === "api";
@@ -1049,6 +1049,14 @@
             }`,
           ),
           detailLine(
+            "API controls",
+            `${payload.request_timeout_seconds || "?"}s timeout - ${
+              payload.api_max_retries ?? 0
+            } retries - ${payload.api_max_output_tokens || "default"} output tokens${
+              payload.api_reasoning_effort ? ` - ${payload.api_reasoning_effort} reasoning` : ""
+            }`,
+          ),
+          detailLine(
             "Ollama embedding",
             `${payload.ollama_embedding_model || "not configured"}${
               payload.ollama_embedding_model_available ? " available" : " unavailable"
@@ -1056,6 +1064,7 @@
           ),
         ].join("");
         els.systemDetails.classList.toggle("warn", Boolean(payload.fallback_embedding));
+        els.askButton.textContent = askButtonLabel(payload);
       }
 
       async function refreshSources() {
@@ -1229,9 +1238,9 @@
 
         hideEmptyState();
         appendMessage("user", question);
-        const pending = appendMessage("assistant", "Retrieving evidence.");
+        const pending = appendMessage("assistant", pendingAnswerText());
         els.askButton.disabled = true;
-        els.composerStatus.textContent = "Retrieving";
+        els.composerStatus.textContent = composerWorkingText();
 
         try {
           const payload = await requestJson("/ask", {
@@ -1273,12 +1282,13 @@
 
       function updateAssistantMessage(message, payload) {
         const citationCount = (payload.citations || []).length;
+        const usedFallback = (payload.answer || "").includes("Generation backend was unavailable");
         message.querySelector(".bubble").textContent = payload.answer || "No answer returned.";
         message.querySelector(".message-meta").textContent = [
           `${payload.answer_mode || activeModeLabel()} mode`,
           `${payload.retrieval_mode || "retrieval"} retrieval`,
           payload.fallback_embedding ? "fallback embeddings" : payload.retrieval_model,
-          payload.generation_model,
+          usedFallback ? `${payload.generation_model} unavailable; extractive fallback` : payload.generation_model,
         ]
           .filter(Boolean)
           .join(" - ");
@@ -1409,6 +1419,60 @@
       function setChip(element, status, text) {
         element.className = `chip ${status || ""}`.trim();
         element.textContent = text;
+      }
+
+      function generationChipTone(payload) {
+        if (payload.generation_backend === "api") {
+          return payload.api_key_configured ? "ok" : "bad";
+        }
+        if (payload.generation_backend === "ollama") {
+          return payload.ollama_available ? "ok" : "warn";
+        }
+        return "warn";
+      }
+
+      function activeGenerationLabel(payload = state.health) {
+        if (!payload) {
+          return "Generation";
+        }
+        const model = (payload.generation_model || payload.api_generation_model || payload.generation_backend || "")
+          .replace(/^api:/, "");
+        if (payload.generation_backend === "api") {
+          const provider = (payload.api_base_url || "").includes("generativelanguage.googleapis.com")
+            ? "Gemini API"
+            : "API";
+          return model ? `${provider}: ${model}` : provider;
+        }
+        if (payload.generation_backend === "ollama") {
+          return model ? `Ollama: ${model}` : "Ollama";
+        }
+        return "Extractive";
+      }
+
+      function askButtonLabel(payload = state.health) {
+        if (payload?.generation_backend === "api") {
+          return (payload.api_base_url || "").includes("generativelanguage.googleapis.com")
+            ? "Ask with Gemini"
+            : "Ask with API";
+        }
+        if (payload?.generation_backend === "ollama") {
+          return "Ask with Ollama";
+        }
+        return "Ask Corpus";
+      }
+
+      function pendingAnswerText() {
+        if (!state.health || state.health.generation_backend === "extractive") {
+          return "Retrieving evidence.";
+        }
+        return `Retrieving evidence and generating with ${activeGenerationLabel()}.`;
+      }
+
+      function composerWorkingText() {
+        if (!state.health || state.health.generation_backend === "extractive") {
+          return "Retrieving";
+        }
+        return `Generating with ${activeGenerationLabel()}`;
       }
 
       function detailLine(label, value) {

@@ -83,9 +83,12 @@ class Settings:
     api_key: str = ""
     api_generation_model: str = "gpt-4o-mini"
     api_embedding_model: str = "text-embedding-3-small"
+    api_max_output_tokens: int = 800
+    api_reasoning_effort: str = ""
+    api_max_retries: int = 2
     answer_mode: str = "patient"
     temperature: float = 0.1
-    request_timeout_seconds: float = 20.0
+    request_timeout_seconds: float = 120.0
     embedding_cache_path: Path | None = None
     manifest_path: Path | None = None
     extraction_cache_dir: Path | None = None
@@ -128,9 +131,12 @@ class Settings:
             api_key=_first_env("RAG_API_KEY", "OPENAI_API_KEY", default=""),
             api_generation_model=os.getenv("RAG_API_GENERATION_MODEL", "gpt-4o-mini"),
             api_embedding_model=os.getenv("RAG_API_EMBEDDING_MODEL", "text-embedding-3-small"),
+            api_max_output_tokens=_env_int("RAG_API_MAX_OUTPUT_TOKENS", 800),
+            api_reasoning_effort=os.getenv("RAG_API_REASONING_EFFORT", "").lower(),
+            api_max_retries=_env_int("RAG_API_MAX_RETRIES", 2),
             answer_mode=os.getenv("RAG_ANSWER_MODE", "patient").lower(),
             temperature=_env_float_compat(0.1, "RAG_TEMPERATURE", "TEMPERATURE"),
-            request_timeout_seconds=_env_float("RAG_REQUEST_TIMEOUT_SECONDS", 20.0),
+            request_timeout_seconds=_env_float("RAG_REQUEST_TIMEOUT_SECONDS", 120.0),
             embedding_cache_path=_resolve_path(
                 root, os.getenv("RAG_EMBEDDING_CACHE_PATH", ".rag/embedding_cache.json")
             ) if os.getenv("RAG_EMBEDDING_CACHE_PATH", ".rag/embedding_cache.json") else None,
@@ -167,6 +173,9 @@ class Settings:
             api_key=self.api_key,
             api_generation_model=self.api_generation_model,
             api_embedding_model=self.api_embedding_model,
+            api_max_output_tokens=self.api_max_output_tokens,
+            api_reasoning_effort=self.api_reasoning_effort,
+            api_max_retries=self.api_max_retries,
             answer_mode=self.answer_mode,
             temperature=self.temperature,
             request_timeout_seconds=self.request_timeout_seconds,
@@ -202,6 +211,9 @@ class Settings:
             api_key=self.api_key,
             api_generation_model=self.api_generation_model,
             api_embedding_model=self.api_embedding_model,
+            api_max_output_tokens=self.api_max_output_tokens,
+            api_reasoning_effort=self.api_reasoning_effort,
+            api_max_retries=self.api_max_retries,
             answer_mode=self.answer_mode,
             temperature=self.temperature,
             request_timeout_seconds=self.request_timeout_seconds,
