@@ -1,25 +1,32 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from medical_rag import __version__
 from medical_rag.config import Settings
 from medical_rag.embeddings import list_ollama_models, ollama_model_name_matches
+from medical_rag.errors import user_error
 from medical_rag.evaluation import evaluate_rag, load_eval_suite
+from medical_rag.memory import ConversationStore, prompt_history
 from medical_rag.pipeline import StrokeRAG
+
+logger = logging.getLogger(__name__)
 
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     top_k: int | None = Field(default=None, ge=1, le=20)
     filters: dict[str, str] | None = None
     answer_mode: Literal["patient", "clinician"] | None = None
@@ -45,6 +52,8 @@ class EvalRunRequest(BaseModel):
 def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or Settings.from_env()
     rag = StrokeRAG(app_settings)
+    memory = ConversationStore(app_settings.index_path.parent / "conversations.sqlite3")
+    conversation_lock = threading.Lock()
     ingestion_executor = ThreadPoolExecutor(max_workers=1)
     ingestion_lock = threading.Lock()
     ingestion_status: dict[str, Any] = {
@@ -59,6 +68,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="Stroke-focused retrieval-augmented generation API.",
         version=__version__,
     )
+
+    @app.middleware("http")
+    async def mask_unexpected_errors(request: Request, call_next: Any) -> Any:
+        try:
+            return await call_next(request)
+        except Exception:
+            logger.exception("Unexpected failure handling %s", request.url.path)
+            return JSONResponse(status_code=500, content={
+                "detail": "Something went wrong while processing your request. Please try again in a moment."
+            })
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(status_code=422, content={
+            "detail": "Please check your question and selected options, then try again."
+        })
+
+    def request_error(exc: Exception, status: int, operation: str = "request") -> HTTPException:
+        logger.exception("MedicalRAG %s failed", operation)
+        return HTTPException(status_code=status, detail=user_error(exc, operation))
 
     static_dir = app_settings.root_dir / "static"
     if static_dir.exists():
@@ -83,13 +112,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "last_error": None,
                     }
                 )
-        except Exception as exc:  # noqa: BLE001 - preserve failure for status endpoint.
+        except Exception as exc:
+            logger.exception("Background document ingestion failed")
             with ingestion_lock:
                 ingestion_status.update(
                     {
                         "running": False,
                         "finished_at": time.time(),
-                        "last_error": str(exc),
+                        "last_error": user_error(exc, "ingest"),
                     }
                 )
 
@@ -156,33 +186,51 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 pdf_workers=request.pdf_workers,
             ).to_dict()
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise request_error(exc, 400, "ingest") from exc
 
     @app.get("/ingest/status")
     def ingest_status() -> dict[str, Any]:
         with ingestion_lock:
             return dict(ingestion_status)
 
+    @app.get("/conversations/{conversation_id}")
+    def conversation(conversation_id: str) -> dict[str, Any]:
+        return {"turns": memory.history(conversation_id)}
+
+    @app.delete("/conversations/{conversation_id}")
+    def clear_conversation(conversation_id: str) -> dict[str, bool]:
+        with conversation_lock:
+            memory.clear(conversation_id)
+        return {"cleared": True}
+
     @app.post("/ask")
     def ask(request: AskRequest) -> dict[str, Any]:
         try:
-            return rag.ask(
-                question=request.question,
-                top_k=request.top_k,
-                filters=request.filters,
-                answer_mode=request.answer_mode,
-            ).to_dict()
+            with conversation_lock:
+                history = (prompt_history(memory.context(request.conversation_id))
+                           if request.conversation_id else [])
+                payload = rag.ask(
+                    question=request.question,
+                    top_k=request.top_k,
+                    filters=request.filters,
+                    answer_mode=request.answer_mode,
+                    history=history,
+                ).to_dict()
+                if request.conversation_id:
+                    memory.append(request.conversation_id, payload)
+                    payload["conversation_id"] = request.conversation_id
+                return payload
         except FileNotFoundError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise request_error(exc, 409) from exc
         except (RuntimeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise request_error(exc, 400) from exc
 
     @app.get("/sources")
     def sources() -> list[dict[str, object]]:
         try:
             return rag.sources()
         except FileNotFoundError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise request_error(exc, 409) from exc
 
     @app.get("/eval/questions")
     def eval_questions() -> dict[str, Any]:
@@ -203,9 +251,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 include_answers=request.include_answers,
             ).to_dict()
         except FileNotFoundError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            raise request_error(exc, 409) from exc
         except (RuntimeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise request_error(exc, 400) from exc
 
     return app
 

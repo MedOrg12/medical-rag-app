@@ -62,6 +62,7 @@ class IngestionReport:
     manifest_path: str | None = None
     extraction_cache_dir: str | None = None
     timings: dict[str, float] | None = None
+    validation_results: dict[str, dict[str, str]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

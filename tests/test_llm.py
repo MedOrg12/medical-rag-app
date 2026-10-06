@@ -1,5 +1,11 @@
 from medical_rag.config import Settings
-from medical_rag.llm import ApiGenerator, ExtractiveGenerator, FallbackGenerator, Generator, make_generator
+from medical_rag.llm import (
+    ApiGenerator,
+    ExtractiveGenerator,
+    FallbackGenerator,
+    Generator,
+    make_generator,
+)
 from medical_rag.types import Chunk, SearchResult
 
 
@@ -12,13 +18,14 @@ class BrokenGenerator(Generator):
         raise RuntimeError("Could not generate with Ollama at http://localhost:11434")
 
 
-def test_fallback_generator_includes_backend_error() -> None:
+def test_fallback_generator_masks_backend_error() -> None:
     generator = FallbackGenerator(primary=BrokenGenerator(), fallback=ExtractiveGenerator())
 
     answer = generator.generate("What should I eat after stroke?", [])
 
-    assert "Generation backend was unavailable" in answer
-    assert "Could not generate with Ollama" in answer
+    assert "try your question again later" in answer
+    assert "Could not generate with Ollama" not in answer
+    assert "localhost" not in answer
 
 
 def test_extractive_diet_answer_has_patient_and_clinician_modes() -> None:
@@ -112,3 +119,39 @@ def test_api_generation_requires_api_key(tmp_path) -> None:
         assert "RAG_API_KEY" in str(exc)
     else:
         raise AssertionError("Expected API generation without an API key to fail")
+
+
+def test_gemini_posts_history_to_google_endpoint(monkeypatch, tmp_path):
+    import json
+
+    seen = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"Your name is Alice."}}]}'
+
+    def urlopen(request, timeout):
+        seen["url"] = request.full_url
+        seen["authorization"] = request.headers["Authorization"]
+        seen["payload"] = json.loads(request.data)
+        return Response()
+
+    monkeypatch.setattr("medical_rag.llm.urllib.request.urlopen", urlopen)
+    settings = Settings(root_dir=tmp_path, corpus_dir=tmp_path, index_path=tmp_path / "index.json",
+                        generation_backend="api",
+                        api_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                        api_key="google-test-key", api_generation_model="gemini-2.5-flash")
+    generator = make_generator(settings)
+    history = [{"role": "user", "content": "My name is Alice"},
+               {"role": "assistant", "content": "Hello Alice"}]
+    assert generator.generate("What is my name?", [], history=history) == "Your name is Alice."
+    assert seen["url"] == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    assert seen["authorization"] == "Bearer google-test-key"
+    assert seen["payload"]["model"] == "gemini-2.5-flash"
+    assert seen["payload"]["messages"][1:3] == history

@@ -471,3 +471,77 @@ The `RAG_HYBRID_ALPHA`, `RAG_MIN_RELEVANCE_SCORE`, and `RAG_RERANKER_BACKEND` se
 - `RAG_HYBRID_ALPHA=0.5` — blend weight for hybrid vector+BM25 search (RRF fusion)
 - `RAG_MIN_RELEVANCE_SCORE=0.0` — filter out chunks below this score before generation
 - `RAG_RERANKER_BACKEND=lexical` — post-retrieval reranker (`lexical` or `none`)
+
+## PDF abstract validation
+
+Enable relevance screening before PDF chunking and embedding:
+
+```bash
+export RAG_VALIDATE_PDFS=true
+export RAG_API_KEY=your-api-key
+export RAG_VALIDATION_MODEL=gpt-4o-mini
+python -m medical_rag.cli ingest
+```
+
+`OPENAI_API_KEY` also works outside Docker; Docker uses `RAG_API_KEY`.
+The default scope covers stroke prevention, diagnosis, treatment, rehabilitation,
+recovery, post-stroke nutrition, dysphagia, and vascular risk reduction. Set
+`RAG_VALIDATION_SCOPE` to customize inclusion criteria. Validation is disabled by
+default for offline installations and is independent of the answer-generation backend.
+
+The validator finds an Abstract or Summary heading in the first three pages and
+sends only the extracted abstract (at most 8,000 characters) to the configured
+`RAG_API_BASE_URL`, using structured JSON output. Only `accept` decisions enter the
+index. `reject`, `review` (including missing/unreadable abstracts), and API errors
+are excluded. This screens relevance; it does not establish scientific validity.
+Guidelines without abstracts will require review. Text and Markdown sources are
+not screened, and original PDFs are never deleted.
+
+CLI and ingestion API reports include `validation_results`, mapping PDF paths to
+decisions and reasons. Decisions are cached in `abstract_validation.sqlite` beside
+the index, keyed by abstract, scope, model, provider, and prompt. API errors are
+retried on the next ingestion; `ingest --force` refreshes cached decisions.
+Enabling validation also screens previously indexed PDFs on the next ingestion.
+The resulting index contains only accepted PDFs and non-PDF sources, even when no
+PDF passes. Changing these settings requires another ingestion to update the index.
+
+The request uses OpenAI's [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
+
+### Conversation memory
+
+The web chat saves completed question/answer turns (including citations) in
+`conversations.sqlite3` beside the vector index. The browser keeps a conversation
+ID in local storage and restores that conversation when reopened. Earlier turns
+are supplied to Ollama/API generation, and short follow-ups include recent user
+questions during retrieval. Model context is bounded to the opening two and most
+recent ten turns, with up to 1,000 characters per message. The UI restores up to
+200 recent turns. Clear deletes the saved conversation and its model context.
+
+Use Ollama or API generation for conversational recall; extractive generation
+only returns retrieved literature excerpts. History provides context rather than
+medical evidence: clinical claims must cite the current retrieved passages.
+
+API clients can pass `conversation_id` to `POST /ask`, restore turns with
+`GET /conversations/{conversation_id}`, and delete them with
+`DELETE /conversations/{conversation_id}`. Requests without a conversation ID
+remain stateless. Conversations are local to this installation and browser
+profile; this does not add account authentication or cross-device sync.
+
+### Gemini generation
+
+The local `.env` and Docker defaults now select Gemini 2.5 Flash. Add your Google
+AI Studio API key to `GEMINI_API_KEY` in `.env`, then restart with `python app.py`
+(which loads `.env`) or `docker compose up -d --build`.
+
+```dotenv
+RAG_GENERATION_BACKEND=api
+RAG_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+RAG_API_GENERATION_MODEL=gemini-2.5-flash
+GEMINI_API_KEY=your-google-ai-studio-key
+```
+
+Gemini uses Google's [compatible API endpoint](https://ai.google.dev/gemini-api/docs/openai).
+Conversation memory and citation prompts are preserved. Existing local embeddings
+and indexes remain usable. `GOOGLE_API_KEY` or `RAG_API_KEY` can also supply the
+Gemini key; `OPENAI_API_KEY` is never used for Google's endpoint. PDF screening,
+when enabled, uses Gemini as well.

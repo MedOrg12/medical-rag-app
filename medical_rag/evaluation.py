@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from medical_rag.errors import user_error
 from medical_rag.types import Citation, RagAnswer
 
 DEFAULT_EVAL_DATA_PATH = Path(__file__).with_name("eval_data.json")
@@ -37,7 +39,7 @@ class EvalQuestion:
     should_refuse: bool = False
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "EvalQuestion":
+    def from_dict(cls, payload: dict[str, Any]) -> EvalQuestion:
         return cls(
             id=str(payload["id"]),
             question=str(payload["question"]),
@@ -165,6 +167,7 @@ def evaluate_question(
     try:
         response: RagAnswer = rag.ask(item.question, top_k=top_k, answer_mode=answer_mode)
     except Exception as exc:
+        logging.getLogger(__name__).exception("Evaluation question failed")
         return EvalQuestionResult(
             question_id=item.id,
             question=item.question,
@@ -180,7 +183,7 @@ def evaluate_question(
             latency_seconds=round(time.perf_counter() - started, 4),
             answer_snippet="",
             citations=[],
-            error=str(exc),
+            error=user_error(exc),
         )
 
     latency = round(time.perf_counter() - started, 4)

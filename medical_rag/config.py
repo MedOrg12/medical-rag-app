@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def _env_int(name: str, default: int) -> int:
@@ -83,6 +84,9 @@ class Settings:
     api_key: str = ""
     api_generation_model: str = "gpt-4o-mini"
     api_embedding_model: str = "text-embedding-3-small"
+    validation_enabled: bool = False
+    validation_model: str = "gpt-4o-mini"
+    validation_scope: str = "Stroke prevention, diagnosis, treatment, rehabilitation, and recovery, including post-stroke nutrition, dysphagia, and vascular risk reduction."
     answer_mode: str = "patient"
     temperature: float = 0.1
     request_timeout_seconds: float = 20.0
@@ -96,10 +100,16 @@ class Settings:
     hybrid_alpha: float = 0.5
 
     @classmethod
-    def from_env(cls, root_dir: Path | None = None) -> "Settings":
+    def from_env(cls, root_dir: Path | None = None) -> Settings:
         root = (root_dir or Path.cwd()).resolve()
         corpus_dir = _resolve_path(root, _first_env("RAG_CORPUS_DIR", "PDF_FOLDER", default="pdfs"))
         index_path = _index_path_from_env(root)
+        api_base_url = _first_env(
+            "RAG_API_BASE_URL", "OPENAI_BASE_URL", default="https://api.openai.com/v1"
+        )
+        gemini = urlparse(api_base_url).hostname == "generativelanguage.googleapis.com"
+        api_key = (_first_env("GEMINI_API_KEY", "GOOGLE_API_KEY", "RAG_API_KEY", default="")
+                   if gemini else _first_env("RAG_API_KEY", "OPENAI_API_KEY", default=""))
 
         return cls(
             root_dir=root,
@@ -122,12 +132,15 @@ class Settings:
             ollama_generation_model=_first_env(
                 "RAG_OLLAMA_GENERATION_MODEL", "OLLAMA_MODEL", default="llama3.1"
             ),
-            api_base_url=_first_env(
-                "RAG_API_BASE_URL", "OPENAI_BASE_URL", default="https://api.openai.com/v1"
+            api_base_url=api_base_url,
+            api_key=api_key,
+            api_generation_model=os.getenv(
+                "RAG_API_GENERATION_MODEL", "gemini-2.5-flash" if gemini else "gpt-4o-mini"
             ),
-            api_key=_first_env("RAG_API_KEY", "OPENAI_API_KEY", default=""),
-            api_generation_model=os.getenv("RAG_API_GENERATION_MODEL", "gpt-4o-mini"),
             api_embedding_model=os.getenv("RAG_API_EMBEDDING_MODEL", "text-embedding-3-small"),
+            validation_enabled=os.getenv("RAG_VALIDATE_PDFS", "false").lower() in {"true", "1", "yes"},
+            validation_model=os.getenv("RAG_VALIDATION_MODEL", "gemini-2.5-flash" if gemini else "gpt-4o-mini"),
+            validation_scope=os.getenv("RAG_VALIDATION_SCOPE") or cls.validation_scope,
             answer_mode=os.getenv("RAG_ANSWER_MODE", "patient").lower(),
             temperature=_env_float_compat(0.1, "RAG_TEMPERATURE", "TEMPERATURE"),
             request_timeout_seconds=_env_float("RAG_REQUEST_TIMEOUT_SECONDS", 20.0),
@@ -149,7 +162,7 @@ class Settings:
 
     def with_paths(
         self, corpus_dir: Path | None = None, index_path: Path | None = None
-    ) -> "Settings":
+    ) -> Settings:
         return Settings(
             root_dir=self.root_dir,
             corpus_dir=corpus_dir or self.corpus_dir,
@@ -167,6 +180,9 @@ class Settings:
             api_key=self.api_key,
             api_generation_model=self.api_generation_model,
             api_embedding_model=self.api_embedding_model,
+            validation_enabled=self.validation_enabled,
+            validation_model=self.validation_model,
+            validation_scope=self.validation_scope,
             answer_mode=self.answer_mode,
             temperature=self.temperature,
             request_timeout_seconds=self.request_timeout_seconds,
@@ -184,7 +200,7 @@ class Settings:
         self,
         pdf_workers: int | None = None,
         embedding_batch_size: int | None = None,
-    ) -> "Settings":
+    ) -> Settings:
         return Settings(
             root_dir=self.root_dir,
             corpus_dir=self.corpus_dir,
@@ -202,6 +218,9 @@ class Settings:
             api_key=self.api_key,
             api_generation_model=self.api_generation_model,
             api_embedding_model=self.api_embedding_model,
+            validation_enabled=self.validation_enabled,
+            validation_model=self.validation_model,
+            validation_scope=self.validation_scope,
             answer_mode=self.answer_mode,
             temperature=self.temperature,
             request_timeout_seconds=self.request_timeout_seconds,

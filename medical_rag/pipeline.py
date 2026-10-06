@@ -17,6 +17,7 @@ from medical_rag.llm import SAFETY_NOTICE, Generator, make_generator
 from medical_rag.relevance import expand_query_for_retrieval, filter_results_for_question
 from medical_rag.reranker import Reranker, make_reranker
 from medical_rag.types import Chunk, Citation, IngestionReport, RagAnswer, SearchResult
+from medical_rag.validation import screen_pages
 from medical_rag.vector_store import VectorStore
 
 
@@ -61,24 +62,29 @@ class StrokeRAG:
         if not pages:
             raise ValueError(f"No supported text was found under {source}")
 
+        validation_results = None
+        if self.settings.validation_enabled:
+            pages, validation_results = screen_pages(pages, self.settings, force=force)
+
         chunks = chunk_pages(
             pages,
             chunk_size_chars=self.settings.chunk_size_chars,
             chunk_overlap_chars=self.settings.chunk_overlap_chars,
         )
-        if not chunks:
+        if not chunks and not self.settings.validation_enabled:
             raise ValueError(f"No chunks could be created from {source}")
 
-        store = VectorStore.build(
+        store = (VectorStore.build(
             path=self.settings.index_path,
             chunks=chunks,
             embedding_model=self.embedding_model,
-        )
+        ) if chunks else VectorStore(self.settings.index_path, embedding_model=self.embedding_model.name))
         store.save()
         self._store = store
 
         return IngestionReport(
             source_path=str(source),
+            validation_results=validation_results,
             documents=len({page.source_id for page in pages}),
             pages=len(pages),
             chunks=len(chunks),
@@ -125,7 +131,8 @@ class StrokeRAG:
             failed_only=failed_only,
         )
 
-        if not changed_files and not deleted_paths and self.settings.index_path.exists():
+        if (not self.settings.validation_enabled and not changed_files
+                and not deleted_paths and self.settings.index_path.exists()):
             store = VectorStore.load(self.settings.index_path)
             total_seconds = round(time.perf_counter() - started, 4)
             timings["total_seconds"] = total_seconds
@@ -167,6 +174,15 @@ class StrokeRAG:
         if not documents:
             raise ValueError(f"No supported text was extracted from {source}")
 
+        validation_results = None
+        if self.settings.validation_enabled:
+            accepted_pages, validation_results = screen_pages(
+                [page for document in documents for page in document.pages],
+                self.settings, force=force or not resume,
+            )
+            accepted_paths = {page.source_path for page in accepted_pages}
+            documents = [d for d in documents if str(d.source.path) in accepted_paths]
+
         chunk_start = time.perf_counter()
         chunks_by_path: dict[str, list[Chunk]] = {}
         chunks: list[Chunk] = []
@@ -191,15 +207,15 @@ class StrokeRAG:
             chunks.extend(document_chunks)
         timings["chunking_seconds"] = round(time.perf_counter() - chunk_start, 4)
 
-        if not chunks:
+        if not chunks and not self.settings.validation_enabled:
             raise ValueError(f"No chunks could be created from {source}")
 
         embedding_start = time.perf_counter()
-        store = VectorStore.build(
+        store = (VectorStore.build(
             path=self.settings.index_path,
             chunks=chunks,
             embedding_model=self.embedding_model,
-        )
+        ) if chunks else VectorStore(self.settings.index_path, embedding_model=self.embedding_model.name))
         timings["embedding_seconds"] = round(time.perf_counter() - embedding_start, 4)
 
         save_start = time.perf_counter()
@@ -227,6 +243,7 @@ class StrokeRAG:
 
         return IngestionReport(
             source_path=str(source),
+            validation_results=validation_results,
             documents=len(documents),
             pages=sum(len(document.pages) for document in documents),
             chunks=len(chunks),
@@ -252,6 +269,7 @@ class StrokeRAG:
         top_k: int | None = None,
         filters: dict[str, str] | None = None,
         answer_mode: str | None = None,
+        history: list[dict[str, str]] | None = None,
     ) -> RagAnswer:
         question = question.strip()
         if not question:
@@ -263,18 +281,26 @@ class StrokeRAG:
         if limit <= 0:
             raise ValueError("top_k must be greater than zero")
 
+        retrieval_question = question
+        # Short follow-ups often omit the topic; include recent user context for retrieval.
+        if history and len(question.split()) <= 12:
+            prior_questions = [m["content"] for m in history if m["role"] == "user"]
+            retrieval_question = "\n".join(prior_questions[-2:] + [question])
         candidate_limit = min(max(limit * 4, limit), 50)
         results = store.search(
-            query=expand_query_for_retrieval(question),
+            query=expand_query_for_retrieval(retrieval_question),
             embedding_model=self.embedding_model,
             top_k=candidate_limit,
             filters=filters,
         )
-        results = filter_results_for_question(question, results)
+        results = filter_results_for_question(retrieval_question, results)
         results = [r for r in results if r.score >= self.settings.min_relevance_score]
-        results = self._reranker.rerank(question, results)[:limit]
+        results = self._reranker.rerank(retrieval_question, results)[:limit]
 
-        answer = self.generator.generate(question, results, answer_mode=mode)
+        if history:
+            answer = self.generator.generate(question, results, answer_mode=mode, history=history)
+        else:
+            answer = self.generator.generate(question, results, answer_mode=mode)
         citations = [_citation(result, citation_id) for citation_id, result in enumerate(results, 1)]
 
         retrieval_mode = "hybrid" if (store._bm25 is not None) else "vector"
