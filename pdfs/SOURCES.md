@@ -6,7 +6,7 @@ This file lists the recommended diet and nutrition PDF sources to download into
 After downloading any file here, rebuild the index:
 
 ```bash
-rm -f .rag/index.json .rag/embedding_cache.json
+rm -f .rag/index.json
 source venv/bin/activate
 python app.py
 # Click Ingest in the UI, or POST /ingest

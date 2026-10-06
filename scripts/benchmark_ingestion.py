@@ -272,7 +272,6 @@ def _legacy_settings(base_settings: Settings, source: Path, run_dir: Path) -> Se
         base_settings,
         corpus_dir=source,
         index_path=run_dir / ".rag" / "index.json",
-        embedding_cache_path=None,
         manifest_path=None,
         extraction_cache_dir=None,
     )
@@ -284,7 +283,6 @@ def _incremental_settings(base_settings: Settings, source: Path, run_dir: Path) 
         base_settings,
         corpus_dir=source,
         index_path=rag_dir / "index.json",
-        embedding_cache_path=rag_dir / "embedding_cache.json",
         manifest_path=rag_dir / "manifest.sqlite",
         extraction_cache_dir=rag_dir / "extracted",
     )

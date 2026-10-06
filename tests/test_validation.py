@@ -91,10 +91,15 @@ def test_missing_key(tmp_path):
 
 
 @pytest.mark.parametrize("incremental", [False, True])
-def test_ingestion_removes_rejected_pdf_and_reports_reason(tmp_path, monkeypatch, incremental):
+@pytest.mark.parametrize("backend", ["json", "qdrant"])
+def test_ingestion_removes_rejected_pdf_and_reports_reason(tmp_path, monkeypatch, incremental, backend):
     import fitz
 
-    config = settings(tmp_path)
+    config = replace(settings(tmp_path), vector_store_backend=backend)
+    if backend == "qdrant":
+        from tests.test_vector_store import _use_fake_qdrant
+
+        _use_fake_qdrant(monkeypatch)
     config.corpus_dir.mkdir()
     doc = fitz.open()
     page = doc.new_page()

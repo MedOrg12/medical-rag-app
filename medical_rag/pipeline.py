@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import itertools
 import time
+from collections.abc import Iterator
+from dataclasses import asdict
 from pathlib import Path
 
 from medical_rag.chunking import chunk_pages
@@ -8,17 +11,24 @@ from medical_rag.config import Settings
 from medical_rag.documents import load_documents
 from medical_rag.embeddings import EmbeddingModel, make_embedding_model
 from medical_rag.ingestion import (
+    ChunkedDocument,
     IngestionOptions,
     ManifestStore,
     discover_source_files,
-    load_extracted_documents,
+    iter_chunked_documents,
 )
 from medical_rag.llm import SAFETY_NOTICE, Generator, make_generator
 from medical_rag.relevance import expand_query_for_retrieval, filter_results_for_question
 from medical_rag.reranker import Reranker, make_reranker
 from medical_rag.types import Chunk, Citation, IngestionReport, RagAnswer, SearchResult
 from medical_rag.validation import screen_pages
-from medical_rag.vector_store import VectorStore
+from medical_rag.vector_store import (
+    IngestStats,
+    VectorStoreBackend,
+    ingest_vector_store,
+    load_vector_store,
+    vector_store_exists,
+)
 
 
 class StrokeRAG:
@@ -36,7 +46,7 @@ class StrokeRAG:
             self.embedding_model, self._fallback_embedding = make_embedding_model(self.settings)
         self.generator = generator or make_generator(self.settings)
         self._reranker: Reranker = make_reranker(self.settings)
-        self._store: VectorStore | None = None
+        self._store: VectorStoreBackend | None = None
 
     def ingest(
         self,
@@ -74,12 +84,7 @@ class StrokeRAG:
         if not chunks and not self.settings.validation_enabled:
             raise ValueError(f"No chunks could be created from {source}")
 
-        store = (VectorStore.build(
-            path=self.settings.index_path,
-            chunks=chunks,
-            embedding_model=self.embedding_model,
-        ) if chunks else VectorStore(self.settings.index_path, embedding_model=self.embedding_model.name))
-        store.save()
+        store, stats = ingest_vector_store(self.settings, chunks, self.embedding_model)
         self._store = store
 
         return IngestionReport(
@@ -90,6 +95,14 @@ class StrokeRAG:
             chunks=len(chunks),
             index_path=str(self.settings.index_path),
             embedding_model=self.embedding_model.name,
+            chunks_embedded=stats.chunks_embedded,
+            chunks_reused=stats.chunks_reused,
+            timings={
+                "reuse_lookup_seconds": round(stats.lookup_seconds, 4),
+                "embedding_seconds": round(stats.embedding_seconds, 4),
+                "index_write_seconds": round(stats.write_seconds, 4),
+            },
+            vector_store=_vector_store_stats(stats),
         )
 
     def _ingest_incremental(
@@ -106,20 +119,20 @@ class StrokeRAG:
 
         timings: dict[str, float] = {}
         started = time.perf_counter()
-        files = discover_source_files(source)
+        workers = pdf_workers or self.settings.pdf_workers
+        files = discover_source_files(source, workers=workers)
         timings["discovery_seconds"] = round(time.perf_counter() - started, 4)
 
         if not files:
             raise ValueError(f"No supported source files were found under {source}")
 
+        manifest_start = time.perf_counter()
         manifest = ManifestStore(self.settings.manifest_path)
         current_paths = {str(file.path) for file in files}
         deleted_paths = manifest.deleted_paths(current_paths)
         manifest.mark_deleted(deleted_paths)
 
-        for file in files:
-            if file.duplicate_of:
-                manifest.mark_duplicate(file)
+        manifest.mark_duplicates([file for file in files if file.duplicate_of])
 
         unique_files = [file for file in files if not file.duplicate_of]
         changed_files = manifest.changed_files(
@@ -130,17 +143,29 @@ class StrokeRAG:
             force=force or not resume,
             failed_only=failed_only,
         )
+        # Manifest time before extraction; the updates after indexing are added below.
+        manifest_seconds = time.perf_counter() - manifest_start
 
-        if (not self.settings.validation_enabled and not changed_files
-                and not deleted_paths and self.settings.index_path.exists()):
-            store = VectorStore.load(self.settings.index_path)
+        # A requested collection rebuild must reach the vector store even when no file changed.
+        rebuild_requested = (
+            self.settings.vector_store_backend == "qdrant" and self.settings.qdrant_recreate_collection
+        )
+        if (
+            not self.settings.validation_enabled
+            and not changed_files
+            and not deleted_paths
+            and not rebuild_requested
+            and vector_store_exists(self.settings)
+        ):
+            store = load_vector_store(self.settings)
+            timings["manifest_seconds"] = round(manifest_seconds, 4)
             total_seconds = round(time.perf_counter() - started, 4)
             timings["total_seconds"] = total_seconds
             return IngestionReport(
                 source_path=str(source),
                 documents=len(unique_files),
                 pages=0,
-                chunks=len(store.chunks),
+                chunks=store.chunk_count(),
                 index_path=str(self.settings.index_path),
                 embedding_model=self.embedding_model.name,
                 files_discovered=len(files),
@@ -156,97 +181,97 @@ class StrokeRAG:
                 timings=timings,
             )
 
-        extraction_start = time.perf_counter()
-        documents, failures = load_extracted_documents(
-            unique_files,
-            cache_dir=self.settings.extraction_cache_dir,
-            manifest=manifest,
-            options=IngestionOptions(
-                force=force or not resume,
-                resume=resume,
-                failed_only=failed_only,
-                ocr_scanned=ocr_scanned,
-                pdf_workers=pdf_workers or self.settings.pdf_workers,
-            ),
-        )
-        timings["extraction_seconds"] = round(time.perf_counter() - extraction_start, 4)
+        validation_results = {} if self.settings.validation_enabled else None
+        screened_documents = 0
+        documents: list[ChunkedDocument] = []
+        chunk_counts: dict[str, int] = {}
+        failures: dict[str, str] = {}
 
-        if not documents:
-            raise ValueError(f"No supported text was extracted from {source}")
-
-        validation_results = None
-        if self.settings.validation_enabled:
-            accepted_pages, validation_results = screen_pages(
-                [page for document in documents for page in document.pages],
-                self.settings, force=force or not resume,
-            )
-            accepted_paths = {page.source_path for page in accepted_pages}
-            documents = [d for d in documents if str(d.source.path) in accepted_paths]
-
-        chunk_start = time.perf_counter()
-        chunks_by_path: dict[str, list[Chunk]] = {}
-        chunks: list[Chunk] = []
-        for document in documents:
-            document_chunks = chunk_pages(
-                document.pages,
+        def chunk_stream() -> Iterator[Chunk]:
+            """Chunks in document order as extraction finishes, so embedding overlaps it.
+            Records each document's outcome on the way through."""
+            nonlocal screened_documents
+            for document in iter_chunked_documents(
+                unique_files,
+                cache_dir=self.settings.extraction_cache_dir,
+                options=IngestionOptions(
+                    force=force or not resume,
+                    resume=resume,
+                    failed_only=failed_only,
+                    ocr_scanned=ocr_scanned,
+                    pdf_workers=workers,
+                ),
                 chunk_size_chars=self.settings.chunk_size_chars,
                 chunk_overlap_chars=self.settings.chunk_overlap_chars,
-            )
-            for chunk in document_chunks:
-                chunk.metadata.update(
-                    {
-                        "source_hash": document.source.sha256,
-                        "source_size": document.source.size,
-                        "source_mtime_ns": document.source.mtime_ns,
-                        "parser_version": "pymupdf-sorted-text-v1",
-                        "chunk_size_chars": self.settings.chunk_size_chars,
-                        "chunk_overlap_chars": self.settings.chunk_overlap_chars,
-                    }
-                )
-            chunks_by_path[str(document.source.path)] = document_chunks
-            chunks.extend(document_chunks)
-        timings["chunking_seconds"] = round(time.perf_counter() - chunk_start, 4)
+                collect_screening_pages=self.settings.validation_enabled,
+            ):
+                path = str(document.source.path)
+                if document.error is not None:
+                    failures[path] = document.error
+                    manifest.mark_failed(document.source, document.error)
+                    continue
+                if self.settings.validation_enabled:
+                    accepted, decisions = screen_pages(
+                        document.screening_pages or [], self.settings, force=force or not resume
+                    )
+                    validation_results.update(decisions)
+                    screened_documents += 1
+                    document.screening_pages = None
+                    if not accepted:
+                        continue
+                chunks, document.chunks = document.chunks, []  # the vector store owns them now
+                documents.append(document)
+                chunk_counts[path] = len(chunks)
+                yield from chunks
 
-        if not chunks and not self.settings.validation_enabled:
+        chunks = chunk_stream()
+        # Preserve the existing index when extraction yields nothing. A completed screening
+        # run may intentionally reject every document and must remove its stale chunks.
+        first_chunk = next(chunks, None)
+        if first_chunk is None and not (self.settings.validation_enabled and screened_documents):
+            if not documents:
+                raise ValueError(f"No supported text was extracted from {source}")
             raise ValueError(f"No chunks could be created from {source}")
 
-        embedding_start = time.perf_counter()
-        store = (VectorStore.build(
-            path=self.settings.index_path,
-            chunks=chunks,
-            embedding_model=self.embedding_model,
-        ) if chunks else VectorStore(self.settings.index_path, embedding_model=self.embedding_model.name))
-        timings["embedding_seconds"] = round(time.perf_counter() - embedding_start, 4)
-
-        save_start = time.perf_counter()
-        store.save()
-        timings["index_write_seconds"] = round(time.perf_counter() - save_start, 4)
-        timings["total_seconds"] = round(time.perf_counter() - started, 4)
+        store, stats = ingest_vector_store(
+            self.settings, itertools.chain([first_chunk] if first_chunk is not None else [], chunks), self.embedding_model
+        )
+        # Extraction and chunking overlap the vector store; what was not hidden behind it
+        # is the time the ingest loop waited on them. The worker totals show the work done.
+        timings["source_wait_seconds"] = round(stats.source_wait_seconds, 4)
+        timings["extraction_worker_seconds"] = round(sum(d.extraction_seconds for d in documents), 4)
+        timings["chunking_worker_seconds"] = round(sum(d.chunking_seconds for d in documents), 4)
+        timings["reuse_lookup_seconds"] = round(stats.lookup_seconds, 4)
+        timings["embedding_seconds"] = round(stats.embedding_seconds, 4)
+        timings["index_write_seconds"] = round(stats.write_seconds, 4)
         self._store = store
 
+        manifest_start = time.perf_counter()
         documents_by_path = {str(document.source.path): document for document in documents}
+        indexed = []
         for file in unique_files:
             if str(file.path) in failures:
                 continue
             document = documents_by_path.get(str(file.path))
             if document is None:
                 continue
-            manifest.mark_indexed(
-                file=file,
-                pages=len(document.pages),
-                chunks=len(chunks_by_path.get(str(file.path), [])),
-                chunk_size_chars=self.settings.chunk_size_chars,
-                chunk_overlap_chars=self.settings.chunk_overlap_chars,
-                embedding_model=self.embedding_model.name,
-                scanned_pages=document.scanned_pages,
-            )
+            indexed.append((file, document.pages, chunk_counts[str(file.path)], document.scanned_pages))
+        manifest.mark_indexed_many(
+            indexed,
+            chunk_size_chars=self.settings.chunk_size_chars,
+            chunk_overlap_chars=self.settings.chunk_overlap_chars,
+            embedding_model=self.embedding_model.name,
+        )
+        manifest_seconds += time.perf_counter() - manifest_start
+        timings["manifest_seconds"] = round(manifest_seconds, 4)
+        timings["total_seconds"] = round(time.perf_counter() - started, 4)
 
         return IngestionReport(
             source_path=str(source),
             validation_results=validation_results,
             documents=len(documents),
-            pages=sum(len(document.pages) for document in documents),
-            chunks=len(chunks),
+            pages=sum(document.pages for document in documents),
+            chunks=stats.chunks_total,
             index_path=str(self.settings.index_path),
             embedding_model=self.embedding_model.name,
             files_discovered=len(files),
@@ -257,10 +282,13 @@ class StrokeRAG:
             duplicate_files=len(files) - len(unique_files),
             deleted_files=len(deleted_paths),
             scanned_pages=sum(document.scanned_pages for document in documents),
+            chunks_embedded=stats.chunks_embedded,
+            chunks_reused=stats.chunks_reused,
             skipped_unchanged=False,
             manifest_path=str(self.settings.manifest_path),
             extraction_cache_dir=str(self.settings.extraction_cache_dir),
             timings=timings,
+            vector_store=_vector_store_stats(stats),
         )
 
     def ask(
@@ -303,8 +331,6 @@ class StrokeRAG:
             answer = self.generator.generate(question, results, answer_mode=mode)
         citations = [_citation(result, citation_id) for citation_id, result in enumerate(results, 1)]
 
-        retrieval_mode = "hybrid" if (store._bm25 is not None) else "vector"
-
         return RagAnswer(
             question=question,
             answer=answer,
@@ -313,7 +339,7 @@ class StrokeRAG:
             generation_model=self.generator.model_name,
             answer_mode=mode,
             safety_notice=SAFETY_NOTICE,
-            retrieval_mode=retrieval_mode,
+            retrieval_mode=store.retrieval_mode,
             fallback_embedding=self._fallback_embedding,
         )
 
@@ -321,20 +347,32 @@ class StrokeRAG:
         return self._load_store().source_summaries()
 
     def index_exists(self) -> bool:
-        return self.settings.index_path.exists()
+        return vector_store_exists(self.settings)
 
     def fallback_embedding_used(self) -> bool:
         return self._fallback_embedding
 
-    def _load_store(self) -> VectorStore:
+    def _load_store(self) -> VectorStoreBackend:
         if self._store is not None:
             return self._store
-        if not self.settings.index_path.exists():
-            raise FileNotFoundError(
-                f"Vector index not found at {self.settings.index_path}. Run ingestion first."
-            )
-        self._store = VectorStore.load(self.settings.index_path)
+        if not vector_store_exists(self.settings):
+            if self.settings.vector_store_backend == "qdrant":
+                location = (
+                    f"Qdrant collection {self.settings.qdrant_collection!r} not found at "
+                    f"{self.settings.qdrant_url}"
+                )
+            else:
+                location = f"Vector index not found at {self.settings.index_path}"
+            raise FileNotFoundError(f"{location}. Run ingestion first.")
+        self._store = load_vector_store(self.settings)
         return self._store
+
+
+def _vector_store_stats(stats: IngestStats) -> dict[str, float | int]:
+    return {
+        key: round(value, 4) if isinstance(value, float) else value
+        for key, value in asdict(stats).items()
+    }
 
 
 def _citation(result: SearchResult, citation_id: int) -> Citation:
