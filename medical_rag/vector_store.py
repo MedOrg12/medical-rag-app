@@ -653,11 +653,15 @@ class QdrantVectorStore:
                     )
         finally:
             timer.enter("cleanup")
-            if staging is not None:
-                staging.close()
-            upsert_client.close()
-            if restore_indexing_threshold is not None:
-                store._set_indexing_threshold(restore_indexing_threshold)
+            try:
+                upsert_client.close()
+                if restore_indexing_threshold is not None:
+                    store._set_indexing_threshold(restore_indexing_threshold)
+            finally:
+                # Last, because closing flushes buffered writes and can raise (e.g. a full
+                # disk), which must not stop indexing from being restored.
+                if staging is not None:
+                    staging.close()
             timer.enter(None)
         stats.write_seconds = (
             stats.setup_seconds
