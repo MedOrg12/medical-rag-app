@@ -153,3 +153,22 @@ def test_pipeline_rejects_unknown_answer_mode(tmp_path) -> None:
         assert "answer_mode" in str(exc)
     else:
         raise AssertionError("Expected invalid answer mode to raise ValueError")
+
+
+def test_ingestion_report_breaks_down_vector_store_time(tmp_path) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "stroke_notes.txt").write_text("Stroke symptoms include arm weakness.", encoding="utf-8")
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=corpus,
+        index_path=tmp_path / ".rag" / "index.json",
+        manifest_path=tmp_path / ".rag" / "manifest.sqlite",
+        extraction_cache_dir=tmp_path / ".rag" / "extracted",
+    )
+
+    report = StrokeRAG(settings).ingest(force=True).to_dict()
+
+    assert {"reuse_lookup_seconds", "embedding_seconds", "index_write_seconds"} <= set(report["timings"])
+    assert report["vector_store"]["chunks_embedded"] == 1
+    assert "upsert_busy_seconds" in report["vector_store"]
