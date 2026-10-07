@@ -5,7 +5,7 @@ import pytest
 from medical_rag.config import Settings
 from medical_rag.embeddings import HashingEmbeddingModel
 from medical_rag.types import Chunk
-from medical_rag.vector_store import QdrantVectorStore, VectorStore, ingest_vector_store
+from medical_rag.vector_store import QdrantVectorStore, VectorStore, _point_id, ingest_vector_store
 
 
 def test_vector_store_round_trips_and_searches(tmp_path) -> None:
@@ -417,6 +417,101 @@ def test_qdrant_ingest_fails_when_async_writes_did_not_land(monkeypatch, tmp_pat
 
     with pytest.raises(RuntimeError, match="holds 1 points after ingestion, expected 5"):
         _ingest(_qdrant_settings(tmp_path, embedding_batch_size=2), chunks)
+
+
+def test_staged_qdrant_ingest_uploads_only_after_the_stream_is_embedded(
+    monkeypatch, tmp_path
+) -> None:
+    import os
+
+    _use_fake_qdrant(monkeypatch)
+    staging_dir = tmp_path / "staging"
+    upserted_before_embedding_finished: list[int] = []
+
+    class _WatchingModel(_CountingModel):
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            upserted_before_embedding_finished.append(_call_names().count("upsert"))
+            return super().embed(texts)
+
+    model = _WatchingModel()
+    settings = _qdrant_settings(
+        tmp_path, embedding_batch_size=2, qdrant_batch_size=3, qdrant_staging_dir=staging_dir
+    )
+
+    store, stats = _ingest(settings, _many_chunks(7), model)
+
+    assert upserted_before_embedding_finished == [0, 0, 0, 0]
+    upserts = [kwargs for name, kwargs in _calls() if name == "upsert"]
+    assert [len(call["points"]) for call in upserts] == [3, 3, 1]
+    assert [call["wait"] for call in upserts] == [False, False, True]
+    assert stats.chunks_embedded == 7 and stats.upsert_requests == 3
+    assert store.chunk_count() == 7
+    assert stats.staged_mb > 0 and stats.upload_seconds > 0 and stats.staging_seconds > 0
+    assert os.listdir(staging_dir) == []
+
+
+def test_staged_qdrant_ingest_uploads_the_embedded_vectors(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(monkeypatch)
+    model = HashingEmbeddingModel(dimensions=8)
+    chunks = _many_chunks(5)
+
+    _ingest(_qdrant_settings(tmp_path, qdrant_staging_dir=tmp_path / "staging"), chunks, model)
+
+    stored = _FakeQdrantClient.existing["points"]
+    for chunk, expected in zip(chunks, model.embed([chunk.text for chunk in chunks]), strict=True):
+        point = stored[_point_id(chunk.id)]
+        assert point.vector["dense"] == pytest.approx(expected, rel=1e-6, abs=1e-7)
+        assert point.payload["text"] == chunk.text
+
+
+def test_staged_qdrant_ingest_phases_account_for_all_of_the_loop_time(monkeypatch, tmp_path) -> None:
+    import time
+
+    _use_fake_qdrant(monkeypatch)
+
+    class _SlowModel(_CountingModel):
+        def embed(self, texts: list[str]) -> list[list[float]]:
+            time.sleep(0.01)
+            return super().embed(texts)
+
+    started = time.perf_counter()
+    _, stats = _ingest(
+        _qdrant_settings(tmp_path, qdrant_staging_dir=tmp_path / "staging"),
+        _many_chunks(10),
+        _SlowModel(),
+    )
+    wall = time.perf_counter() - started
+
+    assert stats.write_wait_seconds == 0.0
+    assert stats.write_seconds == pytest.approx(
+        stats.setup_seconds
+        + stats.point_build_seconds
+        + stats.staging_seconds
+        + stats.upload_seconds
+        + stats.cleanup_seconds
+    )
+    assert stats.total_seconds == pytest.approx(
+        stats.write_seconds + stats.source_wait_seconds + stats.lookup_seconds + stats.embedding_seconds
+    )
+    assert 0.9 * wall <= stats.total_seconds <= wall
+
+
+def test_staged_qdrant_ingest_removes_its_staging_file_when_the_upload_fails(
+    monkeypatch, tmp_path
+) -> None:
+    import os
+
+    _use_fake_qdrant(monkeypatch)
+
+    def failing_upsert(self, **kwargs) -> None:
+        raise ConnectionError("qdrant went away")
+
+    monkeypatch.setattr(_FakeQdrantClient, "upsert", failing_upsert)
+    staging_dir = tmp_path / "staging"
+
+    with pytest.raises(ConnectionError, match="qdrant went away"):
+        _ingest(_qdrant_settings(tmp_path, qdrant_staging_dir=staging_dir), _many_chunks(5))
+    assert os.listdir(staging_dir) == []
 
 
 def _indexing_thresholds() -> list[int]:
