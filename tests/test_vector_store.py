@@ -474,12 +474,12 @@ def test_staged_qdrant_ingest_phases_account_for_all_of_the_loop_time(monkeypatc
             time.sleep(0.01)
             return super().embed(texts)
 
+    settings = _qdrant_settings(tmp_path, qdrant_staging_dir=tmp_path / "staging")
+    chunks = _many_chunks(10)
+    model = _SlowModel()
+
     started = time.perf_counter()
-    _, stats = _ingest(
-        _qdrant_settings(tmp_path, qdrant_staging_dir=tmp_path / "staging"),
-        _many_chunks(10),
-        _SlowModel(),
-    )
+    _, stats = _ingest(settings, chunks, model)
     wall = time.perf_counter() - started
 
     assert stats.write_wait_seconds == 0.0
