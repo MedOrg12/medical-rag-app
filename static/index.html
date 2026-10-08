@@ -963,6 +963,7 @@
         sourcePage: 0,
         evalQuestions: [],
         ingestPoll: null,
+        evalPoll: null,
       };
 
       const els = {
@@ -1022,7 +1023,9 @@
           );
         }
         if (!response.ok) {
-          throw new Error(payload.detail || `Request to ${path} failed (${response.status})`);
+          const error = new Error(payload.detail || `Request to ${path} failed (${response.status})`);
+          error.status = response.status;
+          throw error;
         }
         return payload;
       }
@@ -1031,6 +1034,24 @@
         await refreshHealth();
         await refreshSources();
         await refreshEvalQuestions();
+        await resumeRunningEval();
+      }
+
+      // Picks a background eval back up after a reload, or after status polling gave up.
+      async function resumeRunningEval() {
+        if (state.evalPoll) {
+          return;
+        }
+        try {
+          const payload = await requestJson("/eval/status");
+          if (payload.running) {
+            els.evalRunButton.disabled = true;
+            els.evalSummary.classList.add("hidden");
+            startEvalPolling();
+          }
+        } catch {
+          // Leave the panel as it is; the next refresh or Run Eval click tries again.
+        }
       }
 
       async function refreshHealth() {
@@ -1396,22 +1417,92 @@
         }
 
         try {
-          const payload = await requestJson("/eval/run", {
+          await requestJson("/eval/run", {
             method: "POST",
             body: JSON.stringify({
               answer_mode: els.evalAnswerMode.value,
               top_k: Number(els.evalTopK.value || 5),
               question_ids: selected,
               include_answers: els.evalIncludeAnswers.checked,
+              background: true,
             }),
           });
-          renderEval(payload);
+          startEvalPolling();
         } catch (error) {
-          els.qualityStatus.textContent = "Eval failed";
-          els.evalResults.innerHTML = `<div class="notice warn">${escapeHtml(error.message)}</div>`;
-        } finally {
-          els.evalRunButton.disabled = false;
+          if (error.status === 409) {
+            // A run is already in progress, e.g. one this page lost track of; follow it.
+            startEvalPolling();
+            return;
+          }
+          showEvalError(error.message);
         }
+      }
+
+      // Each poll is scheduled only after the previous one has been handled, and a poll
+      // from an earlier run is ignored, so a slow response cannot overwrite a newer state.
+      function startEvalPolling() {
+        stopEvalPolling();
+        const run = { timer: null, failures: 0 };
+        state.evalPoll = run;
+        checkEvalStatus(run);
+      }
+
+      function stopEvalPolling() {
+        if (state.evalPoll) {
+          window.clearTimeout(state.evalPoll.timer);
+          state.evalPoll = null;
+        }
+      }
+
+      async function checkEvalStatus(run) {
+        try {
+          const payload = await requestJson("/eval/status");
+          if (state.evalPoll !== run) {
+            return;
+          }
+          run.failures = 0;
+          if (payload.running) {
+            const progress = payload.total ? ` ${payload.completed}/${payload.total}` : "";
+            els.qualityStatus.textContent = `Running eval${progress}`;
+            els.evalResults.innerHTML = `<div class="notice">Running eval${escapeHtml(progress)}.</div>`;
+            run.timer = window.setTimeout(() => checkEvalStatus(run), 1500);
+            return;
+          }
+          stopEvalPolling();
+          els.evalRunButton.disabled = false;
+          if (payload.last_error) {
+            showEvalError(payload.last_error);
+          } else if (payload.last_result) {
+            renderEval(payload.last_result);
+          } else {
+            // Status lives in server memory, so a restart mid-run leaves neither outcome.
+            els.qualityStatus.textContent = "Not evaluated";
+            els.evalResults.innerHTML =
+              '<div class="notice warn">The eval run has no result; the server may have restarted. Run it again.</div>';
+          }
+        } catch (error) {
+          if (state.evalPoll !== run) {
+            return;
+          }
+          // The run continues on the server, so a status request that fails on the way
+          // (say, a proxy hiccup) is retried before the UI gives up on it.
+          run.failures += 1;
+          if (run.failures < 5) {
+            run.timer = window.setTimeout(() => checkEvalStatus(run), 1500 * run.failures);
+            return;
+          }
+          stopEvalPolling();
+          showEvalError(
+            `${error.message}. The eval may still be running; click Run Eval or Refresh to check on it again.`,
+            "Eval status unavailable",
+          );
+        }
+      }
+
+      function showEvalError(message, status = "Eval failed") {
+        els.qualityStatus.textContent = status;
+        els.evalResults.innerHTML = `<div class="notice warn">${escapeHtml(message)}</div>`;
+        els.evalRunButton.disabled = false;
       }
 
       function renderEval(payload) {

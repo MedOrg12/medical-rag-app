@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -134,6 +136,65 @@ def test_health_survives_unreachable_qdrant(tmp_path) -> None:
     ask = client.post("/ask", json={"question": "What is a stroke?"})
     assert ask.status_code == 400
     assert "Could not reach Qdrant" in ask.json()["detail"]
+
+
+def test_eval_run_in_background_reports_progress_and_result(tmp_path) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "dysphagia_rehabilitation.txt").write_text(
+        "Dysphagia after stroke is difficulty swallowing. Swallow rehabilitation may include "
+        "texture modified foods and liquids for safer eating.",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=corpus,
+        index_path=tmp_path / ".rag" / "index.json",
+        chunk_size_chars=400,
+        chunk_overlap_chars=40,
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings))
+    assert client.post("/ingest", json={}).status_code == 200
+
+    accepted = client.post(
+        "/eval/run",
+        json={"question_ids": ["q2"], "top_k": 3, "background": True},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json() == {"accepted": True, "status": "/eval/status"}
+
+    deadline = time.monotonic() + 30
+    status = client.get("/eval/status").json()
+    while status["running"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+        status = client.get("/eval/status").json()
+
+    assert status["running"] is False
+    assert status["last_error"] is None
+    assert (status["completed"], status["total"]) == (1, 1)
+    assert status["last_result"]["summary"]["total_questions"] == 1
+    assert status["last_result"]["results"][0]["question_id"] == "q2"
+
+
+def test_eval_run_rejects_a_second_background_run(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    release = threading.Event()
+    app = create_app(settings)
+    client = TestClient(app)
+
+    with patch("medical_rag.server.evaluate_rag", side_effect=lambda *a, **k: release.wait()):
+        first = client.post("/eval/run", json={"background": True})
+        second = client.post("/eval/run", json={"background": True})
+        release.set()
+
+    assert first.status_code == 200
+    assert second.status_code == 409
 
 
 def test_sources_reports_vector_store_failure_as_json(tmp_path) -> None:
