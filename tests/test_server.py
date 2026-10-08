@@ -197,6 +197,26 @@ def test_eval_run_rejects_a_second_background_run(tmp_path) -> None:
     assert second.status_code == 409
 
 
+def test_eval_run_resets_status_when_the_run_cannot_be_started(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    with patch(
+        "medical_rag.server.ThreadPoolExecutor.submit",
+        side_effect=RuntimeError("cannot schedule new futures after shutdown"),
+    ):
+        client = TestClient(create_app(settings))
+        response = client.post("/eval/run", json={"background": True})
+
+    assert response.status_code == 503
+    status = client.get("/eval/status").json()
+    assert status["running"] is False
+    assert "after shutdown" in status["last_error"]
+
+
 def test_sources_reports_vector_store_failure_as_json(tmp_path) -> None:
     settings = Settings(
         root_dir=tmp_path,

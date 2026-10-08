@@ -309,7 +309,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "last_error": None,
                     }
                 )
-            eval_executor.submit(_run_background_eval, request)
+            try:
+                eval_executor.submit(_run_background_eval, request)
+            except RuntimeError as exc:
+                # The executor refuses work once it is shut down; without this the status
+                # would report a run that never started, and block every later one.
+                with eval_lock:
+                    eval_status.update(
+                        {"running": False, "finished_at": time.time(), "last_error": str(exc)}
+                    )
+                raise HTTPException(
+                    status_code=503, detail=f"Could not start the eval: {exc}"
+                ) from exc
             return {"accepted": True, "status": "/eval/status"}
 
         try:
