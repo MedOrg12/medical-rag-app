@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from fastapi.testclient import TestClient
 
 from medical_rag.config import Settings
@@ -132,3 +134,40 @@ def test_health_survives_unreachable_qdrant(tmp_path) -> None:
     ask = client.post("/ask", json={"question": "What is a stroke?"})
     assert ask.status_code == 400
     assert "Could not reach Qdrant" in ask.json()["detail"]
+
+
+def test_sources_reports_vector_store_failure_as_json(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings))
+
+    with patch(
+        "medical_rag.pipeline.StrokeRAG.sources", side_effect=TimeoutError("timed out")
+    ):
+        response = client.get("/sources")
+
+    assert response.status_code == 503
+    assert "timed out" in response.json()["detail"]
+
+
+def test_unhandled_errors_return_json(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings), raise_server_exceptions=False)
+
+    with patch(
+        "medical_rag.pipeline.StrokeRAG.ask", side_effect=TimeoutError("http://internal:6333")
+    ):
+        response = client.post("/ask", json={"question": "What is a stroke?"})
+
+    assert response.status_code == 500
+    assert "server log" in response.json()["detail"]
+    assert "internal:6333" not in response.text

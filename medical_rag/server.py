@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -92,6 +92,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "last_error": str(exc),
                     }
                 )
+
+    @app.exception_handler(Exception)
+    async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+        # Starlette's default 500 body is plain text, which the UI cannot parse as JSON. The
+        # exception can carry anything, so it stays out of the response; Starlette re-raises
+        # it after this handler, so the server log still gets the traceback.
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error; see the server log for details."},
+        )
 
     @app.get("/", response_model=None)
     def root() -> Any:
@@ -211,6 +221,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return rag.sources()
         except FileNotFoundError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 - qdrant-client raises several transport types
+            raise HTTPException(
+                status_code=503, detail=f"Could not read sources from the vector store: {exc}"
+            ) from exc
 
     @app.get("/eval/questions")
     def eval_questions() -> dict[str, Any]:

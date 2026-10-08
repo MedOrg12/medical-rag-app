@@ -979,9 +979,21 @@
           headers: { "Content-Type": "application/json" },
           ...options,
         });
-        const payload = await response.json();
+        // A proxy that times out the request answers with its own HTML or plain-text page.
+        const body = await response.text();
+        let payload;
+        try {
+          payload = body ? JSON.parse(body) : {};
+        } catch {
+          const status = `${response.status} ${response.statusText}`.trim();
+          throw new Error(
+            response.ok
+              ? `Unexpected non-JSON response from ${path}`
+              : `Request to ${path} failed (${status}); the server or a proxy in front of it may have timed out`,
+          );
+        }
         if (!response.ok) {
-          throw new Error(payload.detail || "Request failed");
+          throw new Error(payload.detail || `Request to ${path} failed (${response.status})`);
         }
         return payload;
       }
@@ -1101,7 +1113,7 @@
               <strong>${escapeHtml(compactSource(source.source_id || source.title || "Unknown source"))}</strong>
               <div class="meta">
                 <span>${formatNumber(source.chunks || 0)} chunks</span>
-                <span>${formatPages(source.pages)}</span>
+                ${Array.isArray(source.pages) ? `<span>${formatPages(source.pages)}</span>` : ""}
               </div>
             </article>`,
           )

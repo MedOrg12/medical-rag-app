@@ -6,7 +6,7 @@ import math
 import time
 import uuid
 from collections import deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -41,6 +41,13 @@ _JSON_BYTES_PER_POINT = 128
 # collection is found with indexing still paused by an ingest that was killed mid-run.
 _DEFAULT_INDEXING_THRESHOLD_KB = 10000
 
+# Payload field the source list is counted by. Qdrant can only facet on an indexed field.
+_SOURCE_ID_FIELD = "metadata.source_id"
+
+# Facet results are capped at ``limit`` values; set far above any realistic corpus so every
+# source is counted, unless the collection's strict mode allows less.
+_MAX_FACET_SOURCES = 1_000_000
+
 
 class VectorStoreBackend(Protocol):
     @property
@@ -61,6 +68,8 @@ class VectorStoreBackend(Protocol):
         ...
 
     def source_summaries(self) -> list[dict[str, Any]]:
+        """One entry per source with at least ``source_id`` and ``chunks``. Backends that
+        can afford it also include ``title``, ``source_path`` and ``pages``."""
         ...
 
 
@@ -397,6 +406,8 @@ class QdrantVectorStore:
         self.settings = settings
         self.embedding_model = embedding_model_name
         self._client: Any = None
+        self._source_index_ready = False
+        self._source_facet_limit = _MAX_FACET_SOURCES
 
     @property
     def client(self) -> Any:
@@ -550,6 +561,9 @@ class QdrantVectorStore:
                     if not collection_validated:
                         # Needs a real vector to know the dimension; runs once per ingest.
                         store._ensure_collection(len(vectors[0]))
+                        # Indexing an empty or existing collection up front is cheaper than
+                        # building the index over everything once the load is done.
+                        store._ensure_source_index()
                         collection_ready = True
                         collection_validated = True
                         threshold_kb = store._indexing_threshold_kb()
@@ -592,6 +606,8 @@ class QdrantVectorStore:
 
             timer.enter("cleanup")
             if collection_ready:
+                # Covers a run that reused every chunk and so never reached the call above.
+                store._ensure_source_index()
                 # A collection this run created only holds this run's points, so scrolling
                 # through all of them for stale ones would find nothing.
                 if can_reuse:
@@ -709,24 +725,52 @@ class QdrantVectorStore:
         return [_search_result_from_point(point, rank) for rank, point in enumerate(points, start=1)]
 
     def source_summaries(self) -> list[dict[str, Any]]:
-        # Only the metadata sub-document is fetched: chunk text is by far the largest part
-        # of each payload and a full scroll of it would not fit on a small query host.
-        return _summarize_sources(self._scroll_metadata())
-
-    def _scroll_metadata(self) -> Iterator[dict[str, Any]]:
-        offset = None
-        while True:
-            points, offset = self.client.scroll(
-                collection_name=self.settings.qdrant_collection,
-                limit=1024,
-                offset=offset,
-                with_payload=["metadata"],
-                with_vectors=False,
+        # Scrolling every chunk's metadata to aggregate it here took 20+ seconds at ~275k
+        # chunks, long enough for the request to time out. A facet on the indexed source id
+        # does the counting on the server in one request, but it cannot return titles or
+        # page numbers, so only chunk counts are reported.
+        self._ensure_source_index()
+        limit = self._source_facet_limit
+        response = self.client.facet(
+            collection_name=self.settings.qdrant_collection,
+            key=_SOURCE_ID_FIELD,
+            limit=limit,
+            exact=True,
+            timeout=_qdrant_timeout(self.settings),
+        )
+        # Facets cannot be paged, so a full page may have cut sources off the list.
+        if len(response.hits) >= limit:
+            raise RuntimeError(
+                f"Qdrant collection {self.settings.qdrant_collection!r} has at least {limit} "
+                "sources, more than one facet request may return; raise the collection's "
+                "strict-mode max_query_limit to list them all."
             )
-            for point in points:
-                yield dict((point.payload or {}).get("metadata") or {})
-            if offset is None:
-                break
+        summaries = [{"source_id": str(hit.value), "chunks": int(hit.count)} for hit in response.hits]
+        return sorted(summaries, key=lambda item: item["source_id"].lower())
+
+    def _ensure_source_index(self) -> None:
+        """Create the keyword index the source facet needs, if the collection lacks it.
+
+        Ingestion creates it, so this only does work once for a collection built before
+        the index existed. Building it reads every point's payload, so it can take a while
+        on a large collection.
+        """
+        if self._source_index_ready:
+            return
+        info = self.client.get_collection(self.settings.qdrant_collection)
+        strict_mode = getattr(info.config, "strict_mode_config", None)
+        max_query_limit = getattr(strict_mode, "max_query_limit", None)
+        if getattr(strict_mode, "enabled", False) and max_query_limit:
+            self._source_facet_limit = min(_MAX_FACET_SOURCES, int(max_query_limit))
+        if _SOURCE_ID_FIELD not in (getattr(info, "payload_schema", None) or {}):
+            self.client.create_payload_index(
+                collection_name=self.settings.qdrant_collection,
+                field_name=_SOURCE_ID_FIELD,
+                field_schema=_qdrant_models().PayloadSchemaType.KEYWORD,
+                wait=True,
+                timeout=_qdrant_timeout(self.settings),
+            )
+        self._source_index_ready = True
 
     def _ensure_collection(self, vector_size: int) -> None:
         client = self.client

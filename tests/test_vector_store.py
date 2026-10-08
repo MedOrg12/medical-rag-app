@@ -67,10 +67,44 @@ class _FakeQdrantClient:
         optimizer_config = SimpleNamespace(
             indexing_threshold=self._collection.get("indexing_threshold", 10000)
         )
+        max_query_limit = self._collection.get("max_query_limit")
+        strict_mode_config = SimpleNamespace(
+            enabled=max_query_limit is not None, max_query_limit=max_query_limit
+        )
         return SimpleNamespace(
             config=SimpleNamespace(
-                params=SimpleNamespace(vectors=vectors), optimizer_config=optimizer_config
-            )
+                params=SimpleNamespace(vectors=vectors),
+                optimizer_config=optimizer_config,
+                strict_mode_config=strict_mode_config,
+            ),
+            payload_schema={field: {} for field in self._collection.get("payload_indexes", ())},
+        )
+
+    def create_payload_index(self, **kwargs) -> None:
+        self._record("create_payload_index", kwargs)
+        assert self._collection is not None
+        self._collection.setdefault("payload_indexes", set()).add(kwargs["field_name"])
+
+    def facet(self, **kwargs):
+        from collections import Counter
+        from types import SimpleNamespace
+
+        self._record("facet", kwargs)
+        assert self._collection is not None
+        assert kwargs["key"] in self._collection.get("payload_indexes", ()), "facet needs an index"
+        prefix, field = kwargs["key"].split(".")
+        counts = Counter(
+            point.payload[prefix][field]
+            for point in self._collection["points"].values()
+            if field in point.payload.get(prefix, {})
+        )
+        limit = self._collection.get("max_query_limit")
+        assert limit is None or kwargs["limit"] <= limit, "strict mode rejects the request"
+        return SimpleNamespace(
+            hits=[
+                SimpleNamespace(value=value, count=count)
+                for value, count in counts.most_common(kwargs["limit"])
+            ]
         )
 
     def close(self) -> None:
@@ -647,10 +681,10 @@ def test_qdrant_store_recreates_collection_when_requested(monkeypatch, tmp_path)
     assert _FakeQdrantClient.existing["vectors"] == {"dense": 8}
 
 
-def test_qdrant_source_summaries_fetch_metadata_only(monkeypatch, tmp_path) -> None:
+def test_qdrant_source_summaries_count_chunks_with_a_facet(monkeypatch, tmp_path) -> None:
     a1 = _fake_point("a1", "text one", source_id="a", title="A", page=1)
     a2 = _fake_point("a2", "text two", source_id="a", title="A", page=2)
-    b1 = _fake_point("b1", "text three", source_id="b", title="B", page=7)
+    b1 = _fake_point("b1", "text three", source_id="B", title="B", page=7)
     _use_fake_qdrant(
         monkeypatch,
         existing={"vectors": {"dense": 8}, "points": {p.id: p for p in (a1, a2, b1)}},
@@ -658,13 +692,55 @@ def test_qdrant_source_summaries_fetch_metadata_only(monkeypatch, tmp_path) -> N
 
     store = QdrantVectorStore.load(_qdrant_settings(tmp_path))
     summaries = store.source_summaries()
+    store.source_summaries()
 
-    scrolls = [kwargs for name, kwargs in _calls() if name == "scroll"]
-    assert scrolls and all(call["with_payload"] == ["metadata"] for call in scrolls)
-    assert [(s["source_id"], s["chunks"], s["pages"]) for s in summaries] == [
-        ("a", 2, [1, 2]),
-        ("b", 1, [7]),
-    ]
+    names = _call_names()
+    assert "scroll" not in names, "the source list must not page through every chunk"
+    assert names.count("create_payload_index") == 1, "a missing index is created once"
+    assert names.count("facet") == 2
+    assert summaries == [{"source_id": "a", "chunks": 2}, {"source_id": "B", "chunks": 1}]
+
+
+def test_qdrant_source_summaries_respect_strict_mode_query_limit(monkeypatch, tmp_path) -> None:
+    points = [_fake_point(f"c{i}", f"text {i}", source_id=f"s{i}") for i in range(3)]
+    existing = {
+        "vectors": {"dense": 8},
+        "points": {p.id: p for p in points},
+        "max_query_limit": 3,
+    }
+    _use_fake_qdrant(monkeypatch, existing=existing)
+    store = QdrantVectorStore.load(_qdrant_settings(tmp_path))
+
+    with pytest.raises(RuntimeError, match="max_query_limit"):
+        store.source_summaries()
+
+    existing["max_query_limit"] = 4
+    store = QdrantVectorStore.load(_qdrant_settings(tmp_path))
+    assert [s["source_id"] for s in store.source_summaries()] == ["s0", "s1", "s2"]
+
+
+def test_qdrant_ingest_indexes_source_ids(monkeypatch, tmp_path) -> None:
+    _use_fake_qdrant(monkeypatch)
+    chunks = [Chunk(id="c1", text="stroke", metadata={"source_id": "a"})]
+
+    _ingest(_qdrant_settings(tmp_path), chunks)
+
+    names = _call_names()
+    assert names.index("create_payload_index") < names.index("upsert")
+    assert _FakeQdrantClient.existing["payload_indexes"] == {"metadata.source_id"}
+
+
+def test_qdrant_ingest_indexes_source_ids_when_every_chunk_is_reused(monkeypatch, tmp_path) -> None:
+    point = _fake_point("c1", "stroke", source_id="a")
+    _use_fake_qdrant(
+        monkeypatch, existing={"vectors": {"dense": 8}, "points": {point.id: point}}
+    )
+    chunks = [Chunk(id="c1", text="stroke", metadata={"source_id": "a"})]
+
+    _, stats = _ingest(_qdrant_settings(tmp_path), chunks)
+
+    assert stats.chunks_reused == 1
+    assert _FakeQdrantClient.existing["payload_indexes"] == {"metadata.source_id"}
 
 
 def test_qdrant_collection_exists_reports_unreachable_server(monkeypatch, tmp_path) -> None:
