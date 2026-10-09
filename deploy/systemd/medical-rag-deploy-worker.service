@@ -1,0 +1,24 @@
+[Unit]
+Description=Medical RAG controlled deployment worker
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=medical-rag-deploy
+WorkingDirectory=/opt/medical-rag/source
+EnvironmentFile=/etc/medical-rag/deploy-agent.env
+Environment=DOCKER_CONFIG=/etc/medical-rag/docker
+ExecStart=/opt/medical-rag/deploy-venv/bin/python -m deploy_agent.worker
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/var/lib/medical-rag-deploy
