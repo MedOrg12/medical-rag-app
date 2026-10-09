@@ -348,7 +348,7 @@ Legacy Docker variables from the previous app are also accepted where they map c
 
 ## Frontend
 
-The active UI is `static/index.html` and is wired to `/health`, `/ingest`, `/ingest/status`, `/ask`, `/sources`, `/eval/questions`, and `/eval/run`.
+The active UI is `static/index.html` and is wired to `/health`, `/ingest`, `/ingest/status`, `/ask`, `/sources`, `/eval/questions`, `/eval/run`, and `/eval/status`.
 It is a dependency-free RAG workbench with:
 
 - Corpus ingestion controls with background-status polling.
@@ -422,6 +422,12 @@ curl http://localhost:8000/eval/questions
 curl -s -X POST http://localhost:8000/eval/run \
   -H "Content-Type: application/json" \
   -d '{"answer_mode":"patient","top_k":5}'
+
+# Long runs can outlast a proxy's request timeout; run them in the background and poll.
+curl -s -X POST http://localhost:8000/eval/run \
+  -H "Content-Type: application/json" \
+  -d '{"answer_mode":"patient","top_k":5,"background":true}'
+curl http://localhost:8000/eval/status
 ```
 
 ### Run the CLI runner

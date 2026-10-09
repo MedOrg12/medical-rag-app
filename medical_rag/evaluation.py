@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -126,23 +127,31 @@ def evaluate_rag(
     answer_mode: str | None = None,
     question_ids: list[str] | None = None,
     include_answers: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> EvalSuiteResult:
+    """Run the selected questions in order. ``on_progress(done, total)`` is called before
+    the first question and after each one."""
     if questions is None:
         version, questions = load_eval_suite()
     selected_ids = set(question_ids or [])
     selected = [item for item in questions if not selected_ids or item.id in selected_ids]
 
     started = time.perf_counter()
-    results = [
-        evaluate_question(
-            rag=rag,
-            item=item,
-            top_k=top_k,
-            answer_mode=answer_mode,
-            include_answer=include_answers,
+    results: list[EvalQuestionResult] = []
+    if on_progress is not None:
+        on_progress(0, len(selected))
+    for item in selected:
+        results.append(
+            evaluate_question(
+                rag=rag,
+                item=item,
+                top_k=top_k,
+                answer_mode=answer_mode,
+                include_answer=include_answers,
+            )
         )
-        for item in selected
-    ]
+        if on_progress is not None:
+            on_progress(len(results), len(selected))
     duration = time.perf_counter() - started
 
     return EvalSuiteResult(

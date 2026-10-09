@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
@@ -40,6 +41,7 @@ class EvalRunRequest(BaseModel):
     answer_mode: Literal["patient", "clinician"] | None = None
     question_ids: list[str] | None = None
     include_answers: bool = False
+    background: bool = False
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -52,6 +54,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "started_at": None,
         "finished_at": None,
         "last_report": None,
+        "last_error": None,
+    }
+    # Each question is a full retrieval and generation round trip, so a run can outlast a
+    # proxy's request timeout; the UI runs it in the background and polls /eval/status.
+    eval_executor = ThreadPoolExecutor(max_workers=1)
+    eval_lock = threading.Lock()
+    eval_status: dict[str, Any] = {
+        "running": False,
+        "started_at": None,
+        "finished_at": None,
+        "completed": 0,
+        "total": 0,
+        "last_result": None,
         "last_error": None,
     }
     app = FastAPI(
@@ -86,6 +101,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception as exc:  # noqa: BLE001 - preserve failure for status endpoint.
             with ingestion_lock:
                 ingestion_status.update(
+                    {
+                        "running": False,
+                        "finished_at": time.time(),
+                        "last_error": str(exc),
+                    }
+                )
+
+    def _run_eval(
+        request: EvalRunRequest, on_progress: Callable[[int, int], None] | None = None
+    ) -> dict[str, Any]:
+        return evaluate_rag(
+            rag,
+            top_k=request.top_k,
+            answer_mode=request.answer_mode,
+            question_ids=request.question_ids,
+            include_answers=request.include_answers,
+            on_progress=on_progress,
+        ).to_dict()
+
+    def _record_eval_progress(completed: int, total: int) -> None:
+        with eval_lock:
+            eval_status.update({"completed": completed, "total": total})
+
+    def _run_background_eval(request: EvalRunRequest) -> None:
+        try:
+            result = _run_eval(request, on_progress=_record_eval_progress)
+            with eval_lock:
+                eval_status.update(
+                    {
+                        "running": False,
+                        "finished_at": time.time(),
+                        "last_result": result,
+                        "last_error": None,
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001 - preserve failure for status endpoint.
+            with eval_lock:
+                eval_status.update(
                     {
                         "running": False,
                         "finished_at": time.time(),
@@ -234,16 +287,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "questions": [question.to_dict() for question in questions],
         }
 
+    @app.get("/eval/status")
+    def eval_run_status() -> dict[str, Any]:
+        with eval_lock:
+            return dict(eval_status)
+
     @app.post("/eval/run")
     def eval_run(request: EvalRunRequest) -> dict[str, Any]:
+        if request.background:
+            with eval_lock:
+                if eval_status["running"]:
+                    raise HTTPException(status_code=409, detail="An eval run is already running")
+                eval_status.update(
+                    {
+                        "running": True,
+                        "started_at": time.time(),
+                        "finished_at": None,
+                        "completed": 0,
+                        "total": 0,
+                        "last_result": None,
+                        "last_error": None,
+                    }
+                )
+            try:
+                eval_executor.submit(_run_background_eval, request)
+            except RuntimeError as exc:
+                # The executor refuses work once it is shut down; without this the status
+                # would report a run that never started, and block every later one.
+                with eval_lock:
+                    eval_status.update(
+                        {"running": False, "finished_at": time.time(), "last_error": str(exc)}
+                    )
+                raise HTTPException(
+                    status_code=503, detail=f"Could not start the eval: {exc}"
+                ) from exc
+            return {"accepted": True, "status": "/eval/status"}
+
         try:
-            return evaluate_rag(
-                rag,
-                top_k=request.top_k,
-                answer_mode=request.answer_mode,
-                question_ids=request.question_ids,
-                include_answers=request.include_answers,
-            ).to_dict()
+            return _run_eval(request)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (RuntimeError, ValueError) as exc:
