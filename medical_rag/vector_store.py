@@ -749,11 +749,14 @@ class QdrantVectorStore:
         return sorted(summaries, key=lambda item: item["source_id"].lower())
 
     def _ensure_source_index(self) -> None:
-        """Create the keyword index the source facet needs, if the collection lacks it.
+        """Make sure the keyword index the source facet needs exists and is built.
 
-        Ingestion creates it, so this only does work once for a collection built before
-        the index existed. Building it reads every point's payload, so it can take a while
-        on a large collection.
+        Ingestion creates it, so this only builds it once, for a collection ingested before
+        the index existed; building reads every point's payload, which takes a while on a
+        large collection. The request is sent even when the collection already lists the
+        index: Qdrant lists it as soon as a build starts, and faceting on it fails until the
+        build finishes. A repeated request waits for a build in progress (from this process
+        or another) and returns at once when the index is ready.
         """
         if self._source_index_ready:
             return
@@ -762,14 +765,13 @@ class QdrantVectorStore:
         max_query_limit = getattr(strict_mode, "max_query_limit", None)
         if getattr(strict_mode, "enabled", False) and max_query_limit:
             self._source_facet_limit = min(_MAX_FACET_SOURCES, int(max_query_limit))
-        if _SOURCE_ID_FIELD not in (getattr(info, "payload_schema", None) or {}):
-            self.client.create_payload_index(
-                collection_name=self.settings.qdrant_collection,
-                field_name=_SOURCE_ID_FIELD,
-                field_schema=_qdrant_models().PayloadSchemaType.KEYWORD,
-                wait=True,
-                timeout=_qdrant_timeout(self.settings),
-            )
+        self.client.create_payload_index(
+            collection_name=self.settings.qdrant_collection,
+            field_name=_SOURCE_ID_FIELD,
+            field_schema=_qdrant_models().PayloadSchemaType.KEYWORD,
+            wait=True,
+            timeout=_qdrant_timeout(self.settings),
+        )
         self._source_index_ready = True
 
     def _ensure_collection(self, vector_size: int) -> None:

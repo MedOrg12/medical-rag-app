@@ -77,13 +77,24 @@ class _FakeQdrantClient:
                 optimizer_config=optimizer_config,
                 strict_mode_config=strict_mode_config,
             ),
-            payload_schema={field: {} for field in self._collection.get("payload_indexes", ())},
+            # Qdrant lists an index as soon as its build starts.
+            payload_schema={
+                field: {}
+                for field in (
+                    *self._collection.get("payload_indexes", ()),
+                    *self._collection.get("building_indexes", ()),
+                )
+            },
         )
 
     def create_payload_index(self, **kwargs) -> None:
         self._record("create_payload_index", kwargs)
         assert self._collection is not None
+        assert kwargs["wait"] is True
+        # Like Qdrant, a waiting request returns once the index (or a build already in
+        # progress for it) is complete.
         self._collection.setdefault("payload_indexes", set()).add(kwargs["field_name"])
+        self._collection.get("building_indexes", set()).discard(kwargs["field_name"])
 
     def facet(self, **kwargs):
         from collections import Counter
@@ -92,6 +103,7 @@ class _FakeQdrantClient:
         self._record("facet", kwargs)
         assert self._collection is not None
         assert kwargs["key"] in self._collection.get("payload_indexes", ()), "facet needs an index"
+        assert kwargs["key"] not in self._collection.get("building_indexes", ()), "index not built"
         prefix, field = kwargs["key"].split(".")
         counts = Counter(
             point.payload[prefix][field]
@@ -696,9 +708,26 @@ def test_qdrant_source_summaries_count_chunks_with_a_facet(monkeypatch, tmp_path
 
     names = _call_names()
     assert "scroll" not in names, "the source list must not page through every chunk"
-    assert names.count("create_payload_index") == 1, "a missing index is created once"
+    assert names.count("create_payload_index") == 1, "the index is ensured once per store"
     assert names.count("facet") == 2
     assert summaries == [{"source_id": "a", "chunks": 2}, {"source_id": "B", "chunks": 1}]
+
+
+def test_qdrant_source_summaries_wait_for_an_index_still_being_built(monkeypatch, tmp_path) -> None:
+    point = _fake_point("c1", "text", source_id="a")
+    _use_fake_qdrant(
+        monkeypatch,
+        existing={
+            "vectors": {"dense": 8},
+            "points": {point.id: point},
+            "building_indexes": {"metadata.source_id"},
+        },
+    )
+
+    store = QdrantVectorStore.load(_qdrant_settings(tmp_path))
+
+    assert store.source_summaries() == [{"source_id": "a", "chunks": 1}]
+    assert _call_names().index("create_payload_index") < _call_names().index("facet")
 
 
 def test_qdrant_source_summaries_respect_strict_mode_query_limit(monkeypatch, tmp_path) -> None:
