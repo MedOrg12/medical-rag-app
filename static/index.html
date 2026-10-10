@@ -372,6 +372,23 @@
         padding-right: 2px;
       }
 
+      .source-pager {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .source-pager[hidden] {
+        display: none;
+      }
+
+      .source-pager button {
+        min-height: 30px;
+        padding: 0 10px;
+        font-size: 12px;
+      }
+
       .source-item {
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -815,6 +832,11 @@
               <div id="sources" class="source-list">
                 <div class="notice">No sources loaded.</div>
               </div>
+              <nav id="source-pager" class="source-pager" aria-label="Source pages" hidden>
+                <button id="source-prev" class="secondary" type="button">&lsaquo; Prev</button>
+                <span id="source-page-label" class="meta"></span>
+                <button id="source-next" class="secondary" type="button">Next &rsaquo;</button>
+              </nav>
             </div>
           </div>
         </aside>
@@ -932,10 +954,13 @@
     </div>
 
     <script>
+      const SOURCES_PER_PAGE = 10;
+
       const state = {
         answerMode: "patient",
         health: null,
         sources: [],
+        sourcePage: 0,
         evalQuestions: [],
         ingestPoll: null,
       };
@@ -956,6 +981,10 @@
         ingestButton: document.querySelector("#ingest-button"),
         ingestResult: document.querySelector("#ingest-result"),
         sourceSearch: document.querySelector("#source-search"),
+        sourcePager: document.querySelector("#source-pager"),
+        sourcePrev: document.querySelector("#source-prev"),
+        sourceNext: document.querySelector("#source-next"),
+        sourcePageLabel: document.querySelector("#source-page-label"),
         sources: document.querySelector("#sources"),
         messages: document.querySelector("#messages"),
         emptyState: document.querySelector("#empty-state"),
@@ -979,9 +1008,21 @@
           headers: { "Content-Type": "application/json" },
           ...options,
         });
-        const payload = await response.json();
+        // A proxy that times out the request answers with its own HTML or plain-text page.
+        const body = await response.text();
+        let payload;
+        try {
+          payload = body ? JSON.parse(body) : {};
+        } catch {
+          const status = `${response.status} ${response.statusText}`.trim();
+          throw new Error(
+            response.ok
+              ? `Unexpected non-JSON response from ${path}`
+              : `Request to ${path} failed (${status}); the server or a proxy in front of it may have timed out`,
+          );
+        }
         if (!response.ok) {
-          throw new Error(payload.detail || "Request failed");
+          throw new Error(payload.detail || `Request to ${path} failed (${response.status})`);
         }
         return payload;
       }
@@ -1076,6 +1117,7 @@
           state.sources = [];
           els.sourceCount.textContent = "0";
           els.chunkCount.textContent = "0";
+          els.sourcePager.hidden = true;
           els.sources.innerHTML = `<div class="notice warn">${escapeHtml(error.message)}</div>`;
         }
       }
@@ -1091,21 +1133,38 @@
         els.chunkCount.textContent = formatNumber(totalChunks);
 
         if (!filtered.length) {
+          els.sourcePager.hidden = true;
           els.sources.innerHTML = '<div class="notice">No matching sources.</div>';
           return;
         }
 
-        els.sources.innerHTML = filtered
+        // A large corpus has thousands of sources, so the list shows one page at a time.
+        const pageCount = Math.ceil(filtered.length / SOURCES_PER_PAGE);
+        state.sourcePage = Math.min(state.sourcePage, pageCount - 1);
+        const start = state.sourcePage * SOURCES_PER_PAGE;
+        const page = filtered.slice(start, start + SOURCES_PER_PAGE);
+        els.sourcePager.hidden = pageCount <= 1;
+        els.sourcePrev.disabled = state.sourcePage === 0;
+        els.sourceNext.disabled = state.sourcePage >= pageCount - 1;
+        els.sourcePageLabel.textContent = `${formatNumber(start + 1)}–${formatNumber(start + page.length)} of ${formatNumber(filtered.length)}`;
+
+        els.sources.innerHTML = page
           .map(
             (source) => `<article class="source-item">
               <strong>${escapeHtml(compactSource(source.source_id || source.title || "Unknown source"))}</strong>
               <div class="meta">
                 <span>${formatNumber(source.chunks || 0)} chunks</span>
-                <span>${formatPages(source.pages)}</span>
+                ${Array.isArray(source.pages) ? `<span>${formatPages(source.pages)}</span>` : ""}
               </div>
             </article>`,
           )
           .join("");
+      }
+
+      function showSourcePage(delta) {
+        state.sourcePage = Math.max(0, state.sourcePage + delta);
+        renderSources();
+        els.sources.scrollTop = 0;
       }
 
       async function refreshEvalQuestions() {
@@ -1538,7 +1597,12 @@
       document.querySelector("#ask-form").addEventListener("submit", askQuestion);
       document.querySelector("#ingest-button").addEventListener("click", startIngest);
       document.querySelector("#refresh-button").addEventListener("click", refreshAll);
-      document.querySelector("#source-search").addEventListener("input", renderSources);
+      document.querySelector("#source-search").addEventListener("input", () => {
+        state.sourcePage = 0;
+        renderSources();
+      });
+      els.sourcePrev.addEventListener("click", () => showSourcePage(-1));
+      els.sourceNext.addEventListener("click", () => showSourcePage(1));
       document.querySelector("#eval-run-button").addEventListener("click", runEval);
       document.querySelector("#clear-chat").addEventListener("click", clearChat);
 

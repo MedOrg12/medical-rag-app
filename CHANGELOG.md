@@ -38,7 +38,9 @@ This project follows Semantic Versioning for the application release number:
 - `RAG_QDRANT_RECREATE_COLLECTION` now defaults to `false`; ingestion writes into the existing collection.
 - Ingestion now streams chunks to the vector store in `RAG_EMBED_BATCH_SIZE` batches and reuses vectors already stored for unchanged chunks (same id, text, and model) instead of re-embedding them. The report includes `chunks_embedded` and `chunks_reused`.
 - The Slurm job keeps its scratch directory on shared storage (`$PROJECT_DIR/.rag-slurm`) instead of `SLURM_TMPDIR`, so the manifest and extracted-text cache survive between jobs.
-- `/sources` on the Qdrant backend fetches only chunk metadata, so it no longer loads every chunk's text into memory.
+- `/sources` on the Qdrant backend counts chunks per source with a facet on an indexed `metadata.source_id` in one request, instead of scrolling every chunk's metadata, which took over 20 seconds at ~275k chunks and timed out after large ingests. It now returns only `source_id` and `chunks` for Qdrant (no `title`, `source_path`, or `pages`). Ingestion creates the index, and the first `/sources` call creates it on a collection built before this change.
+- The UI's source list shows ten sources per page, with previous/next controls, instead of one long scroll; search filters across all sources.
+- `/sources` reports vector-store failures as a 503 with a JSON `detail`, unhandled server errors return a JSON 500 instead of plain text, and the UI shows the HTTP status when a response is not JSON (for example a proxy timeout page) instead of a `JSON.parse` error.
 - `/health` reports `active_embedding_model` as `null` with an `embedding_model_error` when the embedding service is unreachable, and `index_exists` as `null` with a `vector_store_error` when Qdrant is unreachable, instead of failing.
 - An unreachable Qdrant is now reported as an error rather than as a missing collection, so container startup no longer launches a full ingestion when the vector store is down.
 - `RAG_AUTO_INGEST_ON_STARTUP` is configurable in compose for query-only hosts.
