@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import pickle
+import tempfile
 import time
 import uuid
+from array import array
 from collections import deque
 from collections.abc import Iterable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -98,11 +101,16 @@ class IngestStats:
     lookup_seconds: float = 0.0
     point_build_seconds: float = 0.0
     write_wait_seconds: float = 0.0
+    # Staged uploads only (``qdrant_staging_dir``): writing points to the local staging
+    # file during the loop, and then reading them back and upserting them all at the end.
+    staging_seconds: float = 0.0
+    upload_seconds: float = 0.0
     cleanup_seconds: float = 0.0
     total_seconds: float = 0.0
     upsert_requests: int = 0
     upsert_busy_seconds: float = 0.0
     upsert_request_mb: float = 0.0
+    staged_mb: float = 0.0
 
 
 class _PhaseTimer:
@@ -468,6 +476,12 @@ class QdrantVectorStore:
         Once a run has written enough to cross Qdrant's indexing threshold, HNSW indexing is
         paused and restored afterwards, so Qdrant builds the index once instead of
         re-indexing segments on its disk during the load.
+
+        With ``qdrant_staging_dir`` set, embedded points go to a temporary file in that
+        directory instead, already cut into upsert requests, and are uploaded only after the
+        whole stream has been embedded. Embedding then never waits on Qdrant writes; reuse
+        lookups and collection setup still talk to Qdrant during the loop. The file is
+        unlinked on creation, so the OS frees it even if the job is killed.
         """
         stats = IngestStats()
         timer = _PhaseTimer(stats)
@@ -492,8 +506,15 @@ class QdrantVectorStore:
         max_request_bytes = int(settings.qdrant_max_request_mb * 1024 * 1024)
 
         current_ids: set[str] = set()
+        staging: Any = None
+        staged_requests = 0
         upsert_client = _qdrant_client(settings, for_bulk_upsert=True)
         try:
+            if settings.qdrant_staging_dir is not None:
+                settings.qdrant_staging_dir.mkdir(parents=True, exist_ok=True)
+                staging = tempfile.TemporaryFile(
+                    prefix=f"qdrant-{collection}-", suffix=".points", dir=settings.qdrant_staging_dir
+                )
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="qdrant-upsert") as writer:
                 pending: deque[Future[Any]] = deque()
 
@@ -526,6 +547,14 @@ class QdrantVectorStore:
                     stats.upsert_request_mb += request_bytes / (1024 * 1024)
                     wait = final or stats.upsert_requests % _UPSERTS_PER_WAIT == 0
                     pending.append(writer.submit(upsert, points, wait))
+
+                def stage(points: list[tuple[str, list[float], dict[str, Any]]], request_bytes: int) -> None:
+                    nonlocal staged_requests
+                    # float32 is under half the size of pickled doubles and loses nothing,
+                    # since Qdrant stores dense vectors as float32 anyway.
+                    staged = [(point_id, array("f", vector), payload) for point_id, vector, payload in points]
+                    pickle.dump((staged, request_bytes), staging, protocol=pickle.HIGHEST_PROTOCOL)
+                    staged_requests += 1
 
                 buffered: list[tuple[str, list[float], dict[str, Any]]] = []
                 buffered_bytes = 0
@@ -591,16 +620,35 @@ class QdrantVectorStore:
                             len(buffered) >= max_request_points
                             or buffered_bytes + point_bytes > max_request_bytes
                         ):
-                            timer.enter("write_wait")
-                            send(buffered, buffered_bytes)
+                            if staging is None:
+                                timer.enter("write_wait")
+                                send(buffered, buffered_bytes)
+                            else:
+                                timer.enter("staging")
+                                stage(buffered, buffered_bytes)
                             timer.enter("point_build")
                             buffered, buffered_bytes = [], 0
                         buffered.append((point_id, vector, payload))
                         buffered_bytes += point_bytes
 
-                timer.enter("write_wait")
-                if buffered:
-                    send(buffered, buffered_bytes, final=True)
+                if staging is None:
+                    timer.enter("write_wait")
+                    if buffered:
+                        send(buffered, buffered_bytes, final=True)
+                else:
+                    timer.enter("staging")
+                    if buffered:
+                        stage(buffered, buffered_bytes)
+                    stats.staged_mb = staging.tell() / (1024 * 1024)
+                    timer.enter("upload")
+                    staging.seek(0)
+                    for request in range(staged_requests):
+                        staged, request_bytes = pickle.load(staging)
+                        send(
+                            [(point_id, vector.tolist(), payload) for point_id, vector, payload in staged],
+                            request_bytes,
+                            final=request == staged_requests - 1,
+                        )
                 while pending:
                     pending.popleft().result()
 
@@ -621,14 +669,22 @@ class QdrantVectorStore:
                     )
         finally:
             timer.enter("cleanup")
-            upsert_client.close()
-            if restore_indexing_threshold is not None:
-                store._set_indexing_threshold(restore_indexing_threshold)
+            try:
+                upsert_client.close()
+                if restore_indexing_threshold is not None:
+                    store._set_indexing_threshold(restore_indexing_threshold)
+            finally:
+                # Last, because closing flushes buffered writes and can raise (e.g. a full
+                # disk), which must not stop indexing from being restored.
+                if staging is not None:
+                    staging.close()
             timer.enter(None)
         stats.write_seconds = (
             stats.setup_seconds
             + stats.point_build_seconds
             + stats.write_wait_seconds
+            + stats.staging_seconds
+            + stats.upload_seconds
             + stats.cleanup_seconds
         )
         stats.total_seconds = (

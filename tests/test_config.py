@@ -186,3 +186,11 @@ def test_settings_read_qdrant_grpc_environment(monkeypatch, tmp_path) -> None:
 
     assert settings.qdrant_prefer_grpc is True
     assert settings.qdrant_grpc_port == 16334
+
+
+def test_settings_read_qdrant_staging_dir(monkeypatch, tmp_path) -> None:
+    assert Settings.from_env(tmp_path).qdrant_staging_dir is None
+
+    monkeypatch.setenv("RAG_QDRANT_STAGING_DIR", "staging")
+
+    assert Settings.from_env(tmp_path).qdrant_staging_dir == tmp_path / "staging"

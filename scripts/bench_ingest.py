@@ -275,9 +275,12 @@ def _job_row(job: dict[str, Any], states: dict[str, str]) -> dict[str, Any]:
         row["lookup_s"] = timings.get("reuse_lookup_seconds", "-")
         if vector:
             row["vector_s"] = vector.get("total_seconds")
-            row["write_wait_s"] = vector.get("write_wait_seconds")
+            # A staged run's end-of-run upload is all time spent blocked on Qdrant writes.
+            row["write_wait_s"] = _round(
+                vector.get("write_wait_seconds", 0.0) + vector.get("upload_seconds", 0.0)
+            )
             row["write_other_s"] = _round(
-                sum(vector.get(f"{p}_seconds", 0.0) for p in ("setup", "point_build", "cleanup"))
+                sum(vector.get(f"{p}_seconds", 0.0) for p in ("setup", "point_build", "staging", "cleanup"))
             )
             row["upsert_busy_s"] = vector.get("upsert_busy_seconds")
             row["upsert_requests"] = vector.get("upsert_requests")

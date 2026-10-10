@@ -336,6 +336,9 @@ Environment variables:
 - `RAG_QDRANT_PREFER_GRPC`: default `false`. Use gRPC instead of REST; faster for bulk ingestion, and
   requires the Qdrant gRPC port to be reachable.
 - `RAG_QDRANT_GRPC_PORT`: default `6334`. gRPC port on the `RAG_QDRANT_URL` host.
+- `RAG_QDRANT_STAGING_DIR`: unset by default. When set, ingestion writes embedded points to a temporary
+  file in this directory and uploads them all to Qdrant after embedding finishes, instead of upserting
+  while it embeds. Point it at fast local disk; the Slurm job uses `$SLURM_TMPDIR`.
 - `QDRANT_DATA_DIR` (docker compose only): absolute host directory for the `qdrant` service's storage.
   Defaults to the `qdrant_data` named volume under Docker's data root. Point it at a fast local disk;
   Qdrant fsyncs a 32 MB write-ahead log segment on every collection create, which takes seconds on slow volumes.
