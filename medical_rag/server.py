@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
@@ -9,7 +10,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -72,12 +73,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def mask_unexpected_errors(request: Request, call_next: Any) -> Any:
         try:
-            return await call_next(request)
+            response = await call_next(request)
+            if request.method in {"GET", "HEAD"} and response.status_code in {200, 304}:
+                if request.url.path == "/" or request.url.path.startswith("/static/"):
+                    response.headers["Cache-Control"] = "private, no-cache"
+                elif request.url.path in {"/sources", "/eval/questions"}:
+                    pass  # These endpoints supply their own cache policy and ETag.
+                else:
+                    response.headers["Cache-Control"] = "no-store"
+            else:
+                response.headers["Cache-Control"] = "no-store"
+            return response
         except Exception:
             logger.exception("Unexpected failure handling %s", request.url.path)
             return JSONResponse(status_code=500, content={
                 "detail": "Something went wrong while processing your request. Please try again in a moment."
-            })
+            }, headers={"Cache-Control": "no-store"})
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -88,6 +99,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def request_error(exc: Exception, status: int, operation: str = "request") -> HTTPException:
         logger.exception("MedicalRAG %s failed", operation)
         return HTTPException(status_code=status, detail=user_error(exc, operation))
+
+    def cached_json(request: Request, payload: Any, max_age: int = 0) -> Response:
+        response = JSONResponse(payload)
+        etag = '"' + hashlib.sha256(response.body).hexdigest() + '"'
+        headers = {
+            "ETag": etag,
+            "Cache-Control": (f"private, max-age={max_age}, must-revalidate"
+                              if max_age else "private, no-cache"),
+        }
+        candidates = request.headers.get("if-none-match", "").split(",")
+        if any(value.strip().removeprefix("W/") in {etag, "*"} for value in candidates):
+            return Response(status_code=304, headers=headers)
+        response.headers.update(headers)
+        return response
 
     static_dir = app_settings.root_dir / "static"
     if static_dir.exists():
@@ -124,10 +149,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
 
     @app.get("/", response_model=None)
-    def root() -> Any:
+    async def root(request: Request) -> Any:
         index_path = static_dir / "index.html"
         if index_path.exists():
-            return FileResponse(index_path)
+            return await StaticFiles(directory=static_dir).get_response("index.html", request.scope)
         return {"service": "Stroke Medical RAG", "docs": "/docs"}
 
     @app.get("/health")
@@ -252,19 +277,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise request_error(exc, 400) from exc
 
     @app.get("/sources")
-    def sources() -> list[dict[str, object]]:
+    def sources(request: Request) -> Response:
         try:
-            return rag.sources()
+            return cached_json(request, rag.sources())
         except FileNotFoundError as exc:
             raise request_error(exc, 409) from exc
 
     @app.get("/eval/questions")
-    def eval_questions() -> dict[str, Any]:
+    def eval_questions(request: Request) -> Response:
         version, questions = load_eval_suite()
-        return {
+        return cached_json(request, {
             "version": version,
             "questions": [question.to_dict() for question in questions],
-        }
+        }, max_age=300)
 
     @app.post("/eval/run")
     def eval_run(request: EvalRunRequest) -> dict[str, Any]:

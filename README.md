@@ -601,3 +601,12 @@ Conversation memory and citation prompts are preserved. Existing local embedding
 and indexes remain usable. `GOOGLE_API_KEY` or `RAG_API_KEY` can also supply the
 Gemini key; `OPENAI_API_KEY` is never used for Google's endpoint. PDF screening,
 when enabled, uses Gemini as well.
+
+### Browser caching
+
+The interface, static files, and source list use browser caching with ETag
+revalidation: unchanged content returns `304 Not Modified`, and edits or updated
+sources are downloaded on the next request. Evaluation questions are cached
+privately for five minutes. Chat, conversation history, health checks, mutations,
+and errors use `Cache-Control: no-store`. This caches downloads without adding
+another copy of conversations to browser storage.
