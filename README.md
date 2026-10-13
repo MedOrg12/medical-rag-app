@@ -179,6 +179,21 @@ export RAG_GENERATION_BACKEND=api
 export RAG_API_BASE_URL=https://api.openai.com/v1
 export RAG_API_KEY=sk-...
 export RAG_API_GENERATION_MODEL=gpt-4o-mini
+export RAG_REQUEST_TIMEOUT_SECONDS=120
+python app.py
+```
+
+For Gemini API compatibility, use Google's OpenAI-compatible base URL and a Gemini model:
+
+```bash
+export RAG_GENERATION_BACKEND=api
+export RAG_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+export RAG_API_KEY=...
+export RAG_API_GENERATION_MODEL=gemini-3.8-flash
+export RAG_API_MAX_OUTPUT_TOKENS=800
+export RAG_API_REASONING_EFFORT=low
+export RAG_API_MAX_RETRIES=2
+export RAG_REQUEST_TIMEOUT_SECONDS=120
 python app.py
 ```
 
@@ -190,7 +205,7 @@ export RAG_API_KEY=sk-...
 python -m medical_rag.cli ask "What does SPAN-100 estimate?"
 ```
 
-If you see `Generation backend was unavailable, so this answer uses extractive retrieval`, the API call failed and the system fell back to extractive retrieval. Check that `RAG_API_KEY` is set, `RAG_API_BASE_URL` points to an OpenAI-compatible base URL ending in `/v1`, and the configured model is available.
+If you see `Generation backend was unavailable, so this answer uses extractive retrieval`, the API call failed and the system fell back to extractive retrieval. Check that `RAG_API_KEY` is set, `RAG_API_BASE_URL` points to an OpenAI-compatible base URL, the configured model is available, `RAG_REQUEST_TIMEOUT_SECONDS` is high enough for the provider response, and transient provider 429/5xx failures are being retried with `RAG_API_MAX_RETRIES`.
 
 ### Ollama generation
 
@@ -301,6 +316,10 @@ Environment variables:
 - `RAG_API_KEY`: API key for hosted OpenAI-compatible generation or embeddings; `OPENAI_API_KEY` is also accepted
 - `RAG_API_GENERATION_MODEL`: default `gpt-4o-mini`
 - `RAG_API_EMBEDDING_MODEL`: default `text-embedding-3-small`
+- `RAG_API_MAX_OUTPUT_TOKENS`: default `800`; set `0` to omit the cap
+- `RAG_API_REASONING_EFFORT`: optional; for Gemini 3 models the app defaults to `low` when unset
+- `RAG_API_MAX_RETRIES`: default `2` for retryable API `429`/`5xx` responses
+- `RAG_REQUEST_TIMEOUT_SECONDS`: default `120`
 - `RAG_VECTOR_STORE`: `json` or `qdrant`. With docker compose, start the bundled server with
   `docker compose --profile qdrant up -d qdrant` or point `RAG_QDRANT_URL` at an external one.
 - `RAG_QDRANT_URL`: default `http://localhost:6333`
@@ -329,7 +348,7 @@ Legacy Docker variables from the previous app are also accepted where they map c
 
 ## Frontend
 
-The active UI is `static/index.html` and is wired to `/health`, `/ingest`, `/ingest/status`, `/ask`, `/sources`, `/eval/questions`, and `/eval/run`.
+The active UI is `static/index.html` and is wired to `/health`, `/ingest`, `/ingest/status`, `/ask`, `/sources`, `/eval/questions`, `/eval/run`, and `/eval/status`.
 It is a dependency-free RAG workbench with:
 
 - Corpus ingestion controls with background-status polling.
@@ -403,6 +422,12 @@ curl http://localhost:8000/eval/questions
 curl -s -X POST http://localhost:8000/eval/run \
   -H "Content-Type: application/json" \
   -d '{"answer_mode":"patient","top_k":5}'
+
+# Long runs can outlast a proxy's request timeout; run them in the background and poll.
+curl -s -X POST http://localhost:8000/eval/run \
+  -H "Content-Type: application/json" \
+  -d '{"answer_mode":"patient","top_k":5,"background":true}'
+curl http://localhost:8000/eval/status
 ```
 
 ### Run the CLI runner

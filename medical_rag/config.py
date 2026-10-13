@@ -97,9 +97,12 @@ class Settings:
     validation_enabled: bool = False
     validation_model: str = "gpt-4o-mini"
     validation_scope: str = "Stroke prevention, diagnosis, treatment, rehabilitation, and recovery, including post-stroke nutrition, dysphagia, and vascular risk reduction."
+    api_max_output_tokens: int = 800
+    api_reasoning_effort: str = ""
+    api_max_retries: int = 2
     answer_mode: str = "patient"
     temperature: float = 0.1
-    request_timeout_seconds: float = 20.0
+    request_timeout_seconds: float = 120.0
     manifest_path: Path | None = None
     extraction_cache_dir: Path | None = None
     pdf_workers: int = 1
@@ -183,9 +186,12 @@ class Settings:
             validation_enabled=os.getenv("RAG_VALIDATE_PDFS", "false").lower() in {"true", "1", "yes"},
             validation_model=os.getenv("RAG_VALIDATION_MODEL", "gemini-2.5-flash" if gemini else "gpt-4o-mini"),
             validation_scope=os.getenv("RAG_VALIDATION_SCOPE") or cls.validation_scope,
+            api_max_output_tokens=_env_int("RAG_API_MAX_OUTPUT_TOKENS", 800),
+            api_reasoning_effort=os.getenv("RAG_API_REASONING_EFFORT", "").lower(),
+            api_max_retries=_env_int("RAG_API_MAX_RETRIES", 2),
             answer_mode=os.getenv("RAG_ANSWER_MODE", "patient").lower(),
             temperature=_env_float_compat(0.1, "RAG_TEMPERATURE", "TEMPERATURE"),
-            request_timeout_seconds=_env_float("RAG_REQUEST_TIMEOUT_SECONDS", 20.0),
+            request_timeout_seconds=_env_float("RAG_REQUEST_TIMEOUT_SECONDS", 120.0),
             manifest_path=_resolve_path(
                 root, os.getenv("RAG_MANIFEST_PATH", ".rag/manifest.sqlite")
             ) if os.getenv("RAG_MANIFEST_PATH", ".rag/manifest.sqlite") else None,

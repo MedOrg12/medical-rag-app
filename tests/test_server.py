@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import threading
+import time
+from unittest.mock import patch
+
 from fastapi.testclient import TestClient
 
 from medical_rag.config import Settings
@@ -17,6 +21,10 @@ def test_health_reports_api_configuration_without_secret(tmp_path) -> None:
         api_base_url="https://api.example.test/v1",
         api_generation_model="chat-model",
         api_embedding_model="embed-model",
+        api_max_output_tokens=500,
+        api_reasoning_effort="low",
+        api_max_retries=3,
+        request_timeout_seconds=90,
     )
     client = TestClient(create_app(settings))
 
@@ -29,6 +37,10 @@ def test_health_reports_api_configuration_without_secret(tmp_path) -> None:
     assert payload["api_key_configured"] is True
     assert payload["api_generation_model"] == "chat-model"
     assert payload["api_embedding_model"] == "embed-model"
+    assert payload["api_max_output_tokens"] == 500
+    assert payload["api_reasoning_effort"] == "low"
+    assert payload["api_max_retries"] == 3
+    assert payload["request_timeout_seconds"] == 90
     assert "secret-key" not in response.text
 
 
@@ -127,3 +139,122 @@ def test_health_survives_unreachable_qdrant(tmp_path) -> None:
     assert ask.status_code == 400
     assert "Could not reach Qdrant" not in ask.json()["detail"]
     assert "try again" in ask.json()["detail"].lower()
+
+
+def test_eval_run_in_background_reports_progress_and_result(tmp_path) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "dysphagia_rehabilitation.txt").write_text(
+        "Dysphagia after stroke is difficulty swallowing. Swallow rehabilitation may include "
+        "texture modified foods and liquids for safer eating.",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=corpus,
+        index_path=tmp_path / ".rag" / "index.json",
+        chunk_size_chars=400,
+        chunk_overlap_chars=40,
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings))
+    assert client.post("/ingest", json={}).status_code == 200
+
+    accepted = client.post(
+        "/eval/run",
+        json={"question_ids": ["q2"], "top_k": 3, "background": True},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json() == {"accepted": True, "status": "/eval/status"}
+
+    deadline = time.monotonic() + 30
+    status = client.get("/eval/status").json()
+    while status["running"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+        status = client.get("/eval/status").json()
+
+    assert status["running"] is False
+    assert status["last_error"] is None
+    assert (status["completed"], status["total"]) == (1, 1)
+    assert status["last_result"]["summary"]["total_questions"] == 1
+    assert status["last_result"]["results"][0]["question_id"] == "q2"
+
+
+def test_eval_run_rejects_a_second_background_run(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    release = threading.Event()
+    app = create_app(settings)
+    client = TestClient(app)
+
+    with patch("medical_rag.server.evaluate_rag", side_effect=lambda *a, **k: release.wait()):
+        first = client.post("/eval/run", json={"background": True})
+        second = client.post("/eval/run", json={"background": True})
+        release.set()
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+
+
+def test_eval_run_resets_status_when_the_run_cannot_be_started(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    with patch(
+        "medical_rag.server.ThreadPoolExecutor.submit",
+        side_effect=RuntimeError("cannot schedule new futures after shutdown"),
+    ):
+        client = TestClient(create_app(settings))
+        response = client.post("/eval/run", json={"background": True})
+
+    assert response.status_code == 503
+    status = client.get("/eval/status").json()
+    assert status["running"] is False
+    assert "after shutdown" not in status["last_error"]
+    assert "try again" in status["last_error"]
+    assert "after shutdown" not in response.text
+
+
+def test_sources_reports_vector_store_failure_as_json(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings))
+
+    with patch(
+        "medical_rag.pipeline.StrokeRAG.sources", side_effect=TimeoutError("timed out")
+    ):
+        response = client.get("/sources")
+
+    assert response.status_code == 503
+    assert "try again" in response.json()["detail"]
+    assert "timed out" not in response.json()["detail"]
+
+
+def test_unhandled_errors_return_json(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings), raise_server_exceptions=False)
+
+    with patch(
+        "medical_rag.pipeline.StrokeRAG.ask", side_effect=TimeoutError("http://internal:6333")
+    ):
+        response = client.post("/ask", json={"question": "What is a stroke?"})
+
+    assert response.status_code == 500
+    assert "try again" in response.json()["detail"]
+    assert "internal:6333" not in response.text

@@ -372,6 +372,23 @@
         padding-right: 2px;
       }
 
+      .source-pager {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .source-pager[hidden] {
+        display: none;
+      }
+
+      .source-pager button {
+        min-height: 30px;
+        padding: 0 10px;
+        font-size: 12px;
+      }
+
       .source-item {
         border: 1px solid var(--line);
         border-radius: 6px;
@@ -815,6 +832,11 @@
               <div id="sources" class="source-list">
                 <div class="notice">No sources loaded.</div>
               </div>
+              <nav id="source-pager" class="source-pager" aria-label="Source pages" hidden>
+                <button id="source-prev" class="secondary" type="button">&lsaquo; Prev</button>
+                <span id="source-page-label" class="meta"></span>
+                <button id="source-next" class="secondary" type="button">Next &rsaquo;</button>
+              </nav>
             </div>
           </div>
         </aside>
@@ -932,14 +954,18 @@
     </div>
 
     <script>
+      const SOURCES_PER_PAGE = 10;
+
       const state = {
         answerMode: "patient",
         conversationId: null,
         busy: false,
         health: null,
         sources: [],
+        sourcePage: 0,
         evalQuestions: [],
         ingestPoll: null,
+        evalPoll: null,
       };
 
       const els = {
@@ -958,6 +984,10 @@
         ingestButton: document.querySelector("#ingest-button"),
         ingestResult: document.querySelector("#ingest-result"),
         sourceSearch: document.querySelector("#source-search"),
+        sourcePager: document.querySelector("#source-pager"),
+        sourcePrev: document.querySelector("#source-prev"),
+        sourceNext: document.querySelector("#source-next"),
+        sourcePageLabel: document.querySelector("#source-page-label"),
         sources: document.querySelector("#sources"),
         messages: document.querySelector("#messages"),
         emptyState: document.querySelector("#empty-state"),
@@ -1001,7 +1031,9 @@
               : response.status === 409
                 ? "The document library may not be ready, or another operation is running. Check its status and try again."
                 : "We couldn't complete that request right now. Please try again in a moment.";
-          throw new Error(message);
+          const error = new Error(message);
+          error.status = response.status;
+          throw error;
         }
         return payload;
       }
@@ -1010,6 +1042,24 @@
         await refreshHealth();
         await refreshSources();
         await refreshEvalQuestions();
+        await resumeRunningEval();
+      }
+
+      // Picks a background eval back up after a reload, or after status polling gave up.
+      async function resumeRunningEval() {
+        if (state.evalPoll) {
+          return;
+        }
+        try {
+          const payload = await requestJson("/eval/status");
+          if (payload.running) {
+            els.evalRunButton.disabled = true;
+            els.evalSummary.classList.add("hidden");
+            startEvalPolling();
+          }
+        } catch {
+          // Leave the panel as it is; the next refresh or Run Eval click tries again.
+        }
       }
 
       async function refreshHealth() {
@@ -1035,8 +1085,8 @@
         );
         setChip(
           els.generationChip,
-          payload.generation_backend === "ollama" ? "ok" : "warn",
-          payload.generation_model || payload.generation_backend || "Generation",
+          generationChipTone(payload),
+          activeGenerationLabel(payload),
         );
         const apiMode =
           payload.generation_backend === "api" || payload.embedding_backend === "api";
@@ -1069,6 +1119,14 @@
             }`,
           ),
           detailLine(
+            "API controls",
+            `${payload.request_timeout_seconds || "?"}s timeout - ${
+              payload.api_max_retries ?? 0
+            } retries - ${payload.api_max_output_tokens || "default"} output tokens${
+              payload.api_reasoning_effort ? ` - ${payload.api_reasoning_effort} reasoning` : ""
+            }`,
+          ),
+          detailLine(
             "Ollama embedding",
             `${payload.ollama_embedding_model || "not configured"}${
               payload.ollama_embedding_model_available ? " available" : " unavailable"
@@ -1076,6 +1134,7 @@
           ),
         ].join("");
         els.systemDetails.classList.toggle("warn", Boolean(payload.fallback_embedding));
+        els.askButton.textContent = askButtonLabel(payload);
       }
 
       async function refreshSources() {
@@ -1087,6 +1146,7 @@
           state.sources = [];
           els.sourceCount.textContent = "0";
           els.chunkCount.textContent = "0";
+          els.sourcePager.hidden = true;
           els.sources.innerHTML = `<div class="notice warn">${escapeHtml(error.message)}</div>`;
         }
       }
@@ -1102,21 +1162,38 @@
         els.chunkCount.textContent = formatNumber(totalChunks);
 
         if (!filtered.length) {
+          els.sourcePager.hidden = true;
           els.sources.innerHTML = '<div class="notice">No matching sources.</div>';
           return;
         }
 
-        els.sources.innerHTML = filtered
+        // A large corpus has thousands of sources, so the list shows one page at a time.
+        const pageCount = Math.ceil(filtered.length / SOURCES_PER_PAGE);
+        state.sourcePage = Math.min(state.sourcePage, pageCount - 1);
+        const start = state.sourcePage * SOURCES_PER_PAGE;
+        const page = filtered.slice(start, start + SOURCES_PER_PAGE);
+        els.sourcePager.hidden = pageCount <= 1;
+        els.sourcePrev.disabled = state.sourcePage === 0;
+        els.sourceNext.disabled = state.sourcePage >= pageCount - 1;
+        els.sourcePageLabel.textContent = `${formatNumber(start + 1)}–${formatNumber(start + page.length)} of ${formatNumber(filtered.length)}`;
+
+        els.sources.innerHTML = page
           .map(
             (source) => `<article class="source-item">
               <strong>${escapeHtml(compactSource(source.source_id || source.title || "Unknown source"))}</strong>
               <div class="meta">
                 <span>${formatNumber(source.chunks || 0)} chunks</span>
-                <span>${formatPages(source.pages)}</span>
+                ${Array.isArray(source.pages) ? `<span>${formatPages(source.pages)}</span>` : ""}
               </div>
             </article>`,
           )
           .join("");
+      }
+
+      function showSourcePage(delta) {
+        state.sourcePage = Math.max(0, state.sourcePage + delta);
+        renderSources();
+        els.sources.scrollTop = 0;
       }
 
       async function refreshEvalQuestions() {
@@ -1251,9 +1328,9 @@
         document.querySelector("#clear-chat").disabled = true;
         hideEmptyState();
         appendMessage("user", question);
-        const pending = appendMessage("assistant", "Retrieving evidence.");
+        const pending = appendMessage("assistant", pendingAnswerText());
         els.askButton.disabled = true;
-        els.composerStatus.textContent = "Retrieving";
+        els.composerStatus.textContent = composerWorkingText();
 
         try {
           const payload = await requestJson("/ask", {
@@ -1299,12 +1376,13 @@
       function updateAssistantMessage(message, payload) {
         message.citations = payload.citations || [];
         const citationCount = (payload.citations || []).length;
+        const usedFallback = (payload.answer || "").includes("Generation backend was unavailable");
         message.querySelector(".bubble").textContent = payload.answer || "No answer returned.";
         message.querySelector(".message-meta").textContent = [
           `${payload.answer_mode || activeModeLabel()} mode`,
           `${payload.retrieval_mode || "retrieval"} retrieval`,
           payload.fallback_embedding ? "fallback embeddings" : payload.retrieval_model,
-          payload.generation_model,
+          usedFallback ? `${payload.generation_model} unavailable; extractive fallback` : payload.generation_model,
         ]
           .filter(Boolean)
           .join(" - ");
@@ -1353,22 +1431,92 @@
         }
 
         try {
-          const payload = await requestJson("/eval/run", {
+          await requestJson("/eval/run", {
             method: "POST",
             body: JSON.stringify({
               answer_mode: els.evalAnswerMode.value,
               top_k: Number(els.evalTopK.value || 5),
               question_ids: selected,
               include_answers: els.evalIncludeAnswers.checked,
+              background: true,
             }),
           });
-          renderEval(payload);
+          startEvalPolling();
         } catch (error) {
-          els.qualityStatus.textContent = "Eval failed";
-          els.evalResults.innerHTML = `<div class="notice warn">${escapeHtml(error.message)}</div>`;
-        } finally {
-          els.evalRunButton.disabled = false;
+          if (error.status === 409) {
+            // A run is already in progress, e.g. one this page lost track of; follow it.
+            startEvalPolling();
+            return;
+          }
+          showEvalError(error.message);
         }
+      }
+
+      // Each poll is scheduled only after the previous one has been handled, and a poll
+      // from an earlier run is ignored, so a slow response cannot overwrite a newer state.
+      function startEvalPolling() {
+        stopEvalPolling();
+        const run = { timer: null, failures: 0 };
+        state.evalPoll = run;
+        checkEvalStatus(run);
+      }
+
+      function stopEvalPolling() {
+        if (state.evalPoll) {
+          window.clearTimeout(state.evalPoll.timer);
+          state.evalPoll = null;
+        }
+      }
+
+      async function checkEvalStatus(run) {
+        try {
+          const payload = await requestJson("/eval/status");
+          if (state.evalPoll !== run) {
+            return;
+          }
+          run.failures = 0;
+          if (payload.running) {
+            const progress = payload.total ? ` ${payload.completed}/${payload.total}` : "";
+            els.qualityStatus.textContent = `Running eval${progress}`;
+            els.evalResults.innerHTML = `<div class="notice">Running eval${escapeHtml(progress)}.</div>`;
+            run.timer = window.setTimeout(() => checkEvalStatus(run), 1500);
+            return;
+          }
+          stopEvalPolling();
+          els.evalRunButton.disabled = false;
+          if (payload.last_error) {
+            showEvalError(payload.last_error);
+          } else if (payload.last_result) {
+            renderEval(payload.last_result);
+          } else {
+            // Status lives in server memory, so a restart mid-run leaves neither outcome.
+            els.qualityStatus.textContent = "Not evaluated";
+            els.evalResults.innerHTML =
+              '<div class="notice warn">The eval run has no result; the server may have restarted. Run it again.</div>';
+          }
+        } catch (error) {
+          if (state.evalPoll !== run) {
+            return;
+          }
+          // The run continues on the server, so a status request that fails on the way
+          // (say, a proxy hiccup) is retried before the UI gives up on it.
+          run.failures += 1;
+          if (run.failures < 5) {
+            run.timer = window.setTimeout(() => checkEvalStatus(run), 1500 * run.failures);
+            return;
+          }
+          stopEvalPolling();
+          showEvalError(
+            `${error.message}. The eval may still be running; click Run Eval or Refresh to check on it again.`,
+            "Eval status unavailable",
+          );
+        }
+      }
+
+      function showEvalError(message, status = "Eval failed") {
+        els.qualityStatus.textContent = status;
+        els.evalResults.innerHTML = `<div class="notice warn">${escapeHtml(message)}</div>`;
+        els.evalRunButton.disabled = false;
       }
 
       function renderEval(payload) {
@@ -1449,6 +1597,60 @@
         element.textContent = text;
       }
 
+      function generationChipTone(payload) {
+        if (payload.generation_backend === "api") {
+          return payload.api_key_configured ? "ok" : "bad";
+        }
+        if (payload.generation_backend === "ollama") {
+          return payload.ollama_available ? "ok" : "warn";
+        }
+        return "warn";
+      }
+
+      function activeGenerationLabel(payload = state.health) {
+        if (!payload) {
+          return "Generation";
+        }
+        const model = (payload.generation_model || payload.api_generation_model || payload.generation_backend || "")
+          .replace(/^api:/, "");
+        if (payload.generation_backend === "api") {
+          const provider = (payload.api_base_url || "").includes("generativelanguage.googleapis.com")
+            ? "Gemini API"
+            : "API";
+          return model ? `${provider}: ${model}` : provider;
+        }
+        if (payload.generation_backend === "ollama") {
+          return model ? `Ollama: ${model}` : "Ollama";
+        }
+        return "Extractive";
+      }
+
+      function askButtonLabel(payload = state.health) {
+        if (payload?.generation_backend === "api") {
+          return (payload.api_base_url || "").includes("generativelanguage.googleapis.com")
+            ? "Ask with Gemini"
+            : "Ask with API";
+        }
+        if (payload?.generation_backend === "ollama") {
+          return "Ask with Ollama";
+        }
+        return "Ask Corpus";
+      }
+
+      function pendingAnswerText() {
+        if (!state.health || state.health.generation_backend === "extractive") {
+          return "Retrieving evidence.";
+        }
+        return `Retrieving evidence and generating with ${activeGenerationLabel()}.`;
+      }
+
+      function composerWorkingText() {
+        if (!state.health || state.health.generation_backend === "extractive") {
+          return "Retrieving";
+        }
+        return `Generating with ${activeGenerationLabel()}`;
+      }
+
       function detailLine(label, value) {
         return `<div><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value || "unknown")}</div>`;
       }
@@ -1512,7 +1714,12 @@
       document.querySelector("#ask-form").addEventListener("submit", askQuestion);
       document.querySelector("#ingest-button").addEventListener("click", startIngest);
       document.querySelector("#refresh-button").addEventListener("click", refreshAll);
-      document.querySelector("#source-search").addEventListener("input", renderSources);
+      document.querySelector("#source-search").addEventListener("input", () => {
+        state.sourcePage = 0;
+        renderSources();
+      });
+      els.sourcePrev.addEventListener("click", () => showSourcePage(-1));
+      els.sourceNext.addEventListener("click", () => showSourcePage(1));
       document.querySelector("#eval-run-button").addEventListener("click", runEval);
       document.querySelector("#clear-chat").addEventListener("click", clearChat);
 
