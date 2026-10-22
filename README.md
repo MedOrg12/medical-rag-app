@@ -555,38 +555,106 @@ The `RAG_HYBRID_ALPHA`, `RAG_MIN_RELEVANCE_SCORE`, and `RAG_RERANKER_BACKEND` se
 
 ## PDF abstract validation
 
-Enable relevance screening before PDF chunking and embedding:
+Screening checks relevance to stroke research and usable abstract content; it does
+not certify scientific validity, peer review, retraction status, or clinical safety.
+It applies to PDFs only and preserves ordinary text/Markdown ingestion.
+
+Configuration is read from `.env` by the CLI, with exported environment variables
+taking precedence. Use your configured Gemini endpoint and `GEMINI_API_KEY`;
+`RAG_VALIDATION_MODEL` selects the validation model independently of chat. Select a
+model available to your account. `RAG_VALIDATION_TRANSPORT=auto` uses Google's
+[native generateContent endpoint](https://ai.google.dev/api/generate-content) for
+Google URLs and the compatible API format for other providers. Explicit
+`gemini_native` and `compatible` transport settings are also available.
+
+Start with a report or true dry-run:
 
 ```bash
-export RAG_VALIDATE_PDFS=true
-export RAG_API_KEY=your-api-key
-export RAG_VALIDATION_MODEL=gpt-4o-mini
-python -m medical_rag.cli ingest
+python -m medical_rag.cli validate --source pdfs
+python -m medical_rag.cli ingest --source pdfs --dry-run
 ```
 
-`OPENAI_API_KEY` also works outside Docker; Docker uses `RAG_API_KEY`.
-The default scope covers stroke prevention, diagnosis, treatment, rehabilitation,
-recovery, post-stroke nutrition, dysphagia, and vascular risk reduction. Set
-`RAG_VALIDATION_SCOPE` to customize inclusion criteria. Validation is disabled by
-default for offline installations and is independent of the answer-generation backend.
+Both screen PDFs and persist audit/review records and extracted-text caches, but
+neither embeds documents nor writes to JSON/Qdrant. `POST /ingest` also accepts
+`"dry_run": true`. Dry-runs report zero indexed chunks.
 
-The validator finds an Abstract or Summary heading in the first three pages and
-sends only the extracted abstract (at most 8,000 characters) to the configured
-`RAG_API_BASE_URL`, using structured JSON output. Only `accept` decisions enter the
-index. `reject`, `review` (including missing/unreadable abstracts), and API errors
-are excluded. This screens relevance; it does not establish scientific validity.
-Guidelines without abstracts will require review. Text and Markdown sources are
-not screened, and original PDFs are never deleted.
+Set `RAG_VALIDATION_MODE` to `off` (default), `report_only` (record decisions while
+ordinary ingestion continues), or `enforce` (only approved PDFs enter the index).
+An explicit mode takes precedence over the legacy `RAG_VALIDATE_PDFS=true` flag,
+which otherwise maps to enforcement. Run normal `ingest` after changing the mode.
 
-CLI and ingestion API reports include `validation_results`, mapping PDF paths to
-decisions and reasons. Decisions are cached in `abstract_validation.sqlite` beside
-the index, keyed by abstract, scope, model, provider, and prompt. API errors are
-retried on the next ingestion; `ingest --force` refreshes cached decisions.
-Enabling validation also screens previously indexed PDFs on the next ingestion.
-The resulting index contains only accepted PDFs and non-PDF sources, even when no
-PDF passes. Changing these settings requires another ingestion to update the index.
+Settings: `RAG_VALIDATION_THRESHOLD` (0.7), `RAG_VALIDATION_MAX_ABSTRACT_CHARS`
+(3000), `RAG_VALIDATION_CONCURRENCY` (2), `RAG_VALIDATION_TIMEOUT_SECONDS` (30),
+`RAG_VALIDATION_MAX_RETRIES` (2), `RAG_VALIDATION_FAILURE_LIMIT` (3),
+`RAG_VALIDATION_RETRY_BASE_SECONDS` (1), and
+`RAG_VALIDATION_RETRY_MAX_SECONDS` (30). Customize `RAG_VALIDATION_SCOPE`,
+`RAG_VALIDATION_INCLUDE`, `RAG_VALIDATION_EXCLUDE`, and
+`RAG_VALIDATION_LANGUAGE_POLICY`. Confidence is a routing signal, not a calibrated
+probability. The default criteria cover human stroke research, relevant reviews,
+and guidance including dysphagia, nutrition, and vascular risk management.
 
-The request uses OpenAI's [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
+Abstracts are read within three physical pages. Abstract/Summary headings and
+complete structured summaries are recognized. A leading Introduction/Background
+inside a structured abstract is retained. Inline keywords, translated summaries,
+and paper-body headings end extraction; layout separator artifacts are normalized.
+Incomplete structured summaries and fragments ending mid-sentence require review.
+Missing or truncated abstracts go to review without an API call. Results expose
+the model assessment, final `action`, confidence, topics, reason code, extraction
+method/page, truncation flag, hashes, model, criteria version, and UTC timestamp.
+No arbitrary introductory paragraph is treated as an abstract.
+
+Audits, assessments, and reviews are stored in `abstract_validation.sqlite` beside
+the index. Old cache tables are preserved but not reused. Cache keys include the
+file and abstract, provider/model, criteria, parser/prompt versions, abstract limit,
+and threshold and extraction version. Completed uncertain assessments are cached; provider failures are
+not. After repeated provider failures in a batch, the circuit breaker marks further
+model requests `provider_deferred` rather than repeatedly calling an unavailable
+service. A later validation run retries those documents. `validate --force` revalidates; `ingest --force` also re-extracts PDFs.
+
+Review workflow (use `--index` before the command if your index is elsewhere):
+
+```bash
+python -m medical_rag.cli review list
+python -m medical_rag.cli review list --limit 50 --offset 50 --reason-code no_abstract_found
+python -m medical_rag.cli review show 1
+python -m medical_rag.cli review approve 1 --reviewer "Reviewer A" --reason "Relevant human stroke study"
+python -m medical_rag.cli review reject 2 --reviewer "Reviewer A" --reason "Outside database scope"
+python -m medical_rag.cli review retry 3
+```
+
+Older pending queue entries are superseded when a newer assessment is recorded;
+resolved model outcomes no longer leave stale pending items. Audit history is retained.
+
+Review approvals/rejections survive restarts and are scoped to the exact document,
+model and criteria. Retry clears the override/cache for that item and reassesses
+its source PDF; review history stays in the audit log. Approval only makes a PDF
+eligible for the next normal ingestion and does not bypass parsing/embedding.
+The review database contains abstracts and should remain local to the installation.
+
+Enforcement performs bounded concurrent preflight validation before vector-store
+writes. Operational failures abort the run and preserve the existing index.
+Explicit rejection or unresolved non-operational review items are withheld;
+a completed screening run may deliberately remove their previously indexed chunks.
+Source PDFs are never deleted. Report-only mode tolerates provider failures so
+criteria can be tuned before enforcement. No live model calls are used in tests.
+
+### Validation quality checks
+
+The repository includes `tests/fixtures/validation_reference.json`: 20 purposively
+selected references labelled by Codex from local abstract inspection, covering
+human stroke studies, animal-only studies, heat stroke, and extraction failures.
+These are assistant reference labels, not independent clinician adjudication.
+
+```bash
+python -m medical_rag.cli validate --source pdfs --report logs/validation-results.json
+python -m medical_rag.cli validation-check logs/validation-results.json tests/fixtures/validation_reference.json
+```
+
+The offline comparison reports comparable cases, deferred decisions and false
+accepts at thresholds 0.5, 0.7, 0.8 and 0.9. Provider outages and missing abstracts
+are deferred, not counted as correct model decisions. Keep report-only rollout
+until the review backlog and an independent domain review have been assessed.
+A small reference sample does not calibrate a model's confidence scores.
 
 ### Conversation memory
 

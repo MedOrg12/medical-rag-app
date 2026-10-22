@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "reviewed_by": "Codex local abstract inspection",
+  "review_type": "assistant_reference_labels",
+  "limitations": "Small purposive sample; not independent clinician adjudication and not statistical calibration. Labels describe relevance to configured human-stroke scope, not scientific validity.",
+  "cases": [
+    {
+      "file_name": "2016_adami_mortality-and-incidence-of-hospital-admi_0985e5f9.pdf",
+      "file_hash": "e47063504569dbcda169ca11f35d1a673a0a7d93d8235a9394a861f94683b111",
+      "expected_action": "accept",
+      "rationale": "Human stroke mortality and hospital-admission epidemiology."
+    },
+    {
+      "file_name": "2016_anon_cardioembolic-stroke-in-latvia-preventio_89d12901.pdf",
+      "file_hash": "b7b96bfb532e309593441545c30f234c7e6a3e55c3f1aeab09100d03189f29a3",
+      "expected_action": "accept",
+      "rationale": "Human cardioembolic stroke prevention and follow-up outcomes."
+    },
+    {
+      "file_name": "2016_anon_cryptogenic-stroke_1594e32e.pdf",
+      "file_hash": "9b2b82440a00d290b3d8bb7645d83ddb0df4c9723526e482c9e003f9cb33f94a",
+      "expected_action": "accept",
+      "rationale": "Directly relevant clinical review of cryptogenic stroke and secondary prevention."
+    },
+    {
+      "file_name": "2016_anon_development-validity-and-reliability-of_10bf9b54.pdf",
+      "file_hash": "015ffc1a86140d627df9b1ff7d5e43b50b0313d3bbb15cd1ac9579647e829bf3",
+      "expected_action": "accept",
+      "rationale": "Human post-stroke dysphagia assessment research."
+    },
+    {
+      "file_name": "2016_anon_acute-ischemic-stroke-intervention_e53c1951.pdf",
+      "file_hash": "84259baf861667b91ef468a9c4fad99c527f5964ee181540e267509c7b166ac7",
+      "expected_action": "accept",
+      "rationale": "Review of human acute ischemic stroke treatment evidence."
+    },
+    {
+      "file_name": "2016_anon_comparisons-of-outcomes-in-stroke-subtyp_90bda745.pdf",
+      "file_hash": "eb0d9dfe8a3bf8c8fa7dc9b0ca2915385fd545632da1ee642847e46aede8a76e",
+      "expected_action": "accept",
+      "rationale": "Human thrombolysis outcomes across ischemic stroke subtypes."
+    },
+    {
+      "file_name": "2016_anon_a-telerehabilitation-approach-for-chroni_caef1e3b.pdf",
+      "file_hash": "c9b7d8a9780bab9d2f85cb369445720bd84880f7270f4753c62c61728cce9321",
+      "expected_action": "accept",
+      "rationale": "Human rehabilitation study for post-stroke aphasia."
+    },
+    {
+      "file_name": "2016_anon_a-supposedly-healthy-athlete-at-high-ris_5af6d9c2.pdf",
+      "file_hash": "81478a75957016890f588333fde54a8866504acb522a580083f96046f7d7f3ca",
+      "expected_action": "accept",
+      "rationale": "Human case discussing identification of a high-risk cardioembolic source."
+    },
+    {
+      "file_name": "2017_anon_extracorporeal-shock-wave-therapy-decrea_6de10a0a.pdf",
+      "file_hash": "eb308c0e5069038e5189d2f2307c55a1a33b626d668fb527531d3f0df1f4568a",
+      "expected_action": "reject",
+      "rationale": "Animal-only experiment in rats; current criteria target human studies and guidance."
+    },
+    {
+      "file_name": "2018_anon_mri-and-mr-spectroscopy-features-of-heat_15f7de25.pdf",
+      "file_hash": "b0993d03f037547815f92177b3e16fc10c852c5dc0819c3294f83f9f4eeb1ac0",
+      "expected_action": "reject",
+      "rationale": "Heat stroke and hyperthermia are outside the vascular stroke scope."
+    },
+    {
+      "file_name": "2018_anon_subarachnoid-hemorrhage-and-sevoflurane_c10af6b0.pdf",
+      "file_hash": "354bb490606f5a17070dba81fff1253f003933b931a5a2f921af59ee90ca99a2",
+      "expected_action": "reject",
+      "rationale": "Animal-only sevoflurane experiment in mice."
+    },
+    {
+      "file_name": "2018_deng_necrostatin-1-prevents-necroptosis-in-br_10187694.pdf",
+      "file_hash": "2962e4b4cfdcd29f701a8ae0c59484d6842ad3dabd2e742976f2dec46a629c85",
+      "expected_action": "reject",
+      "rationale": "Preclinical necroptosis experiment in rats, without human clinical study."
+    },
+    {
+      "file_name": "2018_li_platelet-bio-nanobubbles-as-microvascula_115332be.pdf",
+      "file_hash": "765040c3103968dc35ce2578000161c02d5c1b96cb8f7bb51be8d6ef3bcb8334",
+      "expected_action": "reject",
+      "rationale": "Preclinical nanobubble experiment with in-vitro work and a mouse model."
+    },
+    {
+      "file_name": "2018_samary_focal-ischemic-stroke-leads-to-lung-inju_f9fcf6cf.pdf",
+      "file_hash": "b60a6b9b0ff2700a12652034462567b1b302b934d06f6c45e346ec0d93f2c68b",
+      "expected_action": "reject",
+      "rationale": "Animal-only ischemic stroke and lung-injury experiment in rats."
+    },
+    {
+      "file_name": "2018_zhang_rgma-mediates-reactive-astrogliosis-and_2bd748c7.pdf",
+      "file_hash": "52a1f95fa7767b6319bd3c160a38d6a11b557e99efc9f040a763b3be5bc67b32",
+      "expected_action": "reject",
+      "rationale": "Preclinical rat and cell work on astrogliosis."
+    },
+    {
+      "file_name": "2019_cahill_ultrasound-detection-of-abnormal-cerebro_9e428454.pdf",
+      "file_hash": "531b951ddb61a0df7f9855c1376dfe27dae3d24b49295ec5150254997217db1f",
+      "expected_action": "reject",
+      "rationale": "Preclinical vascular ultrasound study in a sickle-cell mouse model."
+    },
+    {
+      "file_name": "2016_al-khaled_dysphagia-in-patients-with-acute-ischemi_c833cb9e.pdf",
+      "file_hash": "f5d362e76ed7177556c64a86fc35eacb4c0e4cd7c24ce0651db7454541269687",
+      "expected_action": "needs_review",
+      "rationale": "Column order leaves the extracted structured abstract incomplete."
+    },
+    {
+      "file_name": "2016_anon_clinical-imaging-features-of-venous-stro_e7cd65fb.pdf",
+      "file_hash": "88a6a2bd33377efaedf1a8f1f9a21667fc2bef3bbfe8676e3d4ac67bbb70dbae",
+      "expected_action": "needs_review",
+      "rationale": "Abstract fragment ends mid-sentence; original document needs review."
+    },
+    {
+      "file_name": "2017_caorsi_ada2-deficiency-dada2-as-an-unrecognised_ecefa52b.pdf",
+      "file_hash": "a61411e541a2cdf75c119b9fbfa8b6ad81f9a5f3a27ffa1eaa23bce578b8f10c",
+      "expected_action": "needs_review",
+      "rationale": "No usable abstract text in the parser output."
+    },
+    {
+      "file_name": "2018_wang_prevalence-of-atrial-fibrillation-in-dif_87d3c5e2.pdf",
+      "file_hash": "57bc0825cbaa06b7536bdb1aea18f7f904ae1f4d7b9e7ecff7a93c1ae28953ab",
+      "expected_action": "needs_review",
+      "rationale": "No usable abstract text in the parser output."
+    }
+  ]
+}

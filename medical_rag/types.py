@@ -64,7 +64,8 @@ class IngestionReport:
     manifest_path: str | None = None
     extraction_cache_dir: str | None = None
     timings: dict[str, float] | None = None
-    validation_results: dict[str, dict[str, str]] | None = None
+    validation_results: dict[str, dict[str, Any]] | None = None
+    dry_run: bool = False
     # Detailed vector-store phase timings and counters (IngestStats), for benchmarking.
     vector_store: dict[str, Any] | None = None
 

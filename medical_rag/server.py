@@ -36,6 +36,7 @@ class AskRequest(BaseModel):
 
 class IngestRequest(BaseModel):
     source_path: str | None = None
+    dry_run: bool = False
     force: bool = False
     resume: bool = True
     failed_only: bool = False
@@ -142,6 +143,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 failed_only=request.failed_only,
                 ocr_scanned=request.ocr_scanned,
                 pdf_workers=request.pdf_workers,
+                dry_run=request.dry_run,
             ).to_dict()
             with ingestion_lock:
                 ingestion_status.update(
@@ -268,6 +270,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "ollama_embedding_model_available": ollama_embedding_model_available,
             "api_base_url": app_settings.api_base_url,
             "api_key_configured": bool(app_settings.api_key),
+            "validation_mode": app_settings.effective_validation_mode,
+            "validation_model": app_settings.validation_model,
+            "validation_transport": app_settings.validation_transport,
+            "validation_threshold": app_settings.validation_threshold,
             "api_generation_model": app_settings.api_generation_model,
             "api_embedding_model": app_settings.api_embedding_model,
             "api_max_output_tokens": app_settings.api_max_output_tokens,
@@ -303,6 +309,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 failed_only=request.failed_only,
                 ocr_scanned=request.ocr_scanned,
                 pdf_workers=request.pdf_workers,
+                dry_run=request.dry_run,
             ).to_dict()
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             raise request_error(exc, 400, "ingest") from exc

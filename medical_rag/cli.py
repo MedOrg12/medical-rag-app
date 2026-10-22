@@ -4,8 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from medical_rag.config import Settings
 from medical_rag.pipeline import StrokeRAG
+from medical_rag.validation import AbstractValidator, validate_source
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,6 +35,23 @@ def main(argv: list[str] | None = None) -> int:
         "--embed-batch-size", type=int, default=None, help="Embedding batch size for cache misses."
     )
 
+    ingest_parser.add_argument("--dry-run", action="store_true", help="Screen PDFs without embedding or changing the vector store.")
+    validation_parser = subparsers.add_parser("validate", help="Screen PDFs without modifying the vector store.")
+    validation_parser.add_argument("--source", type=Path)
+    validation_parser.add_argument("--force", action="store_true")
+    validation_parser.add_argument("--report", type=Path, help="Save the complete JSON report to a file.")
+    check_parser = subparsers.add_parser("validation-check", help="Compare a saved report with reference labels, without model calls.")
+    check_parser.add_argument("report", type=Path)
+    check_parser.add_argument("reference", type=Path)
+    review_parser = subparsers.add_parser("review", help="List, inspect, approve, reject, or retry flagged PDFs.")
+    review_parser.add_argument("action", choices=["list", "show", "approve", "reject", "retry"])
+    review_parser.add_argument("id", type=int, nargs="?")
+    review_parser.add_argument("--limit", type=int, default=100)
+    review_parser.add_argument("--offset", type=int, default=0)
+    review_parser.add_argument("--reason-code")
+    review_parser.add_argument("--reviewer")
+    review_parser.add_argument("--reason")
+
     ask_parser = subparsers.add_parser("ask", help="Ask a question against the indexed corpus.")
     ask_parser.add_argument("question")
     ask_parser.add_argument("--top-k", type=int, default=None)
@@ -48,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.add_argument("--port", type=int, default=8000)
 
     args = parser.parse_args(argv)
+    load_dotenv(Path.cwd() / ".env")
     settings = Settings.from_env()
     if args.index:
         settings = settings.with_paths(index_path=args.index.expanduser().resolve())
@@ -63,6 +84,44 @@ def main(argv: list[str] | None = None) -> int:
         uvicorn.run("medical_rag.server:app", host=args.host, port=args.port, reload=False)
         return 0
 
+    if args.command == "validation-check":
+        from medical_rag.validation_evaluation import compare_validation_report
+        print(json.dumps(compare_validation_report(json.loads(args.report.read_text()),
+                                                  json.loads(args.reference.read_text())), indent=2))
+        return 0
+    if args.command == "validate":
+        results = validate_source((args.source or settings.corpus_dir).resolve(), settings, args.force)
+        if args.report:
+            args.report.parent.mkdir(parents=True, exist_ok=True)
+            args.report.write_text(json.dumps(results, indent=2))
+            print(json.dumps({"report": str(args.report), "documents": len(results)}))
+        else:
+            print(json.dumps(results, indent=2))
+        return 0
+    if args.command == "review":
+        validator = AbstractValidator(settings)
+        store = validator.store
+        if args.action == "list":
+            output = store.list_reviews(args.limit, args.offset, args.reason_code)
+        elif args.id is None:
+            parser.error("A review ID is required")
+        elif args.action == "show":
+            output = store.inspect(args.id)
+        elif args.action in {"approve", "reject"}:
+            if not args.reviewer or not args.reason:
+                parser.error("--reviewer and --reason are required")
+            store.review(args.id, "accept" if args.action == "approve" else "reject", args.reviewer, args.reason)
+            output = store.inspect(args.id)
+        else:
+            item = store.inspect(args.id)
+            source = Path(item["result"]["document_id"])
+            if not source.is_file():
+                parser.error("The source PDF is no longer available")
+            store.reset(args.id)
+            output = validate_source(source, settings, force=True)
+        print(json.dumps(output, indent=2))
+        return 0
+
     rag = StrokeRAG(settings)
     if args.command == "ingest":
         report = rag.ingest(
@@ -72,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             failed_only=args.failed_only,
             ocr_scanned=args.ocr_scanned,
             pdf_workers=args.pdf_workers,
+            dry_run=args.dry_run,
         )
         print(json.dumps(report.to_dict(), indent=2))
         return 0

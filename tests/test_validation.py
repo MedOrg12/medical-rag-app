@@ -24,6 +24,7 @@ def settings(tmp_path):
         embedding_backend="hash",
         validation_enabled=True,
         api_key="test-key",
+        validation_max_retries=0,
     )
 
 
@@ -33,13 +34,13 @@ def test_abstract_boundaries():
         == ABSTRACT.strip()
     )
     assert extract_abstract(pages("Title\nNo abstract")) is None
-    assert extract_abstract(pages("Abstract\n" + "a" * 9000)) is None
+    assert len(extract_abstract(pages("Abstract\n" + "a" * 9000))) == 3000
     assert extract_abstract(pages("Summary: " + ABSTRACT)) == ABSTRACT.strip()
 
 
 def test_structured_abstract():
     value = "Background\n" + ABSTRACT + "\nMethods\nTrial.\nResults\nBenefit."
-    assert extract_abstract(pages("Abstract\n" + value + "\nKeywords: stroke")) == value
+    assert extract_abstract(pages("Abstract\n" + value + "\nKeywords: stroke")) == "\n".join(line.strip() for line in value.splitlines())
 
 
 def test_api_request_and_cache(tmp_path, monkeypatch):
@@ -51,7 +52,7 @@ def test_api_request_and_cache(tmp_path, monkeypatch):
                     "finish_reason": "stop",
                     "message": {
                         "content": json.dumps(
-                            {"decision": "accept", "reason": "Relevant stroke study"}
+                            {"decision": "accept", "reason": "Relevant stroke study", "confidence": 0.9, "reason_code": "in_scope", "topics": ["stroke"]}
                         )
                     },
                 }
@@ -79,15 +80,16 @@ def test_failures_are_excluded_and_retried(tmp_path, monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", request)
     validator = AbstractValidator(settings(tmp_path))
     for _ in range(2):
-        assert validator.validate(pages("Abstract\n" + ABSTRACT)).decision == "error"
+        assert validator.validate(pages("Abstract\n" + ABSTRACT)).action == "needs_review"
     assert request.call_count == 2
-    assert validator.validate(pages("No abstract")).decision == "review"
+    assert validator.validate(pages("No abstract")).reason_code == "no_abstract_found"
     assert request.call_count == 2
 
 
 def test_missing_key(tmp_path):
-    with pytest.raises(ValueError, match="API_KEY"):
-        AbstractValidator(replace(settings(tmp_path), api_key=""))
+    result = AbstractValidator(replace(settings(tmp_path), api_key="")).validate(pages("Abstract\n" + ABSTRACT))
+    assert result.action == "needs_review"
+    assert result.reason_code == "provider_configuration"
 
 
 @pytest.mark.parametrize("incremental", [False, True])
@@ -150,7 +152,6 @@ def test_invalid_api_results_never_accept(tmp_path, monkeypatch, choice):
     response = MagicMock()
     response.__enter__.return_value.read.return_value = json.dumps({"choices": [choice]}).encode()
     monkeypatch.setattr("urllib.request.urlopen", MagicMock(return_value=response))
-    assert (
-        AbstractValidator(settings(tmp_path)).validate(pages("Abstract\n" + ABSTRACT)).decision
-        == "error"
-    )
+    result = AbstractValidator(settings(tmp_path)).validate(pages("Abstract\n" + ABSTRACT))
+    assert result.action == "needs_review"
+    assert result.reason_code == "invalid_response"

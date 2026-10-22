@@ -21,7 +21,7 @@ from medical_rag.llm import SAFETY_NOTICE, Generator, make_generator
 from medical_rag.relevance import expand_query_for_retrieval, filter_results_for_question
 from medical_rag.reranker import Reranker, make_reranker
 from medical_rag.types import Chunk, Citation, IngestionReport, RagAnswer, SearchResult
-from medical_rag.validation import screen_pages
+from medical_rag.validation import ensure_validation_available, screen_pages, validate_source
 from medical_rag.vector_store import (
     IngestStats,
     VectorStoreBackend,
@@ -44,9 +44,20 @@ class StrokeRAG:
             self._fallback_embedding = False
         else:
             self.embedding_model, self._fallback_embedding = make_embedding_model(self.settings)
-        self.generator = generator or make_generator(self.settings)
+        self._generator = generator
         self._reranker: Reranker = make_reranker(self.settings)
         self._store: VectorStoreBackend | None = None
+
+    @property
+    def generator(self) -> Generator:
+        # Ingestion and validation do not require the answer-generation credentials.
+        if self._generator is None:
+            self._generator = make_generator(self.settings)
+        return self._generator
+
+    @generator.setter
+    def generator(self, value: Generator) -> None:
+        self._generator = value
 
     def ingest(
         self,
@@ -56,8 +67,14 @@ class StrokeRAG:
         failed_only: bool = False,
         ocr_scanned: bool = False,
         pdf_workers: int | None = None,
+        dry_run: bool = False,
     ) -> IngestionReport:
         source = (source_path or self.settings.corpus_dir).expanduser().resolve()
+        if dry_run:
+            decisions = validate_source(source, self.settings, force, pdf_workers, ocr_scanned)
+            return IngestionReport(source_path=str(source), documents=len(decisions), pages=0, chunks=0,
+                                   index_path=str(self.settings.index_path), embedding_model=self.embedding_model.name,
+                                   validation_results=decisions, dry_run=True)
         if self.settings.manifest_path is not None and self.settings.extraction_cache_dir is not None:
             return self._ingest_incremental(
                 source=source,
@@ -73,7 +90,7 @@ class StrokeRAG:
             raise ValueError(f"No supported text was found under {source}")
 
         validation_results = None
-        if self.settings.validation_enabled:
+        if self.settings.effective_validation_mode != "off":
             pages, validation_results = screen_pages(pages, self.settings, force=force)
 
         chunks = chunk_pages(
@@ -81,7 +98,7 @@ class StrokeRAG:
             chunk_size_chars=self.settings.chunk_size_chars,
             chunk_overlap_chars=self.settings.chunk_overlap_chars,
         )
-        if not chunks and not self.settings.validation_enabled:
+        if not chunks and self.settings.effective_validation_mode == "off":
             raise ValueError(f"No chunks could be created from {source}")
 
         store, stats = ingest_vector_store(self.settings, chunks, self.embedding_model)
@@ -151,7 +168,7 @@ class StrokeRAG:
             self.settings.vector_store_backend == "qdrant" and self.settings.qdrant_recreate_collection
         )
         if (
-            not self.settings.validation_enabled
+            self.settings.effective_validation_mode == "off"
             and not changed_files
             and not deleted_paths
             and not rebuild_requested
@@ -181,8 +198,10 @@ class StrokeRAG:
                 timings=timings,
             )
 
-        validation_results = {} if self.settings.validation_enabled else None
-        screened_documents = 0
+        validation_results = None
+        if self.settings.effective_validation_mode != "off":
+            validation_results = validate_source(source, self.settings, force or not resume, workers, ocr_scanned)
+            ensure_validation_available(validation_results, self.settings)
         documents: list[ChunkedDocument] = []
         chunk_counts: dict[str, int] = {}
         failures: dict[str, str] = {}
@@ -190,12 +209,11 @@ class StrokeRAG:
         def chunk_stream() -> Iterator[Chunk]:
             """Chunks in document order as extraction finishes, so embedding overlaps it.
             Records each document's outcome on the way through."""
-            nonlocal screened_documents
             for document in iter_chunked_documents(
                 unique_files,
                 cache_dir=self.settings.extraction_cache_dir,
                 options=IngestionOptions(
-                    force=force or not resume,
+                    force=(force or not resume) if validation_results is None else False,
                     resume=resume,
                     failed_only=failed_only,
                     ocr_scanned=ocr_scanned,
@@ -203,22 +221,15 @@ class StrokeRAG:
                 ),
                 chunk_size_chars=self.settings.chunk_size_chars,
                 chunk_overlap_chars=self.settings.chunk_overlap_chars,
-                collect_screening_pages=self.settings.validation_enabled,
             ):
                 path = str(document.source.path)
                 if document.error is not None:
                     failures[path] = document.error
                     manifest.mark_failed(document.source, document.error)
                     continue
-                if self.settings.validation_enabled:
-                    accepted, decisions = screen_pages(
-                        document.screening_pages or [], self.settings, force=force or not resume
-                    )
-                    validation_results.update(decisions)
-                    screened_documents += 1
-                    document.screening_pages = None
-                    if not accepted:
-                        continue
+                if (self.settings.effective_validation_mode == "enforce" and validation_results
+                        and path in validation_results and validation_results[path]["action"] != "accept"):
+                    continue
                 chunks, document.chunks = document.chunks, []  # the vector store owns them now
                 documents.append(document)
                 chunk_counts[path] = len(chunks)
@@ -228,7 +239,7 @@ class StrokeRAG:
         # Preserve the existing index when extraction yields nothing. A completed screening
         # run may intentionally reject every document and must remove its stale chunks.
         first_chunk = next(chunks, None)
-        if first_chunk is None and not (self.settings.validation_enabled and screened_documents):
+        if first_chunk is None and not validation_results:
             if not documents:
                 raise ValueError(f"No supported text was extracted from {source}")
             raise ValueError(f"No chunks could be created from {source}")

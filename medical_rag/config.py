@@ -96,6 +96,19 @@ class Settings:
     api_embedding_model: str = "text-embedding-3-small"
     validation_enabled: bool = False
     validation_model: str = "gpt-4o-mini"
+    validation_mode: str = "off"
+    validation_transport: str = "auto"
+    validation_threshold: float = 0.7
+    validation_max_abstract_chars: int = 3000
+    validation_concurrency: int = 2
+    validation_timeout_seconds: float = 30.0
+    validation_max_retries: int = 2
+    validation_failure_limit: int = 3
+    validation_retry_base_seconds: float = 1.0
+    validation_retry_max_seconds: float = 30.0
+    validation_include: str = "Human stroke studies, systematic reviews, meta-analyses, and directly relevant clinical guidelines."
+    validation_exclude: str = "Unrelated topics, advertising, promotional content, or material without substantive research or clinical guidance."
+    validation_language_policy: str = "Do not exclude based on language unless explicitly required; do not infer missing publication attributes."
     validation_scope: str = "Stroke prevention, diagnosis, treatment, rehabilitation, and recovery, including post-stroke nutrition, dysphagia, and vascular risk reduction."
     api_max_output_tokens: int = 800
     api_reasoning_effort: str = ""
@@ -121,6 +134,22 @@ class Settings:
     qdrant_timeout_seconds: float = 120.0
     qdrant_prefer_grpc: bool = False
     qdrant_grpc_port: int = 6334
+
+    @property
+    def effective_validation_mode(self) -> str:
+        return "enforce" if self.validation_enabled and self.validation_mode == "off" else self.validation_mode
+
+    def __post_init__(self) -> None:
+        if self.validation_transport not in {"auto", "compatible", "gemini_native"}:
+            raise ValueError("Invalid validation transport")
+        if self.validation_mode not in {"off", "report_only", "enforce"}:
+            raise ValueError("Invalid validation mode")
+        if not 0 <= self.validation_threshold <= 1:
+            raise ValueError("Validation threshold must be between 0 and 1")
+        if (self.validation_max_abstract_chars < 100 or self.validation_concurrency < 1
+                or self.validation_max_retries < 0 or self.validation_failure_limit < 1 or self.validation_timeout_seconds <= 0
+                or self.validation_retry_base_seconds < 0 or self.validation_retry_max_seconds < 0):
+            raise ValueError("Invalid validation limits")
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> Settings:
@@ -183,9 +212,23 @@ class Settings:
                 "RAG_API_GENERATION_MODEL", "gemini-2.5-flash" if gemini else "gpt-4o-mini"
             ),
             api_embedding_model=os.getenv("RAG_API_EMBEDDING_MODEL", "text-embedding-3-small"),
-            validation_enabled=os.getenv("RAG_VALIDATE_PDFS", "false").lower() in {"true", "1", "yes"},
+            validation_enabled=(os.getenv("RAG_VALIDATE_PDFS", "false").lower() in {"true", "1", "yes"}
+                                and not os.getenv("RAG_VALIDATION_MODE")),
             validation_model=os.getenv("RAG_VALIDATION_MODEL", "gemini-2.5-flash" if gemini else "gpt-4o-mini"),
             validation_scope=os.getenv("RAG_VALIDATION_SCOPE") or cls.validation_scope,
+            validation_mode=(os.getenv("RAG_VALIDATION_MODE") or "off").lower(),
+            validation_transport=os.getenv("RAG_VALIDATION_TRANSPORT", "auto").lower(),
+            validation_threshold=_env_float("RAG_VALIDATION_THRESHOLD", 0.7),
+            validation_max_abstract_chars=_env_int("RAG_VALIDATION_MAX_ABSTRACT_CHARS", 3000),
+            validation_concurrency=_env_int("RAG_VALIDATION_CONCURRENCY", 2),
+            validation_timeout_seconds=_env_float("RAG_VALIDATION_TIMEOUT_SECONDS", 30.0),
+            validation_max_retries=_env_int("RAG_VALIDATION_MAX_RETRIES", 2),
+            validation_failure_limit=_env_int("RAG_VALIDATION_FAILURE_LIMIT", 3),
+            validation_retry_base_seconds=_env_float("RAG_VALIDATION_RETRY_BASE_SECONDS", 1.0),
+            validation_retry_max_seconds=_env_float("RAG_VALIDATION_RETRY_MAX_SECONDS", 30.0),
+            validation_include=os.getenv("RAG_VALIDATION_INCLUDE") or cls.validation_include,
+            validation_exclude=os.getenv("RAG_VALIDATION_EXCLUDE") or cls.validation_exclude,
+            validation_language_policy=os.getenv("RAG_VALIDATION_LANGUAGE_POLICY") or cls.validation_language_policy,
             api_max_output_tokens=_env_int("RAG_API_MAX_OUTPUT_TOKENS", 800),
             api_reasoning_effort=os.getenv("RAG_API_REASONING_EFFORT", "").lower(),
             api_max_retries=_env_int("RAG_API_MAX_RETRIES", 2),
