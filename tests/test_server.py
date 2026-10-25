@@ -1,11 +1,70 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from medical_rag.config import Settings
 from medical_rag.server import create_app
+
+
+def test_patient_and_developer_views_are_separate(tmp_path) -> None:
+    settings = Settings(
+        root_dir=Path(__file__).resolve().parents[1],
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / "index.json",
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings))
+
+    patient = client.get("/")
+    developer = client.get("/dev")
+
+    assert patient.status_code == developer.status_code == 200
+    assert "Stroke Companion" in patient.text
+    assert 'id="top-k"' not in patient.text
+    assert 'id="eval-run-button"' not in patient.text
+    assert 'id="ingest-button"' not in patient.text
+    assert 'id="top-k"' in developer.text
+    assert 'id="eval-run-button"' in developer.text
+    assert 'id="ingest-button"' in developer.text
+    assert client.get("/static/patient.js").status_code == 200
+    assert client.get("/static/dev.js").status_code == 200
+    assert client.get("/static/dev.css").status_code == 200
+    assert client.get("/static/icons.svg").status_code == 200
+
+
+def test_patient_status_checks_index_without_provider_call(tmp_path, monkeypatch) -> None:
+    def unexpected_provider_call(*args, **kwargs):
+        raise AssertionError("Patient status must not query Ollama")
+
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / "index.json",
+        embedding_backend="hash",
+    )
+    monkeypatch.setattr("medical_rag.server.list_ollama_models", unexpected_provider_call)
+    client = TestClient(create_app(settings))
+
+    assert client.get("/status").json() == {"ready": False}
+    settings.index_path.touch()
+    response = client.get("/status")
+    assert response.status_code == 200
+    assert response.json() == {"ready": True}
+
+
+def test_missing_developer_view_returns_not_found(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / "index.json",
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings))
+
+    assert client.get("/dev").status_code == 404
 
 
 def test_health_reports_api_configuration_without_secret(tmp_path) -> None:

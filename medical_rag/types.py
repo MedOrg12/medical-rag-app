@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -82,6 +82,7 @@ class RagAnswer:
     safety_notice: str
     retrieval_mode: str = "vector"
     fallback_embedding: bool = False
+    timings: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

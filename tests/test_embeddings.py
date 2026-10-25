@@ -8,6 +8,7 @@ import pytest
 from medical_rag.config import Settings
 from medical_rag.embeddings import (
     ApiEmbeddingModel,
+    CachedEmbeddingModel,
     HashingEmbeddingModel,
     OllamaEmbeddingModel,
     RemoteEmbeddingModel,
@@ -15,6 +16,44 @@ from medical_rag.embeddings import (
     make_embedding_model,
     ollama_model_name_matches,
 )
+
+
+def test_query_embedding_does_not_load_or_write_ingestion_cache(tmp_path, monkeypatch) -> None:
+    model = CachedEmbeddingModel(HashingEmbeddingModel(dimensions=128), tmp_path / "cache.json")
+
+    def unexpected_disk_access():
+        raise AssertionError("Queries must not access the ingestion cache")
+
+    monkeypatch.setattr(model, "_load", unexpected_disk_access)
+    monkeypatch.setattr(model, "_save", unexpected_disk_access)
+    query = "a new question about stroke rehabilitation"
+
+    assert model.embed_query(query) == model.inner.embed([query])[0]
+    assert model._cache == {}
+    assert not model.cache_path.exists()
+
+
+def test_lazy_ingestion_cache_still_reuses_persisted_document_embeddings(tmp_path) -> None:
+    class RecordingModel(HashingEmbeddingModel):
+        calls = 0
+
+        def embed(self, texts):
+            self.calls += len(texts)
+            return super().embed(texts)
+
+    inner = RecordingModel(dimensions=128)
+    path = tmp_path / "cache.json"
+    first = CachedEmbeddingModel(inner, path)
+    vector = first.embed(["stroke document"])
+    previous_bytes = path.read_bytes()
+    second = CachedEmbeddingModel(inner, path)
+
+    assert not second._loaded
+    assert second.embed(["stroke document"]) == vector
+    assert inner.calls == 1
+    second.embed_query("new stroke question")
+    assert path.read_bytes() == previous_bytes
+    assert inner.calls == 2
 
 
 def _dot(left: list[float], right: list[float]) -> float:

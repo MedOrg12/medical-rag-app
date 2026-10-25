@@ -26,6 +26,11 @@ def test_pipeline_ingests_text_and_answers(tmp_path) -> None:
     assert response.answer_mode == "patient"
     assert "face drooping" in response.answer
     assert response.citations[0].source == "stroke_notes.txt"
+    assert set(response.timings) == {
+        "index_load_seconds", "retrieval_seconds", "reranking_seconds",
+        "generation_seconds", "total_seconds",
+    }
+    assert all(value >= 0 for value in response.timings.values())
 
 
 def test_diet_question_retrieves_diet_evidence_not_generic_prevention(tmp_path) -> None:

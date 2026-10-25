@@ -8,6 +8,39 @@ from medical_rag.types import Chunk
 from medical_rag.vector_store import QdrantVectorStore, VectorStore, ingest_vector_store
 
 
+def test_optimized_vector_search_matches_full_dot_products_and_stable_ties(tmp_path):
+    import random
+
+    import pytest
+
+    from medical_rag.embeddings import EmbeddingModel
+
+    class FixedModel(EmbeddingModel):
+        name = "fixed"
+
+        def __init__(self, query):
+            self.query = query
+
+        def embed(self, texts):
+            return [self.query for _ in texts]
+
+    rng = random.Random(42)
+    chunks = [Chunk(str(i), "stroke", {"group": str(i % 2)}) for i in range(80)]
+    vectors = [[rng.choice([-1.0, 0.0, 1.0]) for _ in range(32)] for _ in chunks]
+    store = VectorStore(tmp_path / "index.json", chunks, vectors, "fixed")
+    for query in [[0.0] * 32, [1.0, -1.0] + [0.0] * 30, [1.0] * 32]:
+        for filters in [None, {"group": "1"}]:
+            expected = sorted(
+                [(sum(a * b for a, b in zip(query, vector, strict=False)), chunk.id)
+                 for chunk, vector in zip(chunks, vectors, strict=False)
+                 if not filters or chunk.metadata["group"] == filters["group"]],
+                key=lambda item: item[0], reverse=True,
+            )[:7]
+            results = store.search("question", FixedModel(query), top_k=7, hybrid=False, filters=filters)
+            assert [r.chunk.id for r in results] == [chunk_id for _, chunk_id in expected]
+            assert [r.score for r in results] == pytest.approx([score for score, _ in expected])
+
+
 def test_vector_store_round_trips_and_searches(tmp_path) -> None:
     chunks = [
         Chunk(

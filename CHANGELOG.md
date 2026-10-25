@@ -30,6 +30,11 @@ This project follows Semantic Versioning for the application release number:
 
 ### Changed
 
+- Query embeddings no longer load or rewrite the disk-backed ingestion cache. Sparse vector scoring, partial top-k selection, precomputed BM25 lengths/IDF, and direct chunk lookups reduce search overhead without changing the index format.
+- Answers now include retrieval, reranking, index-load, and generation timings, shown in the developer Playground.
+- Reorganized the developer workbench into Playground, Documents, Evaluations, and System views, with paginated document search, indexing status recovery, inspectable evaluation failures, and JSON exports.
+- The default frontend is now a patient-focused question-and-answer view with expandable sources, readable answers, and retry/copy actions. Technical controls and the evaluation dashboard are retained at `/dev`.
+- Added a lightweight `/status` endpoint for patient-facing index availability checks.
 - Docker and `.env.example` now default `RAG_EMBEDDING_BACKEND` to `auto`.
 - Auto embeddings now use Ollama only when the configured embedding model is installed; otherwise they fall back to hash embeddings.
 - Eval pass/fail now requires in-scope answers to include enough expected answer terms, rather than passing on citation matches alone.

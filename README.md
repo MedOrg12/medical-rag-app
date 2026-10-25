@@ -348,17 +348,52 @@ Legacy Docker variables from the previous app are also accepted where they map c
 
 ## Frontend
 
-The active UI is `static/index.html` and is wired to `/health`, `/ingest`, `/ingest/status`, `/ask`, `/sources`, `/eval/questions`, and `/eval/run`.
-It is a dependency-free RAG workbench with:
+The default page at `/` is a patient and caregiver question-and-answer view. It uses
+plain-language patient mode and the server's configured retrieval defaults, with no
+model settings, ingestion controls, or evaluation panels. Answers support readable
+paragraphs/lists, inline citations, expandable sources per answer, copying, and retrying.
+Questions stay in the current page only; the UI does not persist them in browser storage.
+Each question is answered independently; previous messages are not sent to the model.
 
-- Corpus ingestion controls with background-status polling.
-- Source search and source/chunk counts.
-- Patient and clinician chat modes with configurable `top_k`.
-- Chat history plus latest citation evidence.
-- System health indicators for index, embedding fallback, generation backend, Ollama, and API configuration.
-- Integrated eval question selection, metrics, and per-question failure details.
+Open `/dev` for the developer workbench, including corpus ingestion, source search,
+patient/clinician modes, `top_k`, system diagnostics, and the evaluation dashboard.
+The workbench has four focused views:
+
+- **Playground**: run a query, inspect its answer and scored evidence, copy the answer,
+  or download the response and request settings as JSON. Results include separate
+  index-load, retrieval, reranking, and generation timings.
+- **Documents**: search the indexed library with 50-row pagination, run incremental
+  ingestion, or expand advanced options for rebuilds, failed-file retries, workers, and OCR.
+  Background indexing reconnects to its status when this view is opened.
+- **Evaluations**: select questions, inspect expected evidence, run the suite, filter
+  results by status, inspect missing terms and citations, and export evaluation JSON.
+- **System**: inspect the active configuration and warnings, with API and Ollama details
+  shown when relevant. A configured API key does not confirm provider connectivity.
+
+This is a separate UI on the same server, not a separate deployment or an access-control
+boundary. The existing API endpoints remain available.
+
+The patient UI uses `static/index.html`, `static/patient.css`, and `static/patient.js`
+and calls only `/status` and `/ask`. `/status` checks index availability without querying
+Ollama. The developer UI uses `static/dev.html`, `static/dev.css`, and `static/dev.js`.
+Both work without a frontend build step
+or external assets; the included icons are from Lucide (license in `static/icons-LICENSE.txt`).
 
 The previous UI has been preserved as `static/legacy-index.html` for reference, but it targets the old API surface and is not the active app.
+
+### Query performance
+
+Ingestion reuses unchanged vectors from the configured store. Query embeddings bypass
+the legacy disk-cache wrapper, so asking a new question does not serialize a corpus-sized
+cache. JSON search skips zero dimensions in sparse query vectors, selects only the top
+candidates, and reuses document lengths and query-term IDF in BM25. Qdrant searches run
+on the configured Qdrant service. Existing indexes do not require rebuilding for these
+query optimizations.
+
+`/ask` responses include `timings` for index loading, retrieval (including query embedding),
+reranking, generation, and total pipeline time. A large JSON index still has a one-time
+load cost after a server restart. Generation time also depends on the configured provider
+and any retries; changing the model will not resolve slow retrieval.
 
 ## Medical Safety
 
@@ -401,7 +436,7 @@ Avoid:
 
 The eval suite provides a repeatable way to check retrieval quality, citation relevance, answer-term coverage, and refusal correctness. In-scope questions pass only when retrieval finds relevant evidence and the generated answer includes enough expected answer terms.
 
-The browser UI includes an Evaluation dashboard. Click `Run Eval` to run the packaged eval suite against
+The developer UI at `/dev` includes an Evaluation dashboard. Click `Run Eval` to run the packaged eval suite against
 the current index and model settings.
 
 ### Prerequisites

@@ -110,6 +110,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return FileResponse(index_path)
         return {"service": "Stroke Medical RAG", "docs": "/docs"}
 
+    @app.get("/dev", response_model=None, include_in_schema=False)
+    def developer_view() -> FileResponse:
+        developer_path = static_dir / "dev.html"
+        if not developer_path.exists():
+            raise HTTPException(status_code=404, detail="Developer view is not available")
+        return FileResponse(developer_path)
+
+    @app.get("/status")
+    def patient_status() -> dict[str, bool]:
+        return {"ready": rag.index_exists()}
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         ollama_models = list_ollama_models(app_settings.ollama_base_url)

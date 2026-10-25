@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from medical_rag.config import Settings
 
@@ -26,6 +27,9 @@ class EmbeddingModel(ABC):
     @abstractmethod
     def embed(self, texts: list[str]) -> list[list[float]]:
         raise NotImplementedError
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed([text])[0]
 
 
 @dataclass
@@ -173,6 +177,75 @@ class ApiEmbeddingModel(EmbeddingModel):
                     f"Could not get API embeddings from {self.base_url}: {_network_error_detail(exc)}"
                 ) from exc
         raise RuntimeError("Could not get API embedding response from provider")
+
+
+@dataclass
+class CachedEmbeddingModel(EmbeddingModel):
+    """Transparent disk-backed cache wrapping any EmbeddingModel.
+
+    Cache file format (JSON):
+        {"schema_version": 1, "model_name": "...", "entries": {"<sha256>": [...]}}
+
+    Entries are invalidated when the wrapped model's name changes.
+    """
+
+    inner: EmbeddingModel
+    cache_path: Path
+    batch_size: int = 64
+    _cache: dict[str, list[float]] = field(default_factory=dict, init=False, repr=False)
+    _loaded: bool = field(default=False, init=False, repr=False)
+
+    @property
+    def name(self) -> str:
+        return self.inner.name
+
+    def embed_query(self, text: str) -> list[float]:
+        # Query embeddings must not rewrite the corpus-sized ingestion cache.
+        return self.inner.embed_query(text)
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not self._loaded:
+            self._load()
+            self._loaded = True
+        results: list[list[float] | None] = [None] * len(texts)
+        misses: list[tuple[int, str]] = []
+
+        for i, text in enumerate(texts):
+            cached = self._cache.get(hashlib.sha256(text.encode()).hexdigest())
+            if cached is not None:
+                results[i] = cached
+            else:
+                misses.append((i, text))
+
+        if misses:
+            for batch in _batches(misses, max(1, self.batch_size)):
+                new_vectors = self.inner.embed([t for _, t in batch])
+                for (i, text), vector in zip(batch, new_vectors):
+                    self._cache[hashlib.sha256(text.encode()).hexdigest()] = vector
+                    results[i] = vector
+            self._save()
+
+        return results  # type: ignore[return-value]
+
+    def _load(self) -> None:
+        if not self.cache_path.exists():
+            return
+        try:
+            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            if payload.get("model_name") != self.inner.name:
+                return  # model changed → stale, ignore
+            self._cache = payload.get("entries", {})
+        except (json.JSONDecodeError, KeyError, OSError):
+            pass
+
+    def _save(self) -> None:
+        self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": 1,
+            "model_name": self.inner.name,
+            "entries": self._cache,
+        }
+        self.cache_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 @dataclass
@@ -465,6 +538,10 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
         raise ValueError(f"Unsupported embedding backend: {backend!r}")
 
     return inner, fallback_used
+
+
+def _batches(items: list[tuple[int, str]], batch_size: int) -> list[list[tuple[int, str]]]:
+    return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
 
 
 def _text_batches(items: list[str], batch_size: int) -> list[list[str]]:

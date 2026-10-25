@@ -22,6 +22,35 @@ def make_chunk(chunk_id: str, text: str) -> Chunk:
 
 
 class TestBM25Index:
+    def test_optimized_bm25_matches_reference_scores_and_ranks(self):
+        import math
+        import random
+
+        rng = random.Random(17)
+        terms = ["stroke", "dysphagia", "rehabilitation", "recovery", "swallow"]
+        chunks = [make_chunk(str(i), " ".join(rng.choices(terms, k=rng.randint(0, 30)))) for i in range(80)]
+        idx = BM25Index.from_dict(BM25Index.build(chunks).to_dict())
+        # Public parameters may change after loading an index.
+        idx.k1 = 1.2
+        idx.b = 0.6
+        for query in ["stroke stroke dysphagia", "rehabilitation recovery", "unknown", ""]:
+            expected = []
+            for chunk_id, tf in zip(idx._chunk_ids, idx._tf, strict=False):
+                score = 0.0
+                dl = sum(tf.values())
+                for term in _tokenize(query):
+                    if term not in tf:
+                        continue
+                    df = idx._df.get(term, 0)
+                    idf = math.log((idx._n - df + 0.5) / (df + 0.5) + 1)
+                    score += idf * (tf[term] * (idx.k1 + 1) / (tf[term] + idx.k1 * (1 - idx.b + idx.b * dl / max(idx._avgdl, 1))))
+                if score > 0:
+                    expected.append((chunk_id, score))
+            expected.sort(key=lambda item: item[1], reverse=True)
+            results = idx.search(query, top_k=7)
+            assert [item[0] for item in results] == [item[0] for item in expected[:7]]
+            assert [item[1] for item in results] == pytest.approx([item[1] for item in expected[:7]])
+
     def test_build_and_search_returns_relevant_chunk(self):
         chunks = [
             make_chunk("c1", "anticoagulation warfarin atrial fibrillation reduces recurrent stroke"),

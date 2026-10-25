@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from heapq import nlargest
 from itertools import islice
 from pathlib import Path
 from typing import Any, Protocol
@@ -183,6 +184,7 @@ class VectorStore:
         self.vectors = vectors or []
         self.embedding_model = embedding_model
         self._bm25 = bm25
+        self._chunks_by_id = {chunk.id: chunk for chunk in self.chunks}
 
     @property
     def retrieval_mode(self) -> str:
@@ -311,22 +313,39 @@ class VectorStore:
         candidate_limit = min(max(top_k * 4, top_k), 50)
 
         # Vector search
-        query_vector = embedding_model.embed([query])[0]
-        vec_scored: list[tuple[float, Chunk]] = []
-        for chunk, vector in zip(self.chunks, self.vectors):
-            if filters and not _matches_filters(chunk.metadata, filters):
-                continue
-            vec_scored.append((_dot(query_vector, vector), chunk))
-        vec_scored.sort(key=lambda item: item[0], reverse=True)
+        query_vector = embedding_model.embed_query(query)
+        # Hash query vectors are sparse. Skipping zero dimensions preserves their dot products.
+        active_dimensions = [(i, value) for i, value in enumerate(query_vector) if value]
+        sparse_query = len(active_dimensions) < len(query_vector) / 2
 
-        if not (hybrid and self._bm25 is not None):
+        def scored_vectors():
+            for chunk, vector in zip(self.chunks, self.vectors, strict=False):
+                if filters and not _matches_filters(chunk.metadata, filters):
+                    continue
+                if sparse_query:
+                    if len(vector) >= len(query_vector):
+                        score = sum(value * vector[i] for i, value in active_dimensions)
+                    else:
+                        score = sum(value * vector[i] for i, value in active_dimensions if i < len(vector))
+                else:
+                    score = _dot(query_vector, vector)
+                yield score, chunk
+
+        use_hybrid = hybrid and self._bm25 is not None
+        vec_top = nlargest(
+            candidate_limit if use_hybrid else top_k,
+            scored_vectors(),
+            key=lambda item: item[0],
+        )
+
+        if not use_hybrid:
             return [
                 SearchResult(chunk=chunk, score=score, rank=rank)
-                for rank, (score, chunk) in enumerate(vec_scored[:top_k], start=1)
+                for rank, (score, chunk) in enumerate(vec_top, start=1)
             ]
 
         # Hybrid: RRF combination
-        vec_top = vec_scored[:candidate_limit]
+        assert self._bm25 is not None
         bm25_top = self._bm25.search(query, top_k=candidate_limit)
 
         vec_rank: dict[str, int] = {chunk.id: rank for rank, (_, chunk) in enumerate(vec_top, start=1)}
@@ -336,11 +355,9 @@ class VectorStore:
         chunk_by_id = {chunk.id: chunk for _, chunk in vec_top}
         for cid, _ in bm25_top:
             if cid not in chunk_by_id:
-                for chunk in self.chunks:
-                    if chunk.id == cid:
-                        if not filters or _matches_filters(chunk.metadata, filters):
-                            chunk_by_id[cid] = chunk
-                        break
+                chunk = self._chunks_by_id.get(cid)
+                if chunk is not None and (not filters or _matches_filters(chunk.metadata, filters)):
+                    chunk_by_id[cid] = chunk
 
         rrf_scores: list[tuple[float, str]] = []
         for cid in all_ids:
@@ -712,7 +729,7 @@ class QdrantVectorStore:
     ) -> list[SearchResult]:
         client = self.client
         qdrant_filter = _qdrant_filter(filters, embedding_model.name)
-        query_vector = embedding_model.embed([query])[0]
+        query_vector = embedding_model.embed_query(query)
         response = client.query_points(
             collection_name=self.settings.qdrant_collection,
             query=query_vector,

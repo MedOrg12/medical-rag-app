@@ -277,29 +277,40 @@ class StrokeRAG:
         filters: dict[str, str] | None = None,
         answer_mode: str | None = None,
     ) -> RagAnswer:
+        started = time.perf_counter()
+        timings: dict[str, float] = {}
         question = question.strip()
         if not question:
             raise ValueError("Question cannot be empty")
         mode = _normalize_answer_mode(answer_mode or self.settings.answer_mode)
 
         store = self._load_store()
+        timings["index_load_seconds"] = round(time.perf_counter() - started, 4)
         limit = top_k or self.settings.top_k
         if limit <= 0:
             raise ValueError("top_k must be greater than zero")
 
         candidate_limit = min(max(limit * 4, limit), 50)
+        retrieval_started = time.perf_counter()
         results = store.search(
             query=expand_query_for_retrieval(question),
             embedding_model=self.embedding_model,
             top_k=candidate_limit,
             filters=filters,
         )
+        timings["retrieval_seconds"] = round(time.perf_counter() - retrieval_started, 4)
+        rerank_started = time.perf_counter()
         results = filter_results_for_question(question, results)
         results = [r for r in results if r.score >= self.settings.min_relevance_score]
         results = self._reranker.rerank(question, results)[:limit]
+        timings["reranking_seconds"] = round(time.perf_counter() - rerank_started, 4)
 
+        generation_started = time.perf_counter()
         answer = self.generator.generate(question, results, answer_mode=mode)
+        timings["generation_seconds"] = round(time.perf_counter() - generation_started, 4)
         citations = [_citation(result, citation_id) for citation_id, result in enumerate(results, 1)]
+
+        timings["total_seconds"] = round(time.perf_counter() - started, 4)
 
         return RagAnswer(
             question=question,
@@ -311,6 +322,7 @@ class StrokeRAG:
             safety_notice=SAFETY_NOTICE,
             retrieval_mode=store.retrieval_mode,
             fallback_embedding=self._fallback_embedding,
+            timings=timings,
         )
 
     def sources(self) -> list[dict[str, object]]:
