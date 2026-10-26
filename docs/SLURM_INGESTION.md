@@ -1,6 +1,6 @@
 # Slurm Qdrant Ingestion
 
-Use `scripts/slurm_ingest_qdrant.sbatch` to run corpus ingestion as an offline Slurm job. The job reads PDFs from shared storage, writes parser and embedding caches to a scratch directory, and upserts chunks into a shared Qdrant collection.
+Use `scripts/slurm_ingest_qdrant.sbatch` to run corpus ingestion as an offline Slurm job. The job reads PDFs from shared storage, writes the manifest and extracted-text cache to a scratch directory, and upserts chunks into a shared Qdrant collection.
 
 ## Prerequisites
 

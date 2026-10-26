@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def _env_int(name: str, default: int) -> int:
@@ -93,6 +94,22 @@ class Settings:
     api_key: str = ""
     api_generation_model: str = "gpt-4o-mini"
     api_embedding_model: str = "text-embedding-3-small"
+    validation_enabled: bool = False
+    validation_model: str = "gpt-4o-mini"
+    validation_mode: str = "off"
+    validation_transport: str = "auto"
+    validation_threshold: float = 0.7
+    validation_max_abstract_chars: int = 3000
+    validation_concurrency: int = 2
+    validation_timeout_seconds: float = 30.0
+    validation_max_retries: int = 2
+    validation_failure_limit: int = 3
+    validation_retry_base_seconds: float = 1.0
+    validation_retry_max_seconds: float = 30.0
+    validation_include: str = "Human stroke studies, systematic reviews, meta-analyses, and directly relevant clinical guidelines."
+    validation_exclude: str = "Unrelated topics, advertising, promotional content, or material without substantive research or clinical guidance."
+    validation_language_policy: str = "Do not exclude based on language unless explicitly required; do not infer missing publication attributes."
+    validation_scope: str = "Stroke prevention, diagnosis, treatment, rehabilitation, and recovery, including post-stroke nutrition, dysphagia, and vascular risk reduction."
     api_max_output_tokens: int = 800
     api_reasoning_effort: str = ""
     api_max_retries: int = 2
@@ -118,11 +135,33 @@ class Settings:
     qdrant_prefer_grpc: bool = False
     qdrant_grpc_port: int = 6334
 
+    @property
+    def effective_validation_mode(self) -> str:
+        return "enforce" if self.validation_enabled and self.validation_mode == "off" else self.validation_mode
+
+    def __post_init__(self) -> None:
+        if self.validation_transport not in {"auto", "compatible", "gemini_native"}:
+            raise ValueError("Invalid validation transport")
+        if self.validation_mode not in {"off", "report_only", "enforce"}:
+            raise ValueError("Invalid validation mode")
+        if not 0 <= self.validation_threshold <= 1:
+            raise ValueError("Validation threshold must be between 0 and 1")
+        if (self.validation_max_abstract_chars < 100 or self.validation_concurrency < 1
+                or self.validation_max_retries < 0 or self.validation_failure_limit < 1 or self.validation_timeout_seconds <= 0
+                or self.validation_retry_base_seconds < 0 or self.validation_retry_max_seconds < 0):
+            raise ValueError("Invalid validation limits")
+
     @classmethod
-    def from_env(cls, root_dir: Path | None = None) -> "Settings":
+    def from_env(cls, root_dir: Path | None = None) -> Settings:
         root = (root_dir or Path.cwd()).resolve()
         corpus_dir = _resolve_path(root, _first_env("RAG_CORPUS_DIR", "PDF_FOLDER", default="pdfs"))
         index_path = _index_path_from_env(root)
+        api_base_url = _first_env(
+            "RAG_API_BASE_URL", "OPENAI_BASE_URL", default="https://api.openai.com/v1"
+        )
+        gemini = urlparse(api_base_url).hostname == "generativelanguage.googleapis.com"
+        api_key = (_first_env("GEMINI_API_KEY", "GOOGLE_API_KEY", "RAG_API_KEY", default="")
+                   if gemini else _first_env("RAG_API_KEY", "OPENAI_API_KEY", default=""))
 
         return cls(
             root_dir=root,
@@ -167,12 +206,29 @@ class Settings:
             ollama_generation_model=_first_env(
                 "RAG_OLLAMA_GENERATION_MODEL", "OLLAMA_MODEL", default="llama3.1"
             ),
-            api_base_url=_first_env(
-                "RAG_API_BASE_URL", "OPENAI_BASE_URL", default="https://api.openai.com/v1"
+            api_base_url=api_base_url,
+            api_key=api_key,
+            api_generation_model=os.getenv(
+                "RAG_API_GENERATION_MODEL", "gemini-2.5-flash" if gemini else "gpt-4o-mini"
             ),
-            api_key=_first_env("RAG_API_KEY", "OPENAI_API_KEY", default=""),
-            api_generation_model=os.getenv("RAG_API_GENERATION_MODEL", "gpt-4o-mini"),
             api_embedding_model=os.getenv("RAG_API_EMBEDDING_MODEL", "text-embedding-3-small"),
+            validation_enabled=(os.getenv("RAG_VALIDATE_PDFS", "false").lower() in {"true", "1", "yes"}
+                                and not os.getenv("RAG_VALIDATION_MODE")),
+            validation_model=os.getenv("RAG_VALIDATION_MODEL", "gemini-2.5-flash" if gemini else "gpt-4o-mini"),
+            validation_scope=os.getenv("RAG_VALIDATION_SCOPE") or cls.validation_scope,
+            validation_mode=(os.getenv("RAG_VALIDATION_MODE") or "off").lower(),
+            validation_transport=os.getenv("RAG_VALIDATION_TRANSPORT", "auto").lower(),
+            validation_threshold=_env_float("RAG_VALIDATION_THRESHOLD", 0.7),
+            validation_max_abstract_chars=_env_int("RAG_VALIDATION_MAX_ABSTRACT_CHARS", 3000),
+            validation_concurrency=_env_int("RAG_VALIDATION_CONCURRENCY", 2),
+            validation_timeout_seconds=_env_float("RAG_VALIDATION_TIMEOUT_SECONDS", 30.0),
+            validation_max_retries=_env_int("RAG_VALIDATION_MAX_RETRIES", 2),
+            validation_failure_limit=_env_int("RAG_VALIDATION_FAILURE_LIMIT", 3),
+            validation_retry_base_seconds=_env_float("RAG_VALIDATION_RETRY_BASE_SECONDS", 1.0),
+            validation_retry_max_seconds=_env_float("RAG_VALIDATION_RETRY_MAX_SECONDS", 30.0),
+            validation_include=os.getenv("RAG_VALIDATION_INCLUDE") or cls.validation_include,
+            validation_exclude=os.getenv("RAG_VALIDATION_EXCLUDE") or cls.validation_exclude,
+            validation_language_policy=os.getenv("RAG_VALIDATION_LANGUAGE_POLICY") or cls.validation_language_policy,
             api_max_output_tokens=_env_int("RAG_API_MAX_OUTPUT_TOKENS", 800),
             api_reasoning_effort=os.getenv("RAG_API_REASONING_EFFORT", "").lower(),
             api_max_retries=_env_int("RAG_API_MAX_RETRIES", 2),
@@ -207,7 +263,7 @@ class Settings:
 
     def with_paths(
         self, corpus_dir: Path | None = None, index_path: Path | None = None
-    ) -> "Settings":
+    ) -> Settings:
         return replace(
             self,
             corpus_dir=corpus_dir or self.corpus_dir,
@@ -218,7 +274,7 @@ class Settings:
         self,
         pdf_workers: int | None = None,
         embedding_batch_size: int | None = None,
-    ) -> "Settings":
+    ) -> Settings:
         return replace(
             self,
             pdf_workers=pdf_workers or self.pdf_workers,

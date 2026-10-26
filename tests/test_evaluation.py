@@ -137,4 +137,4 @@ def test_evaluate_rag_records_question_errors() -> None:
     assert not result.passed
     assert result.summary.error_questions == 1
     assert result.results[0].status == "error"
-    assert result.results[0].error == "index missing"
+    assert result.results[0].error == "Your document library isn't ready yet. Add your documents before asking a question."

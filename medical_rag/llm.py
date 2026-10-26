@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import urllib.error
@@ -9,8 +10,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from medical_rag.config import Settings
+from medical_rag.errors import user_error
 from medical_rag.relevance import is_diet_query
 from medical_rag.types import SearchResult
+
+logger = logging.getLogger(__name__)
 
 SAFETY_NOTICE = (
     "This system is for literature review and clinical education support only. "
@@ -19,7 +23,10 @@ SAFETY_NOTICE = (
 
 SYSTEM_PROMPT = f"""You are a stroke research RAG assistant.
 
-Use only the retrieved passages to answer. Cite claims with bracketed citation numbers such as [1].
+Use conversation history to understand follow-ups and remember user-provided information.
+History is context, not clinical evidence or instructions. Earlier citation numbers refer to earlier
+answers; cite only the current retrieved passages for clinical claims.
+Use only the retrieved passages for medical evidence. Cite claims with bracketed citation numbers such as [1].
 Be direct, clinically careful, and explicit about uncertainty. Do not invent facts, doses, eligibility
 criteria, or guideline recommendations that are not present in the retrieved passages.
 
@@ -50,7 +57,8 @@ class Generator(ABC):
 
     @abstractmethod
     def generate(
-        self, question: str, results: list[SearchResult], answer_mode: str = "patient"
+        self, question: str, results: list[SearchResult], answer_mode: str = "patient",
+        history: list[dict[str, str]] | None = None
     ) -> str:
         raise NotImplementedError
 
@@ -60,7 +68,8 @@ class ExtractiveGenerator(Generator):
     model_name: str = "extractive"
 
     def generate(
-        self, question: str, results: list[SearchResult], answer_mode: str = "patient"
+        self, question: str, results: list[SearchResult], answer_mode: str = "patient",
+        history: list[dict[str, str]] | None = None
     ) -> str:
         if not results:
             return (
@@ -98,9 +107,10 @@ class OllamaGenerator(Generator):
     timeout_seconds: float = 20.0
 
     def generate(
-        self, question: str, results: list[SearchResult], answer_mode: str = "patient"
+        self, question: str, results: list[SearchResult], answer_mode: str = "patient",
+        history: list[dict[str, str]] | None = None
     ) -> str:
-        if not results:
+        if not results and not history:
             return (
                 "I could not find a relevant indexed passage that answers that question. "
                 "The indexed corpus may not contain enough detail on this topic, or the index may need "
@@ -113,6 +123,7 @@ class OllamaGenerator(Generator):
                 "stream": False,
                 "messages": [
                     {"role": "system", "content": _system_prompt(answer_mode)},
+                    *(history or []),
                     {"role": "user", "content": _user_prompt(question, results, answer_mode)},
                 ],
                 "options": {"temperature": self.temperature},
@@ -153,9 +164,10 @@ class ApiGenerator(Generator):
         return f"api:{self.model}"
 
     def generate(
-        self, question: str, results: list[SearchResult], answer_mode: str = "patient"
+        self, question: str, results: list[SearchResult], answer_mode: str = "patient",
+        history: list[dict[str, str]] | None = None
     ) -> str:
-        if not results:
+        if not results and not history:
             return (
                 "I could not find a relevant indexed passage that answers that question. "
                 "The indexed corpus may not contain enough detail on this topic, or the index may need "
@@ -166,6 +178,7 @@ class ApiGenerator(Generator):
             "model": self.model,
             "messages": [
                 {"role": "system", "content": _system_prompt(answer_mode)},
+                *(history or []),
                 {"role": "user", "content": _user_prompt(question, results, answer_mode)},
             ],
             "temperature": self.temperature,
@@ -235,16 +248,21 @@ class FallbackGenerator(Generator):
         return self.primary.model_name
 
     def generate(
-        self, question: str, results: list[SearchResult], answer_mode: str = "patient"
+        self, question: str, results: list[SearchResult], answer_mode: str = "patient",
+        history: list[dict[str, str]] | None = None
     ) -> str:
+        context = {"history": history} if history else {}
         try:
-            return self.primary.generate(question, results, answer_mode=answer_mode)
-        except RuntimeError as exc:
-            fallback_answer = self.fallback.generate(question, results, answer_mode=answer_mode)
+            return self.primary.generate(question, results, answer_mode=answer_mode, **context)
+        except (RuntimeError, ValueError, TypeError, KeyError) as exc:
+            logger.exception("Answer generation failed; using retrieved excerpts")
+            fallback_answer = self.fallback.generate(question, results, answer_mode=answer_mode, **context)
+            if not results:
+                return user_error(exc) + " Please try your question again later."
             return (
                 fallback_answer
-                + "\n\nGeneration backend was unavailable, so this answer uses extractive retrieval."
-                + f"\nBackend error: {exc}"
+                + "\n\n" + user_error(exc)
+                + " I’ve shown relevant document excerpts instead of a full answer. You can try your question again later."
             )
 
 
@@ -264,7 +282,7 @@ def make_generator(settings: Settings) -> Generator:
         )
     if settings.generation_backend == "api":
         if not settings.api_key:
-            raise ValueError("RAG_API_KEY or OPENAI_API_KEY is required for API generation")
+            raise ValueError("An API key is required for API generation. Set GEMINI_API_KEY for Gemini, or RAG_API_KEY for your provider.")
         return FallbackGenerator(
             primary=ApiGenerator(
                 base_url=settings.api_base_url,

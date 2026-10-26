@@ -534,6 +534,20 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
             token=settings.embedding_service_token,
             expected_model_name=settings.embedding_service_expected_model,
         )
+    elif backend in {"sentence-transformers", "sentence_transformers", "st"}:
+        inner = SentenceTransformersEmbeddingModel(
+            model_name=settings.sentence_transformers_model,
+            device=settings.sentence_transformers_device,
+            batch_size=settings.sentence_transformers_batch_size,
+        )
+    elif backend == "remote":
+        inner = RemoteEmbeddingModel(
+            base_url=settings.embedding_service_url,
+            timeout_seconds=settings.embedding_service_timeout_seconds,
+            batch_size=settings.remote_embed_batch_size,
+            token=settings.embedding_service_token,
+            expected_model_name=settings.embedding_service_expected_model,
+        )
     else:
         raise ValueError(f"Unsupported embedding backend: {backend!r}")
 

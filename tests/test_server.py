@@ -167,7 +167,8 @@ def test_health_survives_unreachable_remote_embedding_service(tmp_path) -> None:
     payload = response.json()
     assert payload["embedding_backend"] == "remote"
     assert payload["active_embedding_model"] is None
-    assert "127.0.0.1:9" in payload["embedding_model_error"]
+    assert "unavailable" in payload["embedding_model_error"]
+    assert "127.0.0.1:9" not in payload["embedding_model_error"]
 
 
 def test_health_survives_unreachable_qdrant(tmp_path) -> None:
@@ -188,11 +189,94 @@ def test_health_survives_unreachable_qdrant(tmp_path) -> None:
     payload = response.json()
     assert payload["vector_store_backend"] == "qdrant"
     assert payload["index_exists"] is None
-    assert "127.0.0.1:9" in payload["vector_store_error"]
+    assert "unavailable" in payload["vector_store_error"]
+    assert "127.0.0.1:9" not in payload["vector_store_error"]
 
     ask = client.post("/ask", json={"question": "What is a stroke?"})
     assert ask.status_code == 400
-    assert "Could not reach Qdrant" in ask.json()["detail"]
+    assert "Could not reach Qdrant" not in ask.json()["detail"]
+    assert "try again" in ask.json()["detail"].lower()
+
+
+def test_eval_run_in_background_reports_progress_and_result(tmp_path) -> None:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "dysphagia_rehabilitation.txt").write_text(
+        "Dysphagia after stroke is difficulty swallowing. Swallow rehabilitation may include "
+        "texture modified foods and liquids for safer eating.",
+        encoding="utf-8",
+    )
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=corpus,
+        index_path=tmp_path / ".rag" / "index.json",
+        chunk_size_chars=400,
+        chunk_overlap_chars=40,
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings))
+    assert client.post("/ingest", json={}).status_code == 200
+
+    accepted = client.post(
+        "/eval/run",
+        json={"question_ids": ["q2"], "top_k": 3, "background": True},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json() == {"accepted": True, "status": "/eval/status"}
+
+    deadline = time.monotonic() + 30
+    status = client.get("/eval/status").json()
+    while status["running"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+        status = client.get("/eval/status").json()
+
+    assert status["running"] is False
+    assert status["last_error"] is None
+    assert (status["completed"], status["total"]) == (1, 1)
+    assert status["last_result"]["summary"]["total_questions"] == 1
+    assert status["last_result"]["results"][0]["question_id"] == "q2"
+
+
+def test_eval_run_rejects_a_second_background_run(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    release = threading.Event()
+    app = create_app(settings)
+    client = TestClient(app)
+
+    with patch("medical_rag.server.evaluate_rag", side_effect=lambda *a, **k: release.wait()):
+        first = client.post("/eval/run", json={"background": True})
+        second = client.post("/eval/run", json={"background": True})
+        release.set()
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+
+
+def test_eval_run_resets_status_when_the_run_cannot_be_started(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    with patch(
+        "medical_rag.server.ThreadPoolExecutor.submit",
+        side_effect=RuntimeError("cannot schedule new futures after shutdown"),
+    ):
+        client = TestClient(create_app(settings))
+        response = client.post("/eval/run", json={"background": True})
+
+    assert response.status_code == 503
+    status = client.get("/eval/status").json()
+    assert status["running"] is False
+    assert "after shutdown" not in status["last_error"]
+    assert "try again" in status["last_error"]
+    assert "after shutdown" not in response.text
 
 
 def test_sources_reports_vector_store_failure_as_json(tmp_path) -> None:
@@ -210,7 +294,8 @@ def test_sources_reports_vector_store_failure_as_json(tmp_path) -> None:
         response = client.get("/sources")
 
     assert response.status_code == 503
-    assert "timed out" in response.json()["detail"]
+    assert "try again" in response.json()["detail"]
+    assert "timed out" not in response.json()["detail"]
 
 
 def test_unhandled_errors_return_json(tmp_path) -> None:
@@ -228,5 +313,5 @@ def test_unhandled_errors_return_json(tmp_path) -> None:
         response = client.post("/ask", json={"question": "What is a stroke?"})
 
     assert response.status_code == 500
-    assert "server log" in response.json()["detail"]
+    assert "try again" in response.json()["detail"]
     assert "internal:6333" not in response.text

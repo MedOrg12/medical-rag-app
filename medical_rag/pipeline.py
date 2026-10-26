@@ -21,6 +21,7 @@ from medical_rag.llm import SAFETY_NOTICE, Generator, make_generator
 from medical_rag.relevance import expand_query_for_retrieval, filter_results_for_question
 from medical_rag.reranker import Reranker, make_reranker
 from medical_rag.types import Chunk, Citation, IngestionReport, RagAnswer, SearchResult
+from medical_rag.validation import ensure_validation_available, screen_pages, validate_source
 from medical_rag.vector_store import (
     IngestStats,
     VectorStoreBackend,
@@ -43,9 +44,20 @@ class StrokeRAG:
             self._fallback_embedding = False
         else:
             self.embedding_model, self._fallback_embedding = make_embedding_model(self.settings)
-        self.generator = generator or make_generator(self.settings)
+        self._generator = generator
         self._reranker: Reranker = make_reranker(self.settings)
         self._store: VectorStoreBackend | None = None
+
+    @property
+    def generator(self) -> Generator:
+        # Ingestion and validation do not require the answer-generation credentials.
+        if self._generator is None:
+            self._generator = make_generator(self.settings)
+        return self._generator
+
+    @generator.setter
+    def generator(self, value: Generator) -> None:
+        self._generator = value
 
     def ingest(
         self,
@@ -55,8 +67,14 @@ class StrokeRAG:
         failed_only: bool = False,
         ocr_scanned: bool = False,
         pdf_workers: int | None = None,
+        dry_run: bool = False,
     ) -> IngestionReport:
         source = (source_path or self.settings.corpus_dir).expanduser().resolve()
+        if dry_run:
+            decisions = validate_source(source, self.settings, force, pdf_workers, ocr_scanned)
+            return IngestionReport(source_path=str(source), documents=len(decisions), pages=0, chunks=0,
+                                   index_path=str(self.settings.index_path), embedding_model=self.embedding_model.name,
+                                   validation_results=decisions, dry_run=True)
         if self.settings.manifest_path is not None and self.settings.extraction_cache_dir is not None:
             return self._ingest_incremental(
                 source=source,
@@ -71,12 +89,16 @@ class StrokeRAG:
         if not pages:
             raise ValueError(f"No supported text was found under {source}")
 
+        validation_results = None
+        if self.settings.effective_validation_mode != "off":
+            pages, validation_results = screen_pages(pages, self.settings, force=force)
+
         chunks = chunk_pages(
             pages,
             chunk_size_chars=self.settings.chunk_size_chars,
             chunk_overlap_chars=self.settings.chunk_overlap_chars,
         )
-        if not chunks:
+        if not chunks and self.settings.effective_validation_mode == "off":
             raise ValueError(f"No chunks could be created from {source}")
 
         store, stats = ingest_vector_store(self.settings, chunks, self.embedding_model)
@@ -84,6 +106,7 @@ class StrokeRAG:
 
         return IngestionReport(
             source_path=str(source),
+            validation_results=validation_results,
             documents=len({page.source_id for page in pages}),
             pages=len(pages),
             chunks=len(chunks),
@@ -145,7 +168,8 @@ class StrokeRAG:
             self.settings.vector_store_backend == "qdrant" and self.settings.qdrant_recreate_collection
         )
         if (
-            not changed_files
+            self.settings.effective_validation_mode == "off"
+            and not changed_files
             and not deleted_paths
             and not rebuild_requested
             and vector_store_exists(self.settings)
@@ -174,6 +198,10 @@ class StrokeRAG:
                 timings=timings,
             )
 
+        validation_results = None
+        if self.settings.effective_validation_mode != "off":
+            validation_results = validate_source(source, self.settings, force or not resume, workers, ocr_scanned)
+            ensure_validation_available(validation_results, self.settings)
         documents: list[ChunkedDocument] = []
         chunk_counts: dict[str, int] = {}
         failures: dict[str, str] = {}
@@ -185,7 +213,7 @@ class StrokeRAG:
                 unique_files,
                 cache_dir=self.settings.extraction_cache_dir,
                 options=IngestionOptions(
-                    force=force or not resume,
+                    force=(force or not resume) if validation_results is None else False,
                     resume=resume,
                     failed_only=failed_only,
                     ocr_scanned=ocr_scanned,
@@ -199,22 +227,25 @@ class StrokeRAG:
                     failures[path] = document.error
                     manifest.mark_failed(document.source, document.error)
                     continue
+                if (self.settings.effective_validation_mode == "enforce" and validation_results
+                        and path in validation_results and validation_results[path]["action"] != "accept"):
+                    continue
                 chunks, document.chunks = document.chunks, []  # the vector store owns them now
                 documents.append(document)
                 chunk_counts[path] = len(chunks)
                 yield from chunks
 
         chunks = chunk_stream()
-        # Wait for the first chunk before touching the vector store: with nothing to ingest,
-        # stale-point cleanup would otherwise empty an existing collection.
+        # Preserve the existing index when extraction yields nothing. A completed screening
+        # run may intentionally reject every document and must remove its stale chunks.
         first_chunk = next(chunks, None)
-        if first_chunk is None:
+        if first_chunk is None and not validation_results:
             if not documents:
                 raise ValueError(f"No supported text was extracted from {source}")
             raise ValueError(f"No chunks could be created from {source}")
 
         store, stats = ingest_vector_store(
-            self.settings, itertools.chain([first_chunk], chunks), self.embedding_model
+            self.settings, itertools.chain([first_chunk] if first_chunk is not None else [], chunks), self.embedding_model
         )
         # Extraction and chunking overlap the vector store; what was not hidden behind it
         # is the time the ingest loop waited on them. The worker totals show the work done.
@@ -248,6 +279,7 @@ class StrokeRAG:
 
         return IngestionReport(
             source_path=str(source),
+            validation_results=validation_results,
             documents=len(documents),
             pages=sum(document.pages for document in documents),
             chunks=stats.chunks_total,
@@ -276,6 +308,7 @@ class StrokeRAG:
         top_k: int | None = None,
         filters: dict[str, str] | None = None,
         answer_mode: str | None = None,
+        history: list[dict[str, str]] | None = None,
     ) -> RagAnswer:
         started = time.perf_counter()
         timings: dict[str, float] = {}
@@ -290,10 +323,15 @@ class StrokeRAG:
         if limit <= 0:
             raise ValueError("top_k must be greater than zero")
 
+        retrieval_question = question
+        # Short follow-ups often omit the topic; include recent user context for retrieval.
+        if history and len(question.split()) <= 12:
+            prior_questions = [m["content"] for m in history if m["role"] == "user"]
+            retrieval_question = "\n".join(prior_questions[-2:] + [question])
         candidate_limit = min(max(limit * 4, limit), 50)
         retrieval_started = time.perf_counter()
         results = store.search(
-            query=expand_query_for_retrieval(question),
+            query=expand_query_for_retrieval(retrieval_question),
             embedding_model=self.embedding_model,
             top_k=candidate_limit,
             filters=filters,

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from medical_rag.errors import user_error
 from medical_rag.types import Citation, RagAnswer
 
 DEFAULT_EVAL_DATA_PATH = Path(__file__).with_name("eval_data.json")
@@ -37,7 +40,7 @@ class EvalQuestion:
     should_refuse: bool = False
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "EvalQuestion":
+    def from_dict(cls, payload: dict[str, Any]) -> EvalQuestion:
         return cls(
             id=str(payload["id"]),
             question=str(payload["question"]),
@@ -126,23 +129,31 @@ def evaluate_rag(
     answer_mode: str | None = None,
     question_ids: list[str] | None = None,
     include_answers: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> EvalSuiteResult:
+    """Run the selected questions in order. ``on_progress(done, total)`` is called before
+    the first question and after each one."""
     if questions is None:
         version, questions = load_eval_suite()
     selected_ids = set(question_ids or [])
     selected = [item for item in questions if not selected_ids or item.id in selected_ids]
 
     started = time.perf_counter()
-    results = [
-        evaluate_question(
-            rag=rag,
-            item=item,
-            top_k=top_k,
-            answer_mode=answer_mode,
-            include_answer=include_answers,
+    results: list[EvalQuestionResult] = []
+    if on_progress is not None:
+        on_progress(0, len(selected))
+    for item in selected:
+        results.append(
+            evaluate_question(
+                rag=rag,
+                item=item,
+                top_k=top_k,
+                answer_mode=answer_mode,
+                include_answer=include_answers,
+            )
         )
-        for item in selected
-    ]
+        if on_progress is not None:
+            on_progress(len(results), len(selected))
     duration = time.perf_counter() - started
 
     return EvalSuiteResult(
@@ -165,6 +176,7 @@ def evaluate_question(
     try:
         response: RagAnswer = rag.ask(item.question, top_k=top_k, answer_mode=answer_mode)
     except Exception as exc:
+        logging.getLogger(__name__).exception("Evaluation question failed")
         return EvalQuestionResult(
             question_id=item.id,
             question=item.question,
@@ -180,7 +192,7 @@ def evaluate_question(
             latency_seconds=round(time.perf_counter() - started, 4),
             answer_snippet="",
             citations=[],
-            error=str(exc),
+            error=user_error(exc),
         )
 
     latency = round(time.perf_counter() - started, 4)

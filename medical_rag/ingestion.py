@@ -61,6 +61,7 @@ class ChunkedDocument:
     scanned_pages: int = 0
     from_cache: bool = False
     error: str | None = None
+    screening_pages: list[PageText] | None = None
     extraction_seconds: float = 0.0
     chunking_seconds: float = 0.0
 
@@ -410,6 +411,7 @@ def iter_chunked_documents(
     options: IngestionOptions,
     chunk_size_chars: int,
     chunk_overlap_chars: int,
+    collect_screening_pages: bool = False,
 ) -> Iterator[ChunkedDocument]:
     """Extract (or load from the cache) and chunk ``files`` on worker processes, yielding
     each document in input order as soon as it and every earlier one are ready.
@@ -426,6 +428,7 @@ def iter_chunked_documents(
         ocr_scanned=options.ocr_scanned,
         chunk_size_chars=chunk_size_chars,
         chunk_overlap_chars=chunk_overlap_chars,
+        collect_screening_pages=collect_screening_pages,
     )
     workers = max(1, options.pdf_workers)
     if workers == 1:
@@ -492,6 +495,7 @@ def _extract_and_chunk(
     ocr_scanned: bool,
     chunk_size_chars: int,
     chunk_overlap_chars: int,
+    collect_screening_pages: bool = False,
 ) -> ChunkedDocument:
     started = time.perf_counter()
     try:
@@ -506,6 +510,8 @@ def _extract_and_chunk(
     return ChunkedDocument(
         source=file,
         chunks=chunks,
+        screening_pages=([p for p in document.pages if (p.page_number or 1) <= 3]
+                         if collect_screening_pages else None),
         pages=len(document.pages),
         scanned_pages=document.scanned_pages,
         from_cache=document.from_cache,

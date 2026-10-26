@@ -186,3 +186,24 @@ def test_settings_read_qdrant_grpc_environment(monkeypatch, tmp_path) -> None:
 
     assert settings.qdrant_prefer_grpc is True
     assert settings.qdrant_grpc_port == 16334
+
+
+def test_gemini_configuration_uses_google_key_and_models(monkeypatch, tmp_path):
+    monkeypatch.setenv("RAG_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+    monkeypatch.setenv("GEMINI_API_KEY", "google-test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    monkeypatch.delenv("RAG_API_GENERATION_MODEL", raising=False)
+    monkeypatch.delenv("RAG_VALIDATION_MODEL", raising=False)
+    settings = Settings.from_env(tmp_path)
+    assert settings.api_key == "google-test-key"
+    assert settings.api_generation_model == "gemini-2.5-flash"
+    assert settings.validation_model == "gemini-2.5-flash"
+    assert settings.with_paths().api_key == "google-test-key"
+
+
+def test_gemini_does_not_use_openai_credentials(monkeypatch, tmp_path):
+    monkeypatch.setenv("RAG_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "RAG_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    assert Settings.from_env(tmp_path).api_key == ""
