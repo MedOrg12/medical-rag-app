@@ -117,6 +117,7 @@ class Settings:
     qdrant_timeout_seconds: float = 120.0
     qdrant_prefer_grpc: bool = False
     qdrant_grpc_port: int = 6334
+    qdrant_staging_dir: Path | None = None
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> "Settings":
@@ -203,6 +204,9 @@ class Settings:
             qdrant_prefer_grpc=os.getenv("RAG_QDRANT_PREFER_GRPC", "false").lower()
             in {"1", "true", "yes", "on"},
             qdrant_grpc_port=_env_int("RAG_QDRANT_GRPC_PORT", 6334),
+            qdrant_staging_dir=_resolve_path(root, os.environ["RAG_QDRANT_STAGING_DIR"])
+            if os.getenv("RAG_QDRANT_STAGING_DIR")
+            else None,
         )
 
     def with_paths(
