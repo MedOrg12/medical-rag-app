@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY medical_rag/ ./medical_rag/
@@ -27,12 +27,18 @@ ENV PYTHONUNBUFFERED=1 \
     RAG_INDEX_PATH=/app/.rag/index.json \
     RAG_MANIFEST_PATH=/app/.rag/manifest.sqlite \
     RAG_EXTRACTION_CACHE_DIR=/app/.rag/extracted \
-    RAG_EMBEDDING_CACHE_PATH=/app/.rag/embedding_cache.json \
     RAG_PDF_WORKERS=1 \
     RAG_EMBED_BATCH_SIZE=64 \
-    RAG_EMBEDDING_BACKEND=hash \
+    RAG_EMBEDDING_BACKEND=auto \
     RAG_GENERATION_BACKEND=extractive \
-    RAG_ANSWER_MODE=patient
+    RAG_API_BASE_URL=https://api.openai.com/v1 \
+    RAG_API_GENERATION_MODEL=gpt-4o-mini \
+    RAG_API_EMBEDDING_MODEL=text-embedding-3-small \
+    RAG_API_MAX_OUTPUT_TOKENS=800 \
+    RAG_API_REASONING_EFFORT= \
+    RAG_API_MAX_RETRIES=2 \
+    RAG_ANSWER_MODE=patient \
+    RAG_REQUEST_TIMEOUT_SECONDS=120
 
 EXPOSE 8000
 

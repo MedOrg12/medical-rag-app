@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -58,10 +58,14 @@ class IngestionReport:
     duplicate_files: int = 0
     deleted_files: int = 0
     scanned_pages: int = 0
+    chunks_embedded: int = 0
+    chunks_reused: int = 0
     skipped_unchanged: bool = False
     manifest_path: str | None = None
     extraction_cache_dir: str | None = None
     timings: dict[str, float] | None = None
+    # Detailed vector-store phase timings and counters (IngestStats), for benchmarking.
+    vector_store: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -78,6 +82,7 @@ class RagAnswer:
     safety_notice: str
     retrieval_mode: str = "vector"
     fallback_embedding: bool = False
+    timings: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

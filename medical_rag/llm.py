@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
@@ -40,6 +41,8 @@ caveats when present in the retrieved passages, and note evidence limitations. D
 recommendations, trial findings, observational evidence, and rehabilitation guidance when the retrieved
 passages make that clear.""",
 }
+
+_RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class Generator(ABC):
@@ -135,6 +138,94 @@ class OllamaGenerator(Generator):
 
 
 @dataclass
+class ApiGenerator(Generator):
+    base_url: str
+    api_key: str
+    model: str
+    temperature: float = 0.1
+    timeout_seconds: float = 20.0
+    max_output_tokens: int = 800
+    reasoning_effort: str = ""
+    max_retries: int = 2
+
+    @property
+    def model_name(self) -> str:
+        return f"api:{self.model}"
+
+    def generate(
+        self, question: str, results: list[SearchResult], answer_mode: str = "patient"
+    ) -> str:
+        if not results:
+            return (
+                "I could not find a relevant indexed passage that answers that question. "
+                "The indexed corpus may not contain enough detail on this topic, or the index may need "
+                "to be rebuilt after recent retrieval changes."
+            )
+
+        payload_data = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": _system_prompt(answer_mode)},
+                {"role": "user", "content": _user_prompt(question, results, answer_mode)},
+            ],
+            "temperature": self.temperature,
+        }
+        if self.max_output_tokens > 0:
+            payload_data["max_tokens"] = self.max_output_tokens
+        reasoning_effort = _reasoning_effort(
+            base_url=self.base_url,
+            model=self.model,
+            configured=self.reasoning_effort,
+        )
+        if reasoning_effort:
+            payload_data["reasoning_effort"] = reasoning_effort
+
+        payload = json.dumps(payload_data).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url.rstrip('/')}/chat/completions",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+
+        data = self._send_request(request)
+
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise RuntimeError("API chat completion response did not include choices")
+        first_choice = choices[0]
+        content = (
+            (first_choice.get("message") or {}).get("content")
+            if isinstance(first_choice, dict)
+            else None
+        )
+        if not content:
+            raise RuntimeError("API chat completion response did not include message.content")
+        return str(content).strip()
+
+    def _send_request(self, request: urllib.request.Request) -> dict:
+        attempts = max(0, self.max_retries) + 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                if _should_retry_http(exc, attempt, attempts):
+                    _sleep_before_retry(exc, attempt)
+                    continue
+                raise RuntimeError(_api_error_message("chat completion", exc)) from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                raise RuntimeError(
+                    f"Could not generate with API provider at {self.base_url}: "
+                    f"{_network_error_detail(exc)}"
+                ) from exc
+        raise RuntimeError("Could not get API chat completion response from provider")
+
+
+@dataclass
 class FallbackGenerator(Generator):
     primary: Generator
     fallback: Generator
@@ -168,6 +259,22 @@ def make_generator(settings: Settings) -> Generator:
                 model_name=settings.ollama_generation_model,
                 temperature=settings.temperature,
                 timeout_seconds=settings.request_timeout_seconds,
+            ),
+            fallback=extractive,
+        )
+    if settings.generation_backend == "api":
+        if not settings.api_key:
+            raise ValueError("RAG_API_KEY or OPENAI_API_KEY is required for API generation")
+        return FallbackGenerator(
+            primary=ApiGenerator(
+                base_url=settings.api_base_url,
+                api_key=settings.api_key,
+                model=settings.api_generation_model,
+                temperature=settings.temperature,
+                timeout_seconds=settings.request_timeout_seconds,
+                max_output_tokens=settings.api_max_output_tokens,
+                reasoning_effort=settings.api_reasoning_effort,
+                max_retries=settings.api_max_retries,
             ),
             fallback=extractive,
         )
@@ -332,3 +439,47 @@ def _first_citation_with(results: list[SearchResult], terms: set[str]) -> int:
         if _has_any(_evidence_text(result).lower(), terms):
             return citation_id
     return 1
+
+
+def _api_error_message(operation: str, exc: urllib.error.HTTPError) -> str:
+    detail = ""
+    try:
+        body = exc.read().decode("utf-8").strip()
+        payload = json.loads(body) if body else {}
+        message = (payload.get("error") or {}).get("message") if isinstance(payload, dict) else ""
+        if isinstance(message, str) and message:
+            detail = f": {message}"
+        elif body:
+            detail = f": {body[:500]}"
+    except Exception:
+        detail = ""
+    return f"Could not get API {operation} response from provider ({exc.code}){detail}"
+
+
+def _reasoning_effort(base_url: str, model: str, configured: str) -> str:
+    configured = configured.strip().lower()
+    if configured and configured not in {"none", "off", "false", "0"}:
+        return configured
+    if "generativelanguage.googleapis.com" in base_url and model.startswith("gemini-3"):
+        return "low"
+    return ""
+
+
+def _should_retry_http(exc: urllib.error.HTTPError, attempt: int, attempts: int) -> bool:
+    return exc.code in _RETRYABLE_HTTP_STATUS_CODES and attempt < attempts - 1
+
+
+def _sleep_before_retry(exc: urllib.error.HTTPError, attempt: int) -> None:
+    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+    try:
+        delay = float(retry_after) if retry_after else min(2**attempt, 4)
+    except ValueError:
+        delay = min(2**attempt, 4)
+    time.sleep(max(0.0, delay))
+
+
+def _network_error_detail(exc: BaseException) -> str:
+    reason = getattr(exc, "reason", None)
+    if reason is not None:
+        return str(reason)
+    return str(exc) or exc.__class__.__name__

@@ -3,365 +3,78 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stroke Medical RAG</title>
-    <style>
-      :root {
-        color-scheme: light;
-        --ink: #1f2933;
-        --muted: #5b6673;
-        --line: #d7dee8;
-        --panel: #ffffff;
-        --page: #f5f7fb;
-        --accent: #0f766e;
-        --accent-dark: #115e59;
-        --danger: #b42318;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        background: var(--page);
-        color: var(--ink);
-        font-family:
-          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-
-      header {
-        border-bottom: 1px solid var(--line);
-        background: var(--panel);
-      }
-
-      .bar,
-      main {
-        width: min(1160px, calc(100vw - 32px));
-        margin: 0 auto;
-      }
-
-      .bar {
-        min-height: 64px;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: 20px;
-        font-weight: 650;
-      }
-
-      .status {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: var(--muted);
-        font-size: 14px;
-      }
-
-      .dot {
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        background: var(--danger);
-      }
-
-      .dot.ready {
-        background: var(--accent);
-      }
-
-      main {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 320px;
-        gap: 18px;
-        padding: 24px 0;
-      }
-
-      section,
-      aside {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-      }
-
-      .workspace {
-        min-height: calc(100vh - 112px);
-        display: grid;
-        grid-template-rows: 1fr auto;
-      }
-
-      .answer {
-        padding: 22px;
-        overflow-wrap: anywhere;
-        line-height: 1.58;
-        white-space: pre-wrap;
-      }
-
-      .empty {
-        color: var(--muted);
-      }
-
-      form {
-        border-top: 1px solid var(--line);
-        padding: 14px;
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) 156px auto;
-        gap: 12px;
-      }
-
-      textarea,
-      input,
-      select {
-        width: 100%;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 11px 12px;
-        color: var(--ink);
-        font: inherit;
-        background: #fff;
-      }
-
-      textarea {
-        min-height: 72px;
-        resize: vertical;
-      }
-
-      button {
-        border: 0;
-        border-radius: 6px;
-        background: var(--accent);
-        color: #fff;
-        font: inherit;
-        font-weight: 650;
-        padding: 0 18px;
-        cursor: pointer;
-        min-width: 92px;
-      }
-
-      button:hover {
-        background: var(--accent-dark);
-      }
-
-      button:disabled {
-        cursor: not-allowed;
-        opacity: 0.6;
-      }
-
-      aside {
-        padding: 16px;
-        align-self: start;
-      }
-
-      h2 {
-        margin: 0 0 12px;
-        font-size: 15px;
-      }
-
-      .ingest {
-        display: grid;
-        gap: 10px;
-        margin-bottom: 20px;
-      }
-
-      .ingest button {
-        min-height: 42px;
-      }
-
-      .sources {
-        display: grid;
-        gap: 8px;
-        max-height: 52vh;
-        overflow: auto;
-      }
-
-      .source {
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        padding: 10px;
-      }
-
-      .source strong {
-        display: block;
-        font-size: 13px;
-        overflow-wrap: anywhere;
-      }
-
-      .source span,
-      .meta {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .citations {
-        border-top: 1px solid var(--line);
-        padding: 14px 22px 18px;
-        display: grid;
-        gap: 10px;
-      }
-
-      .citation {
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.45;
-      }
-
-      @media (max-width: 860px) {
-        main {
-          grid-template-columns: 1fr;
-        }
-
-        .workspace {
-          min-height: 58vh;
-        }
-
-        form {
-          grid-template-columns: 1fr;
-        }
-
-        button {
-          min-height: 42px;
-        }
-      }
-    </style>
+    <meta name="theme-color" content="#ffffff" />
+    <title>Stroke Companion</title>
+    <link rel="stylesheet" href="/static/patient.css" />
+    <script src="/static/patient.js" defer></script>
   </head>
   <body>
-    <header>
-      <div class="bar">
-        <h1>Stroke Medical RAG</h1>
-        <div class="status"><span id="status-dot" class="dot"></span><span id="status">Checking</span></div>
-      </div>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Stroke Companion home">
+        <svg class="brand-icon" aria-hidden="true"><use href="/static/icons.svg#heart-pulse"></use></svg>
+        <span>Stroke Companion</span>
+      </a>
+      <button id="new-session" class="quiet-button" type="button" aria-label="Start fresh" title="Start fresh">
+        <svg aria-hidden="true"><use href="/static/icons.svg#plus"></use></svg>
+        <span>Start fresh</span>
+      </button>
     </header>
 
-    <main>
-      <section class="workspace">
-        <div>
-          <div id="answer" class="answer empty">Ask a question after the stroke corpus is indexed.</div>
-          <div id="citations" class="citations" hidden></div>
+    <main id="main">
+      <div id="availability" class="availability" hidden>
+        <p id="availability-message"></p>
+        <button id="check-status" class="quiet-button" type="button">
+          <svg aria-hidden="true"><use href="/static/icons.svg#rotate-ccw"></use></svg>
+          <span>Try again</span>
+        </button>
+      </div>
+
+      <section id="welcome" class="welcome" aria-labelledby="welcome-title">
+        <p class="eyebrow">For patients and caregivers</p>
+        <h1 id="welcome-title">Your questions about stroke.</h1>
+        <p class="intro">What is on your mind today?</p>
+        <div class="suggestions" aria-label="Suggested questions">
+          <button type="button" data-question="What should I eat after a stroke?">
+            <span>Eating after a stroke</span>
+            <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
+          </button>
+          <button type="button" data-question="What is dysphagia after stroke?">
+            <span>Difficulty swallowing</span>
+            <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
+          </button>
+          <button type="button" data-question="What does rehabilitation after a stroke involve?">
+            <span>Recovery and rehabilitation</span>
+            <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
+          </button>
+          <button type="button" data-question="How can I reduce the risk of another stroke?">
+            <span>Preventing another stroke</span>
+            <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
+          </button>
         </div>
-        <form id="ask-form">
-          <textarea id="question" name="question" placeholder="Ask about stroke diagnosis, prevention, rehabilitation, systems of care..." required></textarea>
-          <select id="answer-mode" name="answer-mode" aria-label="Answer mode">
-            <option value="patient">Patient</option>
-            <option value="clinician">Clinician</option>
-          </select>
-          <button id="ask-button" type="submit">Ask</button>
-        </form>
       </section>
 
-      <aside>
-        <h2>Index</h2>
-        <div class="ingest">
-          <input id="source-path" placeholder="pdfs" />
-          <button id="ingest-button" type="button">Ingest</button>
-          <div id="ingest-result" class="meta"></div>
-        </div>
+      <section id="messages" class="messages" aria-label="Questions and answers" tabindex="-1" hidden></section>
 
-        <h2>Sources</h2>
-        <div id="sources" class="sources"></div>
-      </aside>
+      <div class="composer-area">
+        <form id="ask-form" class="composer">
+          <label for="question" class="sr-only">Your stroke question</label>
+          <textarea id="question" name="question" placeholder="Ask a question about stroke..." rows="2" maxlength="4000" required></textarea>
+          <div class="composer-bottom">
+            <span id="composer-status" class="composer-status" role="status">Checking availability...</span>
+            <button id="send" class="icon-button send" type="submit" aria-label="Send question" title="Send question" disabled>
+              <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up"></use></svg>
+            </button>
+            <button id="stop" class="icon-button send" type="button" aria-label="Stop waiting for this answer" title="Stop waiting" hidden>
+              <svg aria-hidden="true"><use href="/static/icons.svg#square"></use></svg>
+            </button>
+          </div>
+        </form>
+        <p class="education-note">For education. Answers may be incomplete; discuss care decisions with your healthcare team.</p>
+      </div>
     </main>
 
-    <script>
-      const statusDot = document.querySelector("#status-dot");
-      const statusText = document.querySelector("#status");
-      const answer = document.querySelector("#answer");
-      const citations = document.querySelector("#citations");
-      const sources = document.querySelector("#sources");
-      const askButton = document.querySelector("#ask-button");
-      const ingestButton = document.querySelector("#ingest-button");
-      const ingestResult = document.querySelector("#ingest-result");
-
-      async function requestJson(path, options = {}) {
-        const response = await fetch(path, {
-          headers: { "Content-Type": "application/json" },
-          ...options,
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.detail || "Request failed");
-        }
-        return payload;
-      }
-
-      async function refreshStatus() {
-        const payload = await requestJson("/health");
-        statusDot.classList.toggle("ready", payload.index_exists);
-        statusText.textContent = payload.index_exists ? "Indexed" : "No index";
-      }
-
-      async function refreshSources() {
-        try {
-          const payload = await requestJson("/sources");
-          sources.innerHTML = payload
-            .map(
-              (source) =>
-                `<div class="source"><strong>${escapeHtml(source.source_id)}</strong><span>${source.chunks} chunks</span></div>`,
-            )
-            .join("");
-        } catch {
-          sources.innerHTML = '<div class="meta">No sources indexed.</div>';
-        }
-      }
-
-      document.querySelector("#ingest-button").addEventListener("click", async () => {
-        ingestButton.disabled = true;
-        ingestResult.textContent = "Indexing...";
-        try {
-          const sourcePath = document.querySelector("#source-path").value.trim();
-          const payload = await requestJson("/ingest", {
-            method: "POST",
-            body: JSON.stringify({ source_path: sourcePath || null }),
-          });
-          ingestResult.textContent = `${payload.documents} documents, ${payload.chunks} chunks`;
-          await refreshStatus();
-          await refreshSources();
-        } catch (error) {
-          ingestResult.textContent = error.message;
-        } finally {
-          ingestButton.disabled = false;
-        }
-      });
-
-      document.querySelector("#ask-form").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        askButton.disabled = true;
-        answer.classList.remove("empty");
-        answer.textContent = "Retrieving...";
-        citations.hidden = true;
-        try {
-          const question = document.querySelector("#question").value.trim();
-          const answerMode = document.querySelector("#answer-mode").value;
-          const payload = await requestJson("/ask", {
-            method: "POST",
-            body: JSON.stringify({ question, answer_mode: answerMode }),
-          });
-          answer.textContent = payload.answer;
-          citations.innerHTML = payload.citations
-            .map(
-              (citation) =>
-                `<div class="citation">[${citation.id}] ${escapeHtml(citation.source)}${citation.page ? `, page ${citation.page}` : ""} · score ${citation.score}<br>${escapeHtml(citation.excerpt)}</div>`,
-            )
-            .join("");
-          citations.hidden = payload.citations.length === 0;
-        } catch (error) {
-          answer.textContent = error.message;
-        } finally {
-          askButton.disabled = false;
-        }
-      });
-
-      function escapeHtml(value) {
-        return String(value).replace(/[&<>"']/g, (char) => {
-          const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-          return map[char];
-        });
-      }
-
-      refreshStatus().catch(() => {});
-      refreshSources().catch(() => {});
-    </script>
+    <footer class="footer">
+      <p>Possible stroke symptoms? Call emergency services immediately.</p>
+    </footer>
   </body>
 </html>

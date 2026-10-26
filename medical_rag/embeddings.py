@@ -4,6 +4,8 @@ import hashlib
 import json
 import math
 import re
+import sys
+import time
 import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
@@ -13,6 +15,7 @@ from pathlib import Path
 from medical_rag.config import Settings
 
 _TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_+-]*|\d+(?:\.\d+)?")
+_RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class EmbeddingModel(ABC):
@@ -24,6 +27,9 @@ class EmbeddingModel(ABC):
     @abstractmethod
     def embed(self, texts: list[str]) -> list[list[float]]:
         raise NotImplementedError
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed([text])[0]
 
 
 @dataclass
@@ -112,6 +118,68 @@ class OllamaEmbeddingModel(EmbeddingModel):
 
 
 @dataclass
+class ApiEmbeddingModel(EmbeddingModel):
+    base_url: str
+    api_key: str
+    model: str
+    timeout_seconds: float = 20.0
+    max_retries: int = 2
+
+    @property
+    def name(self) -> str:
+        return f"api:{self.model}"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+
+        payload = json.dumps({"model": self.model, "input": texts}).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url.rstrip('/')}/embeddings",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            method="POST",
+        )
+        data = self._send_request(request)
+
+        items = data.get("data")
+        if not isinstance(items, list) or len(items) != len(texts):
+            raise RuntimeError("API embedding response did not include expected data entries")
+
+        indexed_items = []
+        for position, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise RuntimeError("API embedding response included a malformed data entry")
+            embedding = item.get("embedding")
+            if not isinstance(embedding, list):
+                raise RuntimeError("API embedding response did not include an embedding list")
+            indexed_items.append((int(item.get("index", position)), embedding))
+
+        indexed_items.sort(key=lambda item: item[0])
+        return [_normalize([float(value) for value in embedding]) for _, embedding in indexed_items]
+
+    def _send_request(self, request: urllib.request.Request) -> dict:
+        attempts = max(0, self.max_retries) + 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                if _should_retry_http(exc, attempt, attempts):
+                    _sleep_before_retry(exc, attempt)
+                    continue
+                raise RuntimeError(_api_error_message("embedding", exc)) from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                raise RuntimeError(
+                    f"Could not get API embeddings from {self.base_url}: {_network_error_detail(exc)}"
+                ) from exc
+        raise RuntimeError("Could not get API embedding response from provider")
+
+
+@dataclass
 class CachedEmbeddingModel(EmbeddingModel):
     """Transparent disk-backed cache wrapping any EmbeddingModel.
 
@@ -125,15 +193,20 @@ class CachedEmbeddingModel(EmbeddingModel):
     cache_path: Path
     batch_size: int = 64
     _cache: dict[str, list[float]] = field(default_factory=dict, init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        self._load()
+    _loaded: bool = field(default=False, init=False, repr=False)
 
     @property
     def name(self) -> str:
         return self.inner.name
 
+    def embed_query(self, text: str) -> list[float]:
+        # Query embeddings must not rewrite the corpus-sized ingestion cache.
+        return self.inner.embed_query(text)
+
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if not self._loaded:
+            self._load()
+            self._loaded = True
         results: list[list[float] | None] = [None] * len(texts)
         misses: list[tuple[int, str]] = []
 
@@ -175,16 +248,242 @@ class CachedEmbeddingModel(EmbeddingModel):
         self.cache_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+@dataclass
+class RemoteEmbeddingModel(EmbeddingModel):
+    base_url: str
+    timeout_seconds: float = 60.0
+    batch_size: int = 64
+    token: str | None = None
+    expected_model_name: str | None = None
+    _model_name: str | None = field(default=None, init=False, repr=False)
+    _dimensions: int | None = field(default=None, init=False, repr=False)
+    _max_batch_size: int | None = field(default=None, init=False, repr=False)
+
+    @property
+    def name(self) -> str:
+        self._load_health()
+        assert self._model_name is not None
+        return self._model_name
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+
+        model_name = self.name
+        dimensions = self._dimensions
+        max_batch_size = self._max_batch_size
+        if dimensions is None or max_batch_size is None:
+            raise RuntimeError("Embedding service health response was incomplete")
+
+        embeddings: list[list[float]] = []
+        batch_size = min(max(1, self.batch_size), max(1, max_batch_size))
+        for batch in _text_batches(texts, batch_size):
+            payload = json.dumps({"texts": batch, "model_name": model_name}).encode("utf-8")
+            request = urllib.request.Request(
+                f"{self.base_url.rstrip('/')}/embed",
+                data=payload,
+                headers=self._headers(),
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                raise RuntimeError(self._format_http_error(exc)) from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                raise RuntimeError(
+                    f"Could not reach embedding service at {self.base_url}: {exc}"
+                ) from exc
+
+            response_model_name = data.get("model_name")
+            if response_model_name != model_name:
+                raise RuntimeError(
+                    "Embedding service returned model_name "
+                    f"{response_model_name!r}, expected {model_name!r}"
+                )
+
+            batch_embeddings = data.get("embeddings")
+            if not isinstance(batch_embeddings, list) or len(batch_embeddings) != len(batch):
+                raise RuntimeError(
+                    "Embedding service returned "
+                    f"{len(batch_embeddings) if isinstance(batch_embeddings, list) else 'invalid'} "
+                    f"embeddings for a batch of {len(batch)} texts"
+                )
+
+            for index, vector in enumerate(batch_embeddings):
+                if not isinstance(vector, list):
+                    raise RuntimeError("Embedding service returned a non-list embedding vector")
+                if len(vector) != dimensions:
+                    raise RuntimeError(
+                        "Embedding service returned vector with dimension "
+                        f"{len(vector)} at batch index {index}, expected {dimensions}"
+                    )
+                embeddings.append([float(value) for value in vector])
+
+        return embeddings
+
+    def _load_health(self) -> None:
+        if self._model_name is not None:
+            return
+
+        request = urllib.request.Request(f"{self.base_url.rstrip('/')}/health")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(
+                f"Could not reach embedding service at {self.base_url}: {exc}"
+            ) from exc
+
+        model_name = data.get("model_name")
+        dimensions = data.get("dimensions")
+        max_batch_size = data.get("max_batch_size")
+        if not isinstance(model_name, str) or not isinstance(dimensions, int) or not isinstance(
+            max_batch_size, int
+        ):
+            raise RuntimeError("Embedding service health response was incomplete")
+        if self.expected_model_name is not None and model_name != self.expected_model_name:
+            raise RuntimeError(
+                "Embedding service model mismatch: "
+                f"expected {self.expected_model_name!r}, got {model_name!r}"
+            )
+
+        self._model_name = model_name
+        self._dimensions = dimensions
+        self._max_batch_size = max_batch_size
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.token is not None:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return headers
+
+    def _format_http_error(self, exc: urllib.error.HTTPError) -> str:
+        message = str(exc)
+        try:
+            data = json.loads(exc.read().decode("utf-8"))
+            error = data.get("error")
+            if isinstance(error, dict) and isinstance(error.get("message"), str):
+                message = error["message"]
+        except Exception:
+            pass
+        return f"Embedding service returned HTTP {exc.code}: {message}"
+
+
+@dataclass
+class SentenceTransformersEmbeddingModel(EmbeddingModel):
+    model_name: str
+    device: str = "auto"
+    batch_size: int = 64
+    _model: object | None = field(default=None, init=False, repr=False)
+
+    @property
+    def name(self) -> str:
+        return f"sentence-transformers:{self.model_name}"
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        model = self._load_model()
+        started = time.perf_counter()
+        vectors = model.encode(
+            texts,
+            batch_size=max(1, self.batch_size),
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        encoded = time.perf_counter()
+        result = vectors.tolist()
+        print(
+            f"sentence-transformers: encoded {len(texts)} texts "
+            f"(max {max(len(t) for t in texts)} chars) in {encoded - started:.2f}s, "
+            f"converted in {time.perf_counter() - encoded:.2f}s",
+            file=sys.stderr,
+        )
+        return result
+
+    def _load_model(self):
+        if self._model is not None:
+            return self._model
+        # Importing sentence-transformers pulls in torch and transformers, thousands of files.
+        # On network filesystems this alone can take minutes, so time it separately.
+        import_started = time.perf_counter()
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise RuntimeError(
+                "sentence-transformers is required for "
+                "RAG_EMBEDDING_BACKEND=sentence-transformers"
+            ) from exc
+
+        device = None if self.device == "auto" else self.device
+        if device is not None and device.startswith("cuda"):
+            import torch
+
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    f"RAG_SENTENCE_TRANSFORMERS_DEVICE={device!r} but torch {torch.__version__} "
+                    f"reports no usable CUDA device (torch.version.cuda={torch.version.cuda!r}). "
+                    "Check that the job has a GPU allocated and that the CUDA runtime is on the "
+                    "library path, or set RAG_SENTENCE_TRANSFORMERS_DEVICE=cpu explicitly."
+                )
+        started = time.perf_counter()
+        self._model = SentenceTransformer(self.model_name, device=device)
+        print(
+            f"sentence-transformers: imported libraries in {started - import_started:.1f}s, "
+            f"loaded {self.model_name} on device {self._model.device} in "
+            f"{time.perf_counter() - started:.1f}s",
+            file=sys.stderr,
+        )
+        return self._model
+
+
 def _ollama_available(base_url: str, timeout: float = 2.0) -> bool:
     """Probe Ollama /api/tags endpoint; return True if reachable."""
+    return bool(list_ollama_models(base_url, timeout=timeout))
+
+
+def list_ollama_models(base_url: str, timeout: float = 2.0) -> list[str]:
+    """Return installed Ollama model names, or an empty list when Ollama is unreachable."""
     try:
         with urllib.request.urlopen(
             urllib.request.Request(f"{base_url.rstrip('/')}/api/tags"),
             timeout=timeout,
         ) as resp:
-            return resp.status == 200
+            if resp.status != 200:
+                return []
+            data = json.loads(resp.read().decode("utf-8"))
     except Exception:
-        return False
+        return []
+
+    models = data.get("models", [])
+    if not isinstance(models, list):
+        return []
+
+    names = []
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("model")
+        if isinstance(name, str) and name:
+            names.append(name)
+    return names
+
+
+def ollama_model_name_matches(configured: str, available: str) -> bool:
+    if configured == available:
+        return True
+    if ":" not in configured and available == f"{configured}:latest":
+        return True
+    return False
+
+
+def ollama_model_available(base_url: str, model: str, timeout: float = 2.0) -> bool:
+    return any(
+        ollama_model_name_matches(model, available)
+        for available in list_ollama_models(base_url, timeout)
+    )
 
 
 def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
@@ -197,7 +496,7 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
     fallback_used = False
 
     if backend == "auto":
-        if _ollama_available(settings.ollama_base_url):
+        if ollama_model_available(settings.ollama_base_url, settings.ollama_embedding_model):
             backend = "ollama"
         else:
             backend = "hash"
@@ -211,22 +510,41 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
             model=settings.ollama_embedding_model,
             timeout_seconds=settings.request_timeout_seconds,
         )
+    elif backend == "api":
+        if not settings.api_key:
+            raise ValueError("RAG_API_KEY or OPENAI_API_KEY is required for API embeddings")
+        inner = ApiEmbeddingModel(
+            base_url=settings.api_base_url,
+            api_key=settings.api_key,
+            model=settings.api_embedding_model,
+            timeout_seconds=settings.request_timeout_seconds,
+            max_retries=settings.api_max_retries,
+        )
+    elif backend in {"sentence-transformers", "sentence_transformers", "st"}:
+        inner = SentenceTransformersEmbeddingModel(
+            model_name=settings.sentence_transformers_model,
+            device=settings.sentence_transformers_device,
+            batch_size=settings.sentence_transformers_batch_size,
+        )
+    elif backend == "remote":
+        inner = RemoteEmbeddingModel(
+            base_url=settings.embedding_service_url,
+            timeout_seconds=settings.embedding_service_timeout_seconds,
+            batch_size=settings.remote_embed_batch_size,
+            token=settings.embedding_service_token,
+            expected_model_name=settings.embedding_service_expected_model,
+        )
     else:
         raise ValueError(f"Unsupported embedding backend: {backend!r}")
 
-    if settings.embedding_cache_path is not None:
-        return (
-            CachedEmbeddingModel(
-                inner=inner,
-                cache_path=settings.embedding_cache_path,
-                batch_size=settings.embedding_batch_size,
-            ),
-            fallback_used,
-        )
     return inner, fallback_used
 
 
 def _batches(items: list[tuple[int, str]], batch_size: int) -> list[list[tuple[int, str]]]:
+    return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
+
+
+def _text_batches(items: list[str], batch_size: int) -> list[list[str]]:
     return [items[index : index + batch_size] for index in range(0, len(items), batch_size)]
 
 
@@ -239,3 +557,38 @@ def _normalize(vector: list[float]) -> list[float]:
     if norm == 0:
         return vector
     return [value / norm for value in vector]
+
+
+def _api_error_message(operation: str, exc: urllib.error.HTTPError) -> str:
+    detail = ""
+    try:
+        body = exc.read().decode("utf-8").strip()
+        payload = json.loads(body) if body else {}
+        message = (payload.get("error") or {}).get("message") if isinstance(payload, dict) else ""
+        if isinstance(message, str) and message:
+            detail = f": {message}"
+        elif body:
+            detail = f": {body[:500]}"
+    except Exception:
+        detail = ""
+    return f"Could not get API {operation} response from provider ({exc.code}){detail}"
+
+
+def _should_retry_http(exc: urllib.error.HTTPError, attempt: int, attempts: int) -> bool:
+    return exc.code in _RETRYABLE_HTTP_STATUS_CODES and attempt < attempts - 1
+
+
+def _sleep_before_retry(exc: urllib.error.HTTPError, attempt: int) -> None:
+    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+    try:
+        delay = float(retry_after) if retry_after else min(2**attempt, 4)
+    except ValueError:
+        delay = min(2**attempt, 4)
+    time.sleep(max(0.0, delay))
+
+
+def _network_error_detail(exc: BaseException) -> str:
+    reason = getattr(exc, "reason", None)
+    if reason is not None:
+        return str(reason)
+    return str(exc) or exc.__class__.__name__

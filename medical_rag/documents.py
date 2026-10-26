@@ -8,6 +8,7 @@ from typing import Any
 from medical_rag.types import PageText
 
 SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md", ".markdown"}
+EXCLUDED_SOURCE_FILENAMES = {"sources.md"}
 
 _NOISE_PREFIXES = (
     "copyright",
@@ -28,16 +29,23 @@ def iter_source_files(path: Path) -> list[Path]:
         raise FileNotFoundError(f"Source path does not exist: {path}")
 
     if path.is_file():
-        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-            raise ValueError(f"Unsupported source file type: {path.suffix}")
+        if not is_supported_source_file(path):
+            raise ValueError(f"Unsupported or excluded source file: {path.name}")
         return [path]
 
     files = [
         candidate
         for candidate in path.rglob("*")
-        if candidate.is_file() and candidate.suffix.lower() in SUPPORTED_EXTENSIONS
+        if candidate.is_file() and is_supported_source_file(candidate)
     ]
     return sorted(files, key=lambda item: str(item).lower())
+
+
+def is_supported_source_file(path: Path) -> bool:
+    return (
+        path.suffix.lower() in SUPPORTED_EXTENSIONS
+        and path.name.lower() not in EXCLUDED_SOURCE_FILENAMES
+    )
 
 
 def load_documents(path: Path) -> list[PageText]:

@@ -7,9 +7,10 @@ Clean stroke-focused retrieval-augmented generation system. The previous reposit
 - PDF, Markdown, and text ingestion
 - Page-aware chunking with stable chunk IDs
 - Local deterministic vector retrieval with no external service required
-- Optional Ollama embeddings and chat generation
-- JSON vector index stored at `.rag/index.json`
-- FastAPI API and a minimal browser UI
+- Optional Ollama, OpenAI-compatible API, sentence-transformers, or remote-service embeddings
+- Optional Ollama or OpenAI-compatible API chat generation
+- JSON vector index stored at `.rag/index.json`, or a Qdrant collection (`RAG_VECTOR_STORE=qdrant`)
+- FastAPI API and a browser RAG workbench
 - CLI commands for ingesting and asking questions
 - Focused tests for the core RAG path
 
@@ -83,6 +84,27 @@ docker compose --profile ollama up -d --build medical-rag
 
 The default Docker path still works without Ollama by using local hashing retrieval and extractive answers.
 
+To run with a hosted OpenAI-compatible API for generation:
+
+```bash
+RAG_GENERATION_BACKEND=api \
+RAG_API_KEY=sk-... \
+RAG_API_GENERATION_MODEL=gpt-4o-mini \
+docker compose up -d --build medical-rag
+```
+
+To use hosted API embeddings too, reingest because the vector index must match the embedding model:
+
+```bash
+RAG_GENERATION_BACKEND=api \
+RAG_EMBEDDING_BACKEND=api \
+RAG_API_KEY=sk-... \
+RAG_API_GENERATION_MODEL=gpt-4o-mini \
+RAG_API_EMBEDDING_MODEL=text-embedding-3-small \
+RAG_FORCE_REINGEST=true \
+docker compose up -d --build medical-rag
+```
+
 ## Large Corpus Ingestion
 
 The ingestion pipeline is designed to handle larger corpora without reprocessing every PDF on every run. It keeps a SQLite manifest, an extracted-text cache, and an embedding cache under `.rag/`.
@@ -105,7 +127,7 @@ What this does:
 - Skips the whole run quickly when the corpus and index are unchanged.
 - Tracks file status in `.rag/manifest.sqlite`.
 - Caches extracted text in `.rag/extracted/`.
-- Caches embeddings in `.rag/embedding_cache.json`.
+- Reuses vectors already stored for unchanged chunks instead of re-embedding them.
 - Deduplicates identical files by SHA-256.
 - Records failed files so they can be retried with `--failed-only`.
 - Detects scanned PDF pages and records them without running slow OCR by default.
@@ -124,12 +146,13 @@ curl http://127.0.0.1:8000/ingest/status
 Tuning knobs:
 
 - `RAG_PDF_WORKERS`: parallel PDF extraction workers. Start with `2` to `4`.
-- `RAG_EMBED_BATCH_SIZE`: embedding batch size for cache misses. Start with `64`.
+- `RAG_EMBED_BATCH_SIZE`: how many chunks are embedded and written per batch. Start with `64`.
 - `RAG_MANIFEST_PATH`: manifest SQLite path.
 - `RAG_EXTRACTION_CACHE_DIR`: extracted text cache directory.
-- `RAG_EMBEDDING_CACHE_PATH`: embedding cache path.
 
 Keep embedding workers conservative with local Ollama. PDF parsing can be parallelized, but local model embedding usually benefits more from batching than from high concurrency.
+
+For GPU-cluster ingestion into Qdrant, see `docs/SLURM_INGESTION.md` and the Slurm template at `scripts/slurm_ingest_qdrant.sbatch`.
 
 ## API
 
@@ -143,9 +166,48 @@ curl -X POST http://127.0.0.1:8000/ask \
   -d '{"question":"What does the indexed literature say about stroke rehabilitation?"}'
 ```
 
-## Ollama Generation
+## Generation Backends
 
-Default retrieval uses the built-in hashing vectorizer and default answers are extractive. Extractive mode cites retrieved passages, but it does not behave like a full chatbot. Use Ollama generation for synthesized responses grounded in the retrieved PDF chunks.
+Default retrieval uses the built-in hashing vectorizer and default answers are extractive. Extractive mode cites retrieved passages, but it does not behave like a full chatbot. Use `api` or `ollama` generation for synthesized responses grounded in the retrieved PDF chunks.
+
+### API generation
+
+The `api` backend uses an OpenAI-compatible `/v1/chat/completions` endpoint. It is opt-in and does not remove Ollama support.
+
+```bash
+export RAG_GENERATION_BACKEND=api
+export RAG_API_BASE_URL=https://api.openai.com/v1
+export RAG_API_KEY=sk-...
+export RAG_API_GENERATION_MODEL=gpt-4o-mini
+export RAG_REQUEST_TIMEOUT_SECONDS=120
+python app.py
+```
+
+For Gemini API compatibility, use Google's OpenAI-compatible base URL and a Gemini model:
+
+```bash
+export RAG_GENERATION_BACKEND=api
+export RAG_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+export RAG_API_KEY=...
+export RAG_API_GENERATION_MODEL=gemini-3.8-flash
+export RAG_API_MAX_OUTPUT_TOKENS=800
+export RAG_API_REASONING_EFFORT=low
+export RAG_API_MAX_RETRIES=2
+export RAG_REQUEST_TIMEOUT_SECONDS=120
+python app.py
+```
+
+The same settings work for the CLI:
+
+```bash
+export RAG_GENERATION_BACKEND=api
+export RAG_API_KEY=sk-...
+python -m medical_rag.cli ask "What does SPAN-100 estimate?"
+```
+
+If you see `Generation backend was unavailable, so this answer uses extractive retrieval`, the API call failed and the system fell back to extractive retrieval. Check that `RAG_API_KEY` is set, `RAG_API_BASE_URL` points to an OpenAI-compatible base URL, the configured model is available, `RAG_REQUEST_TIMEOUT_SECONDS` is high enough for the provider response, and transient provider 429/5xx failures are being retried with `RAG_API_MAX_RETRIES`.
+
+### Ollama generation
 
 Install Ollama for macOS from the official download page:
 
@@ -191,6 +253,8 @@ python -m medical_rag.cli ask "What does SPAN-100 estimate?"
 If you see `Generation backend was unavailable, so this answer uses extractive retrieval`, the app tried Ollama and fell back because generation failed. Check that `curl http://localhost:11434/api/tags` works, that `ollama list` includes `llama3.1:latest`, and that the app was restarted after setting the environment variables. The fallback message includes a `Backend error:` line with the exact failure.
 
 To use Ollama embeddings, set `RAG_EMBEDDING_BACKEND=ollama` and re-run ingestion so the index matches the embedding model.
+For the default `auto` embedding mode, Ollama embeddings are used only when the configured embedding
+model is installed; otherwise the app falls back to hash embeddings.
 
 ## Answer Modes
 
@@ -232,13 +296,51 @@ Environment variables:
 - `RAG_EMBED_BATCH_SIZE`: default `64`
 - `RAG_MANIFEST_PATH`: default `.rag/manifest.sqlite`
 - `RAG_EXTRACTION_CACHE_DIR`: default `.rag/extracted`
-- `RAG_EMBEDDING_CACHE_PATH`: default `.rag/embedding_cache.json`
-- `RAG_EMBEDDING_BACKEND`: `hash` or `ollama`
-- `RAG_GENERATION_BACKEND`: `extractive` or `ollama`
+- `RAG_EMBEDDING_BACKEND`: `auto`, `hash`, `ollama`, `api`, `sentence-transformers`, or `remote`
+- `RAG_GENERATION_BACKEND`: `extractive`, `ollama`, or `api`
+- `RAG_SENTENCE_TRANSFORMERS_MODEL`: default `BAAI/bge-base-en-v1.5`
+- `RAG_SENTENCE_TRANSFORMERS_DEVICE`: default `auto`; use `cuda` on GPU nodes
+- `RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE`: default `64`
+- `RAG_EMBEDDING_SERVICE_URL`: default `http://localhost:8100`
+- `RAG_EMBEDDING_SERVICE_TIMEOUT_SECONDS`: default `60`
+- `RAG_EMBEDDING_SERVICE_TOKEN`: optional bearer token for `/embed`
+- `RAG_EMBEDDING_SERVICE_EXPECTED_MODEL`: optional exact model name guard, for example `sentence-transformers:BAAI/bge-base-en-v1.5`
+- `RAG_REMOTE_EMBED_BATCH_SIZE`: default `64`
+- `RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE`: default `256`; server-side request limit
+- `RAG_EMBEDDING_SERVICE_MAX_TEXT_CHARS`: default `20000`; server-side request limit
 - `RAG_ANSWER_MODE`: `patient` or `clinician`
 - `RAG_OLLAMA_BASE_URL`: default `http://localhost:11434`
 - `RAG_OLLAMA_EMBEDDING_MODEL`: default `nomic-embed-text`
 - `RAG_OLLAMA_GENERATION_MODEL`: default `llama3.1`
+- `RAG_API_BASE_URL`: default `https://api.openai.com/v1`
+- `RAG_API_KEY`: API key for hosted OpenAI-compatible generation or embeddings; `OPENAI_API_KEY` is also accepted
+- `RAG_API_GENERATION_MODEL`: default `gpt-4o-mini`
+- `RAG_API_EMBEDDING_MODEL`: default `text-embedding-3-small`
+- `RAG_API_MAX_OUTPUT_TOKENS`: default `800`; set `0` to omit the cap
+- `RAG_API_REASONING_EFFORT`: optional; for Gemini 3 models the app defaults to `low` when unset
+- `RAG_API_MAX_RETRIES`: default `2` for retryable API `429`/`5xx` responses
+- `RAG_REQUEST_TIMEOUT_SECONDS`: default `120`
+- `RAG_VECTOR_STORE`: `json` or `qdrant`. With docker compose, start the bundled server with
+  `docker compose --profile qdrant up -d qdrant` or point `RAG_QDRANT_URL` at an external one.
+- `RAG_QDRANT_URL`: default `http://localhost:6333`
+- `RAG_QDRANT_DENSE_VECTOR_NAME`: default `dense`; the named vector the collection stores
+- `RAG_QDRANT_API_KEY`: optional Qdrant API key
+- `RAG_QDRANT_COLLECTION`: default `stroke_chunks`
+- `RAG_QDRANT_BATCH_SIZE`: default `1024`. Points per upsert request (and per stale-point delete).
+- `RAG_QDRANT_MAX_REQUEST_MB`: default `32`. Upserts are split to stay under this; keep it at or below
+  the Qdrant server's `service.max_request_size_mb` (default 32). A 768-dim point is about 18 KB of JSON.
+- `RAG_QDRANT_RECREATE_COLLECTION`: default `false`. Ingestion upserts into the existing collection and
+  removes points whose source was deleted or re-chunked. Set `true` to drop and rebuild it, which is
+  required when the embedding dimension or vector name changes.
+- `RAG_QDRANT_TIMEOUT_SECONDS`: default `120`. Qdrant request timeout; collection creation on the shared host can take 5-10 seconds.
+- `RAG_QDRANT_PREFER_GRPC`: default `false`. Use gRPC instead of REST; faster for bulk ingestion, and
+  requires the Qdrant gRPC port to be reachable.
+- `RAG_QDRANT_GRPC_PORT`: default `6334`. gRPC port on the `RAG_QDRANT_URL` host.
+- `QDRANT_DATA_DIR` (docker compose only): absolute host directory for the `qdrant` service's storage.
+  Defaults to the `qdrant_data` named volume under Docker's data root. Point it at a fast local disk;
+  Qdrant fsyncs a 32 MB write-ahead log segment on every collection create, which takes seconds on slow volumes.
+- `QDRANT_WAL_CAPACITY_MB` (docker compose only): Qdrant WAL segment size, upstream default `32`. On hosts
+  with slow synchronous writes, `8` cuts collection creation from several seconds to about one.
 
 Legacy Docker variables from the previous app are also accepted where they map cleanly:
 `PDF_FOLDER`, `VECTOR_DB_PATH`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, `OLLAMA_BASE_URL`,
@@ -246,8 +348,52 @@ Legacy Docker variables from the previous app are also accepted where they map c
 
 ## Frontend
 
-The active UI is `static/index.html` and is wired to `/health`, `/ingest`, `/ask`, and `/sources`.
+The default page at `/` is a patient and caregiver question-and-answer view. It uses
+plain-language patient mode and the server's configured retrieval defaults, with no
+model settings, ingestion controls, or evaluation panels. Answers support readable
+paragraphs/lists, inline citations, expandable sources per answer, copying, and retrying.
+Questions stay in the current page only; the UI does not persist them in browser storage.
+Each question is answered independently; previous messages are not sent to the model.
+
+Open `/dev` for the developer workbench, including corpus ingestion, source search,
+patient/clinician modes, `top_k`, system diagnostics, and the evaluation dashboard.
+The workbench has four focused views:
+
+- **Playground**: run a query, inspect its answer and scored evidence, copy the answer,
+  or download the response and request settings as JSON. Results include separate
+  index-load, retrieval, reranking, and generation timings.
+- **Documents**: search the indexed library with 50-row pagination, run incremental
+  ingestion, or expand advanced options for rebuilds, failed-file retries, workers, and OCR.
+  Background indexing reconnects to its status when this view is opened.
+- **Evaluations**: select questions, inspect expected evidence, run the suite, filter
+  results by status, inspect missing terms and citations, and export evaluation JSON.
+- **System**: inspect the active configuration and warnings, with API and Ollama details
+  shown when relevant. A configured API key does not confirm provider connectivity.
+
+This is a separate UI on the same server, not a separate deployment or an access-control
+boundary. The existing API endpoints remain available.
+
+The patient UI uses `static/index.html`, `static/patient.css`, and `static/patient.js`
+and calls only `/status` and `/ask`. `/status` checks index availability without querying
+Ollama. The developer UI uses `static/dev.html`, `static/dev.css`, and `static/dev.js`.
+Both work without a frontend build step
+or external assets; the included icons are from Lucide (license in `static/icons-LICENSE.txt`).
+
 The previous UI has been preserved as `static/legacy-index.html` for reference, but it targets the old API surface and is not the active app.
+
+### Query performance
+
+Ingestion reuses unchanged vectors from the configured store. Query embeddings bypass
+the legacy disk-cache wrapper, so asking a new question does not serialize a corpus-sized
+cache. JSON search skips zero dimensions in sparse query vectors, selects only the top
+candidates, and reuses document lengths and query-term IDF in BM25. Qdrant searches run
+on the configured Qdrant service. Existing indexes do not require rebuilding for these
+query optimizations.
+
+`/ask` responses include `timings` for index loading, retrieval (including query embedding),
+reranking, generation, and total pipeline time. A large JSON index still has a one-time
+load cost after a server restart. Generation time also depends on the configured provider
+and any retries; changing the model will not resolve slow retrieval.
 
 ## Medical Safety
 
@@ -256,13 +402,14 @@ This project is for literature retrieval, research support, and education. It sh
 ## Corpus Coverage
 
 Answer quality is directly tied to what has been indexed. The system can only cite evidence that exists in the `pdfs/` folder.
+`SOURCES.md` files are treated as acquisition notes and are intentionally excluded from ingestion.
 
 ### Adding new PDFs
 
 1. Copy PDF files into `pdfs/`
 2. Delete the stale index:
    ```bash
-   rm -f .rag/index.json .rag/embedding_cache.json
+   rm -f .rag/index.json
    ```
 3. Restart and re-ingest via the UI or `POST /ingest`
 
@@ -287,17 +434,29 @@ Avoid:
 
 ## Evaluation
 
-The eval suite provides a repeatable way to check retrieval quality, citation relevance, and refusal correctness.
+The eval suite provides a repeatable way to check retrieval quality, citation relevance, answer-term coverage, and refusal correctness. In-scope questions pass only when retrieval finds relevant evidence and the generated answer includes enough expected answer terms.
+
+The developer UI at `/dev` includes an Evaluation dashboard. Click `Run Eval` to run the packaged eval suite against
+the current index and model settings.
 
 ### Prerequisites
 
 The server must be running and the index must be built before running evals:
 
 ```bash
-source venv/bin/activate
+source .venv/bin/activate
 python app.py &
 # Click Ingest in the UI, or:
 curl -s -X POST http://localhost:8000/ingest -H "Content-Type: application/json" -d '{}'
+```
+
+The API exposes the same dashboard data:
+
+```bash
+curl http://localhost:8000/eval/questions
+curl -s -X POST http://localhost:8000/eval/run \
+  -H "Content-Type: application/json" \
+  -d '{"answer_mode":"patient","top_k":5}'
 ```
 
 ### Run the CLI runner
@@ -307,34 +466,35 @@ curl -s -X POST http://localhost:8000/ingest -H "Content-Type: application/json"
 python tests/run_eval.py
 
 # Custom server URL or data file
-python tests/run_eval.py --url http://localhost:8000 --data tests/eval_data.json
+python tests/run_eval.py --url http://localhost:8000 --data medical_rag/eval_data.json
 ```
 
 ### Run via pytest
 
 ```bash
-# Run eval tests (requires running server)
-pytest tests/test_eval_suite.py -m eval -v
+# Run live eval tests (requires running server)
+RUN_LIVE_EVAL=1 pytest tests/test_eval_suite.py -m eval -v
 
-# Skip eval tests (CI without a running server)
-pytest -m "not eval"
+# Run normal tests without live eval
+pytest
 ```
 
 ### Metrics
 
 | Metric | Description | Pass threshold |
 |--------|-------------|----------------|
-| Retrieval hit rate | Fraction of in-scope questions where ≥1 citation source filename matches expected topic | ≥ 5/6 |
-| Citation relevance | Fraction of citations whose excerpt contains an expected answer term | ≥ 0.60 |
-| Refusal correctness | Out-of-scope questions where the system returns no confident citation | 1/1 |
+| Retrieval hit rate | Fraction of in-scope questions where retrieved citations contain expected source/topic hints | Track over time |
+| Citation term coverage | Fraction of expected answer terms found in retrieved citation excerpts | Track over time |
+| Answer term coverage | Fraction of expected answer terms found in the generated answer | At least `0.40` per in-scope question |
+| Refusal accuracy | Out-of-scope questions where the system declines or returns no confident citation | Track over time |
 
 ### Adding new eval questions
 
-Edit `tests/eval_data.json`. Each entry needs:
+Edit `medical_rag/eval_data.json`. Each entry needs:
 - `id` — unique string
 - `question` — the question text
-- `expected_source_hints` — keywords expected in citation source filenames
-- `expected_answer_terms` — keywords expected in citation excerpts
+- `expected_source_hints` — topic/source keywords expected in retrieved citation metadata or excerpts
+- `expected_answer_terms` — keywords expected in the generated answer
 - `should_refuse` — `true` for out-of-scope questions
 
 ## Switching Embedding Backends
@@ -343,18 +503,78 @@ The `RAG_EMBEDDING_BACKEND` setting controls how chunks are embedded:
 
 | Value | Behaviour |
 |-------|-----------|
-| `auto` (default) | Probes Ollama at startup; uses `ollama` if available, falls back to `hash` |
+| `auto` (default) | Uses Ollama semantic embeddings when the configured embedding model is installed; otherwise falls back to `hash` |
 | `ollama` | Always use Ollama semantic embeddings (requires Ollama running) |
+| `api` | Always use hosted OpenAI-compatible embeddings (requires `RAG_API_KEY`) |
+| `sentence-transformers` | Use a local sentence-transformers model, usually with CUDA on an HPC/GPU node |
+| `remote` | Use the standalone embedding service over HTTP |
 | `hash` | Bag-of-words hashing — fast, no network, non-semantic |
 
-**Important:** Changing the embedding backend invalidates the existing index. Delete both cache files before re-ingesting:
+Recommended Ollama embedding models:
+
+- `nomic-embed-text`: good default local embedding model.
+- `bge-m3`: stronger multilingual/general retrieval model when available in your Ollama install.
+
+Recommended API embedding default:
+
+- `text-embedding-3-small`: hosted OpenAI embedding model configured by default for `RAG_EMBEDDING_BACKEND=api`.
+
+Pull the embedding model first:
 
 ```bash
-rm -f .rag/index.json .rag/embedding_cache.json
-source venv/bin/activate
+ollama pull nomic-embed-text
+```
+
+**Important:** Changing the embedding backend invalidates the existing index. Re-run ingestion after
+switching models:
+
+```bash
+source .venv/bin/activate
+export RAG_EMBEDDING_BACKEND=ollama
 python app.py
 # Then click Ingest in the UI or POST /ingest
 ```
+
+For API embeddings:
+
+```bash
+source .venv/bin/activate
+export RAG_EMBEDDING_BACKEND=api
+export RAG_API_KEY=sk-...
+export RAG_API_EMBEDDING_MODEL=text-embedding-3-small
+python app.py
+# Then click Ingest in the UI or POST /ingest
+```
+
+For Docker:
+
+```bash
+RAG_EMBEDDING_BACKEND=ollama \
+RAG_FORCE_REINGEST=true \
+docker compose up -d --build medical-rag
+```
+
+### Remote embedding service
+
+`remote` and `api` are both network backends but serve different purposes. `api` talks to a hosted
+OpenAI-compatible provider using its own model catalogue. `remote` talks to this project's own
+`embedder` service, which runs the same sentence-transformers model that Slurm ingestion used, so
+query vectors are guaranteed to match the collection.
+
+On the GPU host, start the embedding service:
+
+```bash
+docker compose --profile embedder up -d embedder
+```
+
+On the API host, point the app at that service:
+
+```bash
+export RAG_EMBEDDING_BACKEND=remote
+export RAG_EMBEDDING_SERVICE_URL=http://<gpu-host>:8100
+```
+
+The remote service's model name must match the model used for ingestion. With Qdrant, points are filtered by the exact `embedding_model` payload, so a model-name mismatch returns no results.
 
 The `RAG_HYBRID_ALPHA`, `RAG_MIN_RELEVANCE_SCORE`, and `RAG_RERANKER_BACKEND` settings control retrieval quality:
 

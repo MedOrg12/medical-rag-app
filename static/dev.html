@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Developer Workbench | Stroke Companion</title>
+  <link rel="stylesheet" href="/static/dev.css" /><script src="/static/dev.js" defer></script>
+</head>
+<body>
+  <aside class="rail">
+    <a class="brand" href="/dev"><svg aria-hidden="true"><use href="/static/icons.svg#heart-pulse"></use></svg><span>Stroke Companion<small>Developer workbench</small></span></a>
+    <nav aria-label="Workbench views">
+      <a href="#playground" data-view="playground"><svg aria-hidden="true"><use href="/static/icons.svg#flask-conical"></use></svg>Playground</a>
+      <a href="#documents" data-view="documents"><svg aria-hidden="true"><use href="/static/icons.svg#files"></use></svg>Documents</a>
+      <a href="#evaluations" data-view="evaluations"><svg aria-hidden="true"><use href="/static/icons.svg#chart-no-axes-combined"></use></svg>Evaluations</a>
+      <a href="#system" data-view="system"><svg aria-hidden="true"><use href="/static/icons.svg#settings-2"></use></svg>System</a>
+    </nav>
+    <div class="rail-bottom"><a href="/">Patient view<svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg></a><a href="/docs">API reference<svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg></a></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><span id="view-name">Playground</span><div class="toolbar"><a class="patient-link" href="/">Patient view</a><span id="index-status" class="badge">Checking index</span><button id="refresh-button" class="icon-button" type="button" title="Refresh current view" aria-label="Refresh current view"><svg aria-hidden="true"><use href="/static/icons.svg#rotate-ccw"></use></svg></button></div></header>
+    <main>
+      <div id="connection-error" class="notice error" role="alert" hidden></div>
+      <section id="view-playground" class="view" aria-labelledby="playground-title">
+        <div class="page-heading"><div><p class="eyebrow">Test and inspect</p><h1 id="playground-title">Playground</h1></div><button id="clear-query" class="quiet-button" type="button"><svg aria-hidden="true"><use href="/static/icons.svg#rotate-ccw"></use></svg>Reset</button></div>
+        <div id="query-models" class="model-line">Loading configuration...</div><div id="query-warning" class="notice warning" hidden></div>
+        <form id="ask-form" class="query-form">
+          <div class="query-settings"><fieldset class="segmented"><legend class="sr-only">Answer mode</legend><button id="mode-patient" type="button" data-mode="patient" aria-pressed="true">Patient</button><button id="mode-clinician" type="button" data-mode="clinician" aria-pressed="false">Clinician</button></fieldset><label class="number-label" for="top-k">Retrieved passages<input id="top-k" type="number" min="1" max="20" value="5" title="Top K: maximum passages used to generate the answer" /></label></div>
+          <label class="sr-only" for="question">Test question</label><textarea id="question" rows="3" placeholder="Enter a stroke question to test..." maxlength="4000" required></textarea>
+          <div class="query-actions"><label class="example-label" for="example-question">Example<select id="example-question"><option value="">Choose a question</option><option>What should I eat after a stroke?</option><option>What is dysphagia after stroke?</option><option>When is thrombectomy discussed?</option><option>What does SPAN-100 mean?</option></select></label><div class="toolbar"><button id="stop-query" class="quiet-button" type="button" hidden><svg aria-hidden="true"><use href="/static/icons.svg#square"></use></svg>Stop waiting</button><button id="ask-button" type="submit"><svg aria-hidden="true"><use href="/static/icons.svg#play"></use></svg>Run query</button></div></div>
+        </form>
+        <div class="section-heading"><h2>Query result</h2><span id="query-status" class="muted" role="status">No query run yet</span></div>
+        <div id="query-empty" class="empty-state"><svg aria-hidden="true"><use href="/static/icons.svg#flask-conical"></use></svg><p>No result yet</p></div><div id="query-error" class="notice error" role="alert" hidden></div>
+        <div id="query-result" hidden><div id="query-metadata" class="run-metadata"></div><div class="result-grid">
+          <section aria-labelledby="answer-title"><div class="section-heading compact"><h2 id="answer-title">Answer</h2><button id="copy-answer" class="icon-button" type="button" title="Copy answer" aria-label="Copy answer"><svg aria-hidden="true"><use href="/static/icons.svg#copy"></use></svg></button></div><div id="answer" class="answer"></div></section>
+          <section class="evidence-section" aria-labelledby="evidence-title"><div class="section-heading compact"><h2 id="evidence-title">Retrieved evidence</h2><span id="evidence-count" class="muted"></span></div><div id="evidence-list"></div></section>
+        </div><details class="raw-response"><summary>Response JSON</summary><div class="section-heading compact"><span class="muted">Latest query response</span><button id="download-query" class="icon-button" type="button" title="Download query JSON" aria-label="Download query JSON"><svg aria-hidden="true"><use href="/static/icons.svg#download"></use></svg></button></div><pre id="query-json"></pre></details></div>
+      </section>
+      <section id="view-documents" class="view" aria-labelledby="documents-title" hidden>
+        <div class="page-heading"><div><p class="eyebrow">Corpus management</p><h1 id="documents-title">Documents</h1></div><button id="open-ingest" type="button" aria-expanded="false" aria-controls="ingest-panel"><svg aria-hidden="true"><use href="/static/icons.svg#folder-sync"></use></svg>Index documents</button></div>
+        <div class="stats-strip"><div><strong id="source-count">-</strong><span>Indexed documents</span></div><div><strong id="chunk-count">-</strong><span>Text chunks</span></div><div><strong id="page-count">-</strong><span>Indexed pages</span></div></div>
+        <section id="ingest-panel" class="ingest-panel" aria-labelledby="ingest-title" hidden><div class="section-heading compact"><h2 id="ingest-title">Index documents</h2><button id="close-ingest" class="icon-button" type="button" aria-label="Close ingestion settings" title="Close"><svg aria-hidden="true"><use href="/static/icons.svg#x"></use></svg></button></div>
+          <form id="ingest-form"><label>Source directory<input id="source-path" placeholder="Default corpus directory" autocomplete="off" /></label><details class="advanced"><summary>Advanced settings</summary><div class="form-grid"><label>Update strategy<select id="ingest-mode"><option value="resume">Incremental update</option><option value="force">Rebuild all documents</option><option value="failed">Retry failed documents</option></select></label><label>PDF workers<input id="pdf-workers" type="number" min="1" max="32" value="4" /></label><label class="check"><input id="background-ingest" type="checkbox" checked />Run in background</label><label class="check"><input id="ocr-scanned" type="checkbox" />OCR scanned pages</label></div></details><div class="form-actions"><button id="ingest-button" type="submit"><svg aria-hidden="true"><use href="/static/icons.svg#play"></use></svg>Start indexing</button></div></form>
+        </section>
+        <div id="ingest-result" class="notice" role="status" hidden></div><div id="ingest-report" class="report-strip" hidden></div>
+        <div class="section-heading"><h2>Indexed library</h2><label class="search-label"><svg aria-hidden="true"><use href="/static/icons.svg#search"></use></svg><span class="sr-only">Search documents</span><input id="source-search" type="search" placeholder="Search documents..." /></label></div>
+        <div id="source-error" class="notice error" role="alert" hidden></div><div class="table-scroll"><table class="source-table"><thead><tr><th scope="col">Document</th><th scope="col">Pages</th><th scope="col">Chunks</th></tr></thead><tbody id="sources"><tr><td colspan="3" class="table-empty">Loading documents...</td></tr></tbody></table></div>
+        <div class="pagination"><span id="source-range" class="muted"></span><div class="toolbar"><button id="source-prev" class="icon-button" type="button" title="Previous page" aria-label="Previous document page"><svg aria-hidden="true"><use href="/static/icons.svg#chevron-left"></use></svg></button><button id="source-next" class="icon-button" type="button" title="Next page" aria-label="Next document page"><svg aria-hidden="true"><use href="/static/icons.svg#chevron-right"></use></svg></button></div></div>
+      </section>
+      <section id="view-evaluations" class="view" aria-labelledby="evaluations-title" hidden>
+        <div class="page-heading"><div><p class="eyebrow">Quality checks</p><h1 id="evaluations-title">Evaluations</h1></div><button id="eval-run-button" type="button" disabled><svg aria-hidden="true"><use href="/static/icons.svg#play"></use></svg><span id="eval-run-label">Run selected</span></button></div>
+        <div class="eval-settings"><label>Answer mode<select id="eval-answer-mode"><option value="patient">Patient</option><option value="clinician">Clinician</option></select></label><label>Retrieved passages<input id="eval-top-k" type="number" min="1" max="20" value="5" /></label><label class="check"><input id="eval-include-answers" type="checkbox" checked />Include full answers</label></div>
+        <details id="question-selection" class="question-selection" open><summary>Question set<span id="selected-count" class="muted">Loading...</span></summary><div class="selection-toolbar"><label class="check"><input id="select-all" type="checkbox" checked />Select all</label><button id="reload-eval-questions" class="icon-button" type="button" title="Reload question set" aria-label="Reload question set"><svg aria-hidden="true"><use href="/static/icons.svg#rotate-ccw"></use></svg></button></div><div id="eval-question-list">Loading questions...</div></details>
+        <div id="eval-status" class="run-status" role="status">No evaluation run yet</div><div id="eval-error" class="notice error" role="alert" hidden></div><div id="eval-output" hidden><div id="eval-summary" class="stats-strip"></div><div id="eval-run-metadata" class="run-metadata"></div><div class="section-heading"><h2>Results</h2><div class="toolbar"><label class="sr-only" for="eval-filter">Filter evaluation results</label><select id="eval-filter"><option value="all">All results</option><option value="fail">Failed</option><option value="error">Errors</option><option value="pass">Passed</option></select><button id="download-eval" class="icon-button" type="button" title="Download evaluation JSON" aria-label="Download evaluation JSON"><svg aria-hidden="true"><use href="/static/icons.svg#download"></use></svg></button></div></div><div id="eval-results"></div></div>
+      </section>
+      <section id="view-system" class="view" aria-labelledby="system-title" hidden><div class="page-heading"><div><p class="eyebrow">Runtime configuration</p><h1 id="system-title">System</h1></div><a class="quiet-button" href="/docs">API reference<svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg></a></div><div id="system-alerts"></div><div id="system-details"></div><details class="raw-response"><summary>Health response JSON</summary><pre id="health-json">Loading configuration...</pre></details></section>
+    </main>
+    <footer>Stroke Medical RAG<span id="last-refreshed"></span><span id="action-status" role="status"></span></footer>
+  </div>
+</body>
+</html>

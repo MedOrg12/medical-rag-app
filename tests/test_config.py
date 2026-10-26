@@ -10,16 +10,179 @@ def test_settings_accept_legacy_docker_environment(monkeypatch, tmp_path) -> Non
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
     monkeypatch.setenv("OLLAMA_MODEL", "llama3.1")
     monkeypatch.setenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
+    monkeypatch.setenv("RAG_API_BASE_URL", "https://api.example.test/v1")
+    monkeypatch.setenv("RAG_API_KEY", "test-key")
+    monkeypatch.setenv("RAG_API_GENERATION_MODEL", "api-chat")
+    monkeypatch.setenv("RAG_API_EMBEDDING_MODEL", "api-embed")
+    monkeypatch.setenv("RAG_API_MAX_OUTPUT_TOKENS", "500")
+    monkeypatch.setenv("RAG_API_REASONING_EFFORT", "LOW")
+    monkeypatch.setenv("RAG_API_MAX_RETRIES", "4")
     monkeypatch.setenv("RAG_ANSWER_MODE", "clinician")
+    monkeypatch.setenv("RAG_REQUEST_TIMEOUT_SECONDS", "75")
 
     settings = Settings.from_env(tmp_path)
 
-    assert str(settings.corpus_dir) == "/app/pdfs"
-    assert str(settings.index_path) == "/app/vector_db/index.json"
+    assert settings.corpus_dir.as_posix().endswith("/app/pdfs")
+    assert settings.index_path.as_posix().endswith("/app/vector_db/index.json")
     assert settings.chunk_size_chars == 900
     assert settings.chunk_overlap_chars == 120
     assert settings.top_k == 8
     assert settings.ollama_base_url == "http://ollama:11434"
     assert settings.ollama_generation_model == "llama3.1"
     assert settings.ollama_embedding_model == "nomic-embed-text"
+    assert settings.api_base_url == "https://api.example.test/v1"
+    assert settings.api_key == "test-key"
+    assert settings.api_generation_model == "api-chat"
+    assert settings.api_embedding_model == "api-embed"
+    assert settings.api_max_output_tokens == 500
+    assert settings.api_reasoning_effort == "low"
+    assert settings.api_max_retries == 4
     assert settings.answer_mode == "clinician"
+    assert settings.request_timeout_seconds == 75
+
+
+def test_with_ingestion_options_preserves_answer_mode(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path,
+        index_path=tmp_path / "index.json",
+        answer_mode="clinician",
+        api_max_output_tokens=600,
+        api_reasoning_effort="low",
+        api_max_retries=3,
+    )
+
+    updated = settings.with_ingestion_options(pdf_workers=4)
+
+    assert updated.pdf_workers == 4
+    assert updated.answer_mode == "clinician"
+    assert updated.api_max_output_tokens == 600
+    assert updated.api_reasoning_effort == "low"
+    assert updated.api_max_retries == 3
+
+
+def test_settings_accept_sentence_transformers_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_BACKEND", "sentence-transformers")
+    monkeypatch.setenv("RAG_SENTENCE_TRANSFORMERS_MODEL", "intfloat/e5-base-v2")
+    monkeypatch.setenv("RAG_SENTENCE_TRANSFORMERS_DEVICE", "cuda")
+    monkeypatch.setenv("RAG_SENTENCE_TRANSFORMERS_BATCH_SIZE", "32")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.embedding_backend == "sentence-transformers"
+    assert settings.sentence_transformers_model == "intfloat/e5-base-v2"
+    assert settings.sentence_transformers_device == "cuda"
+    assert settings.sentence_transformers_batch_size == 32
+
+
+def test_settings_accept_remote_embedding_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_URL", "http://gpu-host:8100")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_TIMEOUT_SECONDS", "15.5")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_TOKEN", "secret")
+    monkeypatch.setenv(
+        "RAG_EMBEDDING_SERVICE_EXPECTED_MODEL",
+        "sentence-transformers:BAAI/bge-base-en-v1.5",
+    )
+    monkeypatch.setenv("RAG_REMOTE_EMBED_BATCH_SIZE", "17")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_MAX_BATCH_SIZE", "128")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_MAX_TEXT_CHARS", "9000")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.embedding_service_url == "http://gpu-host:8100"
+    assert settings.embedding_service_timeout_seconds == 15.5
+    assert settings.embedding_service_token == "secret"
+    assert (
+        settings.embedding_service_expected_model
+        == "sentence-transformers:BAAI/bge-base-en-v1.5"
+    )
+    assert settings.remote_embed_batch_size == 17
+    assert settings.embedding_service_max_batch_size == 128
+    assert settings.embedding_service_max_text_chars == 9000
+
+    with_paths = settings.with_paths()
+    with_ingestion_options = settings.with_ingestion_options()
+    for copied in (with_paths, with_ingestion_options):
+        assert copied.embedding_service_url == settings.embedding_service_url
+        assert (
+            copied.embedding_service_timeout_seconds
+            == settings.embedding_service_timeout_seconds
+        )
+        assert copied.embedding_service_token == settings.embedding_service_token
+        assert (
+            copied.embedding_service_expected_model
+            == settings.embedding_service_expected_model
+        )
+        assert copied.remote_embed_batch_size == settings.remote_embed_batch_size
+        assert (
+            copied.embedding_service_max_batch_size
+            == settings.embedding_service_max_batch_size
+        )
+        assert (
+            copied.embedding_service_max_text_chars
+            == settings.embedding_service_max_text_chars
+        )
+
+
+def test_settings_empty_remote_embedding_token_values_become_none(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_TOKEN", "")
+    monkeypatch.setenv("RAG_EMBEDDING_SERVICE_EXPECTED_MODEL", "")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.embedding_service_token is None
+    assert settings.embedding_service_expected_model is None
+
+
+def test_settings_accept_qdrant_timeout_environment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAG_QDRANT_TIMEOUT_SECONDS", "45.5")
+
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.qdrant_timeout_seconds == 45.5
+    assert settings.with_paths().qdrant_timeout_seconds == 45.5
+    assert settings.with_ingestion_options().qdrant_timeout_seconds == 45.5
+
+
+def test_settings_default_qdrant_timeout_exceeds_client_default(tmp_path) -> None:
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.qdrant_timeout_seconds > 5
+
+
+def test_settings_default_to_writing_into_existing_qdrant_collection(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("RAG_QDRANT_RECREATE_COLLECTION", raising=False)
+
+    assert Settings.from_env(tmp_path).qdrant_recreate_collection is False
+
+    monkeypatch.setenv("RAG_QDRANT_RECREATE_COLLECTION", "true")
+    assert Settings.from_env(tmp_path).qdrant_recreate_collection is True
+
+
+def test_settings_copy_helpers_preserve_every_field(tmp_path) -> None:
+    from dataclasses import fields
+
+    settings = Settings.from_env(tmp_path)
+    copies = {
+        "with_paths": settings.with_paths(corpus_dir=tmp_path / "other"),
+        "with_ingestion_options": settings.with_ingestion_options(pdf_workers=3),
+    }
+    overridden = {"with_paths": {"corpus_dir"}, "with_ingestion_options": {"pdf_workers"}}
+
+    for name, copied in copies.items():
+        for field in fields(Settings):
+            if field.name in overridden[name]:
+                continue
+            assert getattr(copied, field.name) == getattr(settings, field.name), field.name
+
+
+def test_settings_read_qdrant_grpc_environment(monkeypatch, tmp_path) -> None:
+    assert Settings.from_env(tmp_path).qdrant_prefer_grpc is False
+    assert Settings.from_env(tmp_path).qdrant_grpc_port == 6334
+
+    monkeypatch.setenv("RAG_QDRANT_PREFER_GRPC", "true")
+    monkeypatch.setenv("RAG_QDRANT_GRPC_PORT", "16334")
+    settings = Settings.from_env(tmp_path)
+
+    assert settings.qdrant_prefer_grpc is True
+    assert settings.qdrant_grpc_port == 16334

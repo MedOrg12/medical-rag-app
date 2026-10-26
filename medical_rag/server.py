@@ -6,14 +6,15 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Response, status
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from medical_rag import __version__
 from medical_rag.config import Settings
-from medical_rag.embeddings import _ollama_available
+from medical_rag.embeddings import list_ollama_models, ollama_model_name_matches
+from medical_rag.evaluation import evaluate_rag, load_eval_suite
 from medical_rag.pipeline import StrokeRAG
 
 
@@ -32,6 +33,13 @@ class IngestRequest(BaseModel):
     ocr_scanned: bool = False
     pdf_workers: int | None = Field(default=None, ge=1, le=32)
     background: bool = False
+
+
+class EvalRunRequest(BaseModel):
+    top_k: int | None = Field(default=None, ge=1, le=20)
+    answer_mode: Literal["patient", "clinician"] | None = None
+    question_ids: list[str] | None = None
+    include_answers: bool = False
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -85,6 +93,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }
                 )
 
+    @app.exception_handler(Exception)
+    async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+        # Starlette's default 500 body is plain text, which the UI cannot parse as JSON. The
+        # exception can carry anything, so it stays out of the response; Starlette re-raises
+        # it after this handler, so the server log still gets the traceback.
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error; see the server log for details."},
+        )
+
     @app.get("/", response_model=None)
     def root() -> Any:
         index_path = static_dir / "index.html"
@@ -92,16 +110,70 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return FileResponse(index_path)
         return {"service": "Stroke Medical RAG", "docs": "/docs"}
 
+    @app.get("/dev", response_model=None, include_in_schema=False)
+    def developer_view() -> FileResponse:
+        developer_path = static_dir / "dev.html"
+        if not developer_path.exists():
+            raise HTTPException(status_code=404, detail="Developer view is not available")
+        return FileResponse(developer_path)
+
+    @app.get("/status")
+    def patient_status() -> dict[str, bool]:
+        return {"ready": rag.index_exists()}
+
     @app.get("/health")
     def health() -> dict[str, Any]:
+        ollama_models = list_ollama_models(app_settings.ollama_base_url)
+        ollama_embedding_model_available = any(
+            ollama_model_name_matches(app_settings.ollama_embedding_model, model)
+            for model in ollama_models
+        )
+        # The remote backend resolves its model name from the embedding service, so this can
+        # fail when that service is down. Health must report that rather than return a 500.
+        try:
+            active_embedding_model: str | None = rag.embedding_model.name
+            embedding_model_error: str | None = None
+        except Exception as exc:  # noqa: BLE001 - surface any backend failure in health
+            active_embedding_model = None
+            embedding_model_error = str(exc)
+        # Likewise, the Qdrant backend has to ask the server whether the collection exists.
+        try:
+            index_exists: bool | None = rag.index_exists()
+            vector_store_error: str | None = None
+        except Exception as exc:  # noqa: BLE001 - surface any backend failure in health
+            index_exists = None
+            vector_store_error = str(exc)
         return {
             "status": "ok",
-            "index_exists": rag.index_exists(),
+            "index_exists": index_exists,
+            "vector_store_error": vector_store_error,
             "index_path": str(app_settings.index_path),
+            "vector_store_backend": app_settings.vector_store_backend,
+            "qdrant_url": app_settings.qdrant_url
+            if app_settings.vector_store_backend == "qdrant"
+            else None,
+            "qdrant_collection": app_settings.qdrant_collection
+            if app_settings.vector_store_backend == "qdrant"
+            else None,
             "corpus_dir": str(app_settings.corpus_dir),
             "embedding_backend": app_settings.embedding_backend,
+            "active_embedding_model": active_embedding_model,
+            "embedding_model_error": embedding_model_error,
+            "fallback_embedding": rag.fallback_embedding_used(),
             "generation_backend": app_settings.generation_backend,
-            "ollama_available": _ollama_available(app_settings.ollama_base_url),
+            "generation_model": _generation_model_name(app_settings),
+            "ollama_available": bool(ollama_models),
+            "ollama_models": ollama_models,
+            "ollama_embedding_model": app_settings.ollama_embedding_model,
+            "ollama_embedding_model_available": ollama_embedding_model_available,
+            "api_base_url": app_settings.api_base_url,
+            "api_key_configured": bool(app_settings.api_key),
+            "api_generation_model": app_settings.api_generation_model,
+            "api_embedding_model": app_settings.api_embedding_model,
+            "api_max_output_tokens": app_settings.api_max_output_tokens,
+            "api_reasoning_effort": app_settings.api_reasoning_effort,
+            "api_max_retries": app_settings.api_max_retries,
+            "request_timeout_seconds": app_settings.request_timeout_seconds,
         }
 
     @app.get("/ready")
@@ -167,8 +239,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return rag.sources()
         except FileNotFoundError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001 - qdrant-client raises several transport types
+            raise HTTPException(
+                status_code=503, detail=f"Could not read sources from the vector store: {exc}"
+            ) from exc
+
+    @app.get("/eval/questions")
+    def eval_questions() -> dict[str, Any]:
+        version, questions = load_eval_suite()
+        return {
+            "version": version,
+            "questions": [question.to_dict() for question in questions],
+        }
+
+    @app.post("/eval/run")
+    def eval_run(request: EvalRunRequest) -> dict[str, Any]:
+        try:
+            return evaluate_rag(
+                rag,
+                top_k=request.top_k,
+                answer_mode=request.answer_mode,
+                question_ids=request.question_ids,
+                include_answers=request.include_answers,
+            ).to_dict()
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return app
 
 
 app = create_app()
+
+
+def _generation_model_name(settings: Settings) -> str:
+    if settings.generation_backend == "ollama":
+        return settings.ollama_generation_model
+    if settings.generation_backend == "api":
+        return f"api:{settings.api_generation_model}"
+    return "extractive"
