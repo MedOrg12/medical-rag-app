@@ -4,6 +4,7 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -168,10 +169,8 @@ class ApiGenerator(Generator):
                 {"role": "system", "content": _system_prompt(answer_mode)},
                 {"role": "user", "content": _user_prompt(question, results, answer_mode)},
             ],
-            "temperature": self.temperature,
         }
-        if self.max_output_tokens > 0:
-            payload_data["max_tokens"] = self.max_output_tokens
+        openai_host = _is_openai_host(self.base_url)
         reasoning_effort = _reasoning_effort(
             base_url=self.base_url,
             model=self.model,
@@ -179,6 +178,13 @@ class ApiGenerator(Generator):
         )
         if reasoning_effort:
             payload_data["reasoning_effort"] = reasoning_effort
+        # OpenAI reasoning models reject a custom temperature while reasoning is enabled.
+        if not (openai_host and reasoning_effort):
+            payload_data["temperature"] = self.temperature
+        if self.max_output_tokens > 0:
+            # OpenAI deprecated max_tokens; newer models reject it outright.
+            token_field = "max_completion_tokens" if openai_host else "max_tokens"
+            payload_data[token_field] = self.max_output_tokens
 
         payload = json.dumps(payload_data).encode("utf-8")
         request = urllib.request.Request(
@@ -454,6 +460,10 @@ def _api_error_message(operation: str, exc: urllib.error.HTTPError) -> str:
     except Exception:
         detail = ""
     return f"Could not get API {operation} response from provider ({exc.code}){detail}"
+
+
+def _is_openai_host(base_url: str) -> bool:
+    return urllib.parse.urlsplit(base_url).hostname == "api.openai.com"
 
 
 def _reasoning_effort(base_url: str, model: str, configured: str) -> str:

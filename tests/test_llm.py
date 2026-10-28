@@ -141,6 +141,49 @@ def test_api_generator_adds_gemini_latency_controls(monkeypatch) -> None:
     assert seen["body"]["reasoning_effort"] == "low"
 
 
+def test_api_generator_uses_openai_reasoning_params(monkeypatch) -> None:
+    seen = {}
+
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'{"choices":[{"message":{"content":"Trouble swallowing after stroke [1]."}}]}'
+
+    def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
+        seen["body"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr("medical_rag.llm.urllib.request.urlopen", fake_urlopen)
+    result = SearchResult(
+        chunk=Chunk(
+            id="dysphagia",
+            text="Dysphagia after stroke can involve difficulty swallowing.",
+            metadata={"source_id": "rehab.txt", "page": 1},
+        ),
+        score=0.5,
+        rank=1,
+    )
+    generator = ApiGenerator(
+        base_url="https://api.openai.com/v1",
+        api_key="secret",
+        model="gpt-6.1-sol",
+        max_output_tokens=450,
+        reasoning_effort="high",
+    )
+
+    generator.generate("What is dysphagia?", [result])
+
+    assert seen["body"]["max_completion_tokens"] == 450
+    assert "max_tokens" not in seen["body"]
+    assert "temperature" not in seen["body"]
+    assert seen["body"]["reasoning_effort"] == "high"
+
+
 def test_api_generator_retries_transient_http_errors(monkeypatch) -> None:
     calls = {"count": 0}
 
