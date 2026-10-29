@@ -22,6 +22,7 @@ from medical_rag.errors import user_error
 from medical_rag.evaluation import evaluate_rag, load_eval_suite
 from medical_rag.memory import ConversationStore, prompt_history
 from medical_rag.pipeline import StrokeRAG
+from medical_rag.validation import AbstractValidator, validate_source
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,17 @@ class EvalRunRequest(BaseModel):
     question_ids: list[str] | None = None
     include_answers: bool = False
     background: bool = False
+
+
+class ScreeningRequest(BaseModel):
+    source_path: str | None = None
+    force: bool = False
+
+
+class ReviewRequest(BaseModel):
+    action: Literal["accept", "reject"]
+    reviewer: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=2000)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -85,6 +97,66 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="Stroke-focused retrieval-augmented generation API.",
         version=__version__,
     )
+
+    screening_lock = threading.Lock()
+    screening_executor = ThreadPoolExecutor(max_workers=1)
+    screening_status = {"running": False, "last_error": None, "results": None}
+
+    def run_screening(source: Path, force: bool) -> None:
+        try:
+            results = validate_source(source, app_settings, force)
+            with screening_lock:
+                screening_status.update(running=False, results=results)
+        except Exception as exc:
+            logger.exception("PDF screening failed")
+            with screening_lock:
+                screening_status.update(running=False, last_error=user_error(exc, "screening"))
+
+    @app.post("/validation/run")
+    def start_screening(request: ScreeningRequest) -> dict[str, Any]:
+        source = Path(request.source_path).expanduser().resolve() if request.source_path else app_settings.corpus_dir.resolve()
+        if not source.exists():
+            raise HTTPException(400, "Source does not exist")
+        with screening_lock:
+            if screening_status["running"]:
+                raise HTTPException(409, "PDF screening is already running")
+            screening_status.update(running=True, last_error=None, results=None)
+            try:
+                screening_executor.submit(run_screening, source, request.force)
+            except Exception:
+                screening_status["running"] = False
+                raise
+        return {"accepted": True}
+
+    @app.get("/validation/status")
+    def get_screening_status() -> dict[str, Any]:
+        with screening_lock:
+            return dict(screening_status)
+
+    @app.get("/validation/reviews")
+    def list_screening_reviews(limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+        try:
+            return AbstractValidator(app_settings).store.list_reviews(limit, offset)
+        except ValueError as exc:
+            raise request_error(exc, 400) from exc
+
+    @app.get("/validation/reviews/{review_id}")
+    def inspect_screening_review(review_id: int) -> dict[str, Any]:
+        try:
+            return AbstractValidator(app_settings).store.inspect(review_id)
+        except ValueError as exc:
+            raise HTTPException(404, "Review not found") from exc
+
+    @app.post("/validation/reviews/{review_id}")
+    def decide_screening_review(review_id: int, request: ReviewRequest) -> dict[str, Any]:
+        store = AbstractValidator(app_settings).store
+        try:
+            store.review(review_id, request.action, request.reviewer, request.reason)
+            return store.inspect(review_id)
+        except KeyError as exc:
+            raise HTTPException(404, "Review not found") from exc
+        except ValueError as exc:
+            raise request_error(exc, 400) from exc
 
     @app.middleware("http")
     async def mask_unexpected_errors(request: Request, call_next: Any) -> Any:

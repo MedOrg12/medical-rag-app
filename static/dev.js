@@ -8,6 +8,10 @@ const state = {
   ingestBusy: false, ingestTimer: null, ingestChecking: false,
 };
 const pageSize = 50;
+let screeningTimer = null;
+let screeningReport = null;
+let reviewOffset = 0;
+let activeReview = null;
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const number = (value) => new Intl.NumberFormat().format(Number(value || 0));
 const percent = (value) => `${Math.round(Number(value || 0) * 100)}%`;
@@ -48,6 +52,8 @@ function showView() {
   if (state.view === "documents") {
     if (state.sources === null) loadSources();
     checkIngestion();
+    refreshScreening();
+    loadReviews();
   }
   if (state.view === "evaluations" && state.questions === null) loadQuestions();
 }
@@ -411,3 +417,65 @@ window.addEventListener("pagehide", () => { clearTimeout(state.ingestTimer); cle
 showView();
 loadHealth();
 queryControls();
+
+async function refreshScreening() {
+  clearTimeout(screeningTimer);
+  try {
+    const status = await request("/validation/status");
+    $("#screen-run").disabled = status.running;
+    $("#screen-status").textContent = status.running ? "Scanning PDFs in the background. You can continue using the workbench." : status.last_error || "Ready to scan. Completed decisions are cached; provider failures remain retryable.";
+    if (status.results) {
+      screeningReport = status.results;
+      const results = Object.values(status.results);
+      $("#screen-status").textContent = `Scanned ${results.length} PDFs: ${results.filter(r => r.action === "accept").length} accepted, ${results.filter(r => r.action === "reject").length} rejected, ${results.filter(r => r.action === "needs_review").length} need review.`;
+      $("#screen-download").hidden = false;
+      $("#screen-results").innerHTML = results.slice(0, 50).map(r => `<p><strong>${esc(r.document_id)}</strong> — ${esc(r.action)}: ${esc(r.reason_code)} · ${esc(r.reason)}</p>`).join("") + (results.length > 50 ? "<p>Showing the first 50 PDFs. Download the report for all results.</p>" : "");
+    }
+    if (status.running) screeningTimer = setTimeout(refreshScreening, 2000);
+  } catch (error) { $("#screen-status").textContent = error.message; }
+}
+
+async function loadReviews() {
+  try {
+    const rows = await request(`/validation/reviews?limit=50&offset=${reviewOffset}`);
+    $("#screen-reviews").innerHTML = rows.length ? rows.map(row => `<p><button type="button" data-review-id="${row.id}">Review #${row.id}</button> ${esc(row.result.document_id)} — ${esc(row.result.reason_code)}</p>`).join("") : "<p>No pending reviews on this page.</p>";
+    $("#review-prev").disabled = reviewOffset === 0;
+    $("#review-next").disabled = rows.length < 50;
+  } catch (error) { $("#screen-reviews").textContent = error.message; }
+}
+
+$("#screen-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  $("#screen-run").disabled = true;
+  try {
+    await request("/validation/run", { source_path: $("#screen-source").value.trim() || null, force: $("#screen-force").checked });
+    $("#screen-results").textContent = "";
+    $("#screen-download").hidden = true;
+    await refreshScreening();
+  } catch (error) { $("#screen-status").textContent = error.message; $("#screen-run").disabled = false; }
+});
+$("#screen-download").addEventListener("click", () => download(screeningReport, "pdf-screening.json"));
+$("#review-refresh").addEventListener("click", loadReviews);
+$("#review-prev").addEventListener("click", () => { reviewOffset = Math.max(0, reviewOffset - 50); loadReviews(); });
+$("#review-next").addEventListener("click", () => { reviewOffset += 50; loadReviews(); });
+$("#screen-reviews").addEventListener("click", async event => {
+  const button = event.target.closest("[data-review-id]");
+  if (!button) return;
+  try {
+    const item = await request(`/validation/reviews/${button.dataset.reviewId}`);
+    activeReview = button.dataset.reviewId;
+    $("#review-title").textContent = item.result.document_id;
+    $("#review-abstract").textContent = item.abstract || "No reliable abstract extracted. Inspect the original PDF before deciding.";
+    $("#review-reason").value = "";
+    $("#review-form").hidden = false;
+  } catch (error) { $("#screen-status").textContent = error.message; }
+});
+$("#review-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  try {
+    await request(`/validation/reviews/${activeReview}`, { action: $("#review-action").value, reviewer: $("#reviewer").value, reason: $("#review-reason").value });
+    $("#review-form").hidden = true;
+    await loadReviews();
+    $("#screen-status").textContent = "Review saved. It applies during the next ingestion.";
+  } catch (error) { $("#screen-status").textContent = error.message; }
+});
