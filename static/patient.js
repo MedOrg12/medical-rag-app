@@ -524,7 +524,7 @@ async function ask(question, existingArticle = null) {
       activeRequest = null;
       updateControls();
       // Another tab changed the thread while this request was running; show its changes now.
-      if (pendingSync) renderThread();
+      if (pendingSync) queueRenderThread();
     }
   }
 }
@@ -558,6 +558,22 @@ function renderThread() {
     }
   }
   ui.messages.lastElementChild.scrollIntoView({ block: "end" });
+}
+
+/**
+ * Redraw the thread after this tab's queued saves have been written. Saves go
+ * through withHistoryLock, which may run later, so redrawing right away could
+ * read storage before this tab's latest answer is in it. Locks are granted in
+ * request order, so a redraw queued here runs after those saves. If a new
+ * request starts before then, the redraw is skipped (it would remove that
+ * request's loading answer) and pendingSync stays set, so the redraw happens
+ * when that request finishes.
+ */
+function queueRenderThread() {
+  pendingSync = true;
+  withHistoryLock(() => {
+    if (!activeRequest && pendingSync) renderThread();
+  });
 }
 
 /**
@@ -617,7 +633,7 @@ window.addEventListener("storage", (event) => {
   if (event.key === null || event.newValue === null) startFresh(false);
   // Redrawing would remove the answer that is still loading, so wait until it finishes.
   else if (activeRequest) pendingSync = true;
-  else renderThread();
+  else queueRenderThread();
 });
 
 // Suggested questions on the welcome screen fill the composer without sending.
