@@ -5,10 +5,11 @@ on:
   push:
     branches: [main]
 
-# Superseded pull request runs are cancelled. Runs on main are not, so every merged commit
-# gets its own published image.
+# Superseded pull request runs are cancelled. Each push to main gets its own group, because
+# GitHub replaces a pending run in a shared group even without cancel-in-progress, and every
+# merged commit needs its own published image.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
