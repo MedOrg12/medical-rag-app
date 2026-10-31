@@ -17,8 +17,8 @@ const HISTORY_LIMIT = 50;
 let ready = false;
 let activeRequest = null;
 let answerSequence = 0;
-// Each entry is { question, payload }; payload stays null until an answer arrives.
-let thread = [];
+let pendingSync = false;
+// Saved entries are { id, createdAt, question, payload }; payload stays null until an answer arrives.
 const articleEntries = new WeakMap();
 
 function icon(name, className = "") {
@@ -45,8 +45,25 @@ function resizeQuestion() {
   updateControls();
 }
 
-function saveThread() {
-  let entries = thread.slice(-HISTORY_LIMIT);
+function loadThread() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    if (!Array.isArray(stored)) return [];
+    return stored
+      .filter((entry) => entry && typeof entry.id === "string" && typeof entry.question === "string" && entry.question.trim())
+      .map((entry) => ({
+        id: entry.id,
+        createdAt: Number(entry.createdAt) || 0,
+        question: entry.question,
+        payload: entry.payload && typeof entry.payload === "object" ? entry.payload : null,
+      }))
+      .slice(-HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function writeThread(entries) {
   while (true) {
     try {
       if (entries.length) localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
@@ -60,20 +77,16 @@ function saveThread() {
   }
 }
 
-function loadThread() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
-    if (!Array.isArray(stored)) return [];
-    return stored
-      .filter((entry) => entry && typeof entry.question === "string" && entry.question.trim())
-      .map((entry) => ({
-        question: entry.question,
-        payload: entry.payload && typeof entry.payload === "object" ? entry.payload : null,
-      }))
-      .slice(-HISTORY_LIMIT);
-  } catch {
-    return [];
-  }
+// Merge into the stored thread so exchanges saved by other tabs are kept.
+function saveEntry(entry) {
+  const entries = loadThread().filter((stored) => stored.id !== entry.id);
+  entries.push({ id: entry.id, createdAt: entry.createdAt, question: entry.question, payload: entry.payload });
+  entries.sort((a, b) => a.createdAt - b.createdAt);
+  writeThread(entries.slice(-HISTORY_LIMIT));
+}
+
+function newEntryId() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 async function checkAvailability() {
@@ -263,10 +276,9 @@ async function ask(question, existingArticle = null) {
   const article = existingArticle || createAnswer();
   let entry = articleEntries.get(article);
   if (!entry) {
-    entry = { question, payload: null };
+    entry = { id: newEntryId(), createdAt: Date.now(), question, payload: null };
     articleEntries.set(article, entry);
-    thread.push(entry);
-    saveThread();
+    saveEntry(entry);
   }
   if (existingArticle) {
     if (ui.question.value.trim() === question) {
@@ -293,7 +305,7 @@ async function ask(question, existingArticle = null) {
     if (activeRequest !== controller) return;
     renderAnswer(article, payload);
     entry.payload = payload;
-    saveThread();
+    saveEntry(entry);
     ui.status.textContent = "Answer ready";
   } catch (error) {
     if (activeRequest !== controller) return;
@@ -311,6 +323,7 @@ async function ask(question, existingArticle = null) {
     if (activeRequest === controller) {
       activeRequest = null;
       updateControls();
+      if (pendingSync) renderThread();
     }
   }
 }
@@ -335,8 +348,8 @@ ui.checkStatus.addEventListener("click", checkAvailability);
 function startFresh() {
   activeRequest?.abort();
   activeRequest = null;
-  thread = [];
-  saveThread();
+  pendingSync = false;
+  writeThread([]);
   ui.messages.replaceChildren();
   ui.messages.hidden = true;
   ui.welcome.hidden = false;
@@ -348,9 +361,12 @@ document.querySelector("#new-session").addEventListener("click", () => {
   startFresh();
   ui.question.focus();
 });
-// Follow a reset made in another tab so this tab cannot write the cleared thread back.
+// Follow changes made in other tabs; a reset there also stops this tab's pending answer.
 window.addEventListener("storage", (event) => {
-  if ((event.key === HISTORY_KEY && event.newValue === null) || event.key === null) startFresh();
+  if (event.key !== HISTORY_KEY && event.key !== null) return;
+  if (event.key === null || event.newValue === null) startFresh();
+  else if (activeRequest) pendingSync = true;
+  else renderThread();
 });
 document.querySelectorAll("[data-question]").forEach((button) => {
   button.addEventListener("click", () => {
@@ -368,12 +384,14 @@ ui.messages.addEventListener("click", (event) => {
   source.focus({ preventScroll: true });
   source.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
-function restoreThread() {
-  thread = loadThread();
-  if (!thread.length) return;
-  ui.welcome.hidden = true;
-  ui.messages.hidden = false;
-  for (const entry of thread) {
+function renderThread() {
+  pendingSync = false;
+  const entries = loadThread();
+  ui.messages.replaceChildren();
+  ui.messages.hidden = !entries.length;
+  ui.welcome.hidden = Boolean(entries.length);
+  if (!entries.length) return;
+  for (const entry of entries) {
     appendQuestion(entry.question);
     const article = createAnswer();
     articleEntries.set(article, entry);
@@ -388,5 +406,5 @@ function restoreThread() {
   ui.messages.lastElementChild.scrollIntoView({ block: "end" });
 }
 
-restoreThread();
+renderThread();
 checkAvailability();
