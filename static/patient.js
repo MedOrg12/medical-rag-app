@@ -12,9 +12,20 @@ const ui = {
   availabilityMessage: document.querySelector("#availability-message"),
   checkStatus: document.querySelector("#check-status"),
 };
+
+const HISTORY_KEY = "stroke-companion:thread:v1";
+const HISTORY_LIMIT = 50;
+
 let ready = false;
 let activeRequest = null;
 let answerSequence = 0;
+// Another tab changed the thread while this tab was busy; redraw once the request ends.
+let pendingSync = false;
+// Bumped on every reset so saves queued before it are dropped.
+let historyGeneration = 0;
+
+// Saved entries are { id, createdAt, question, payload }; payload stays null until an answer arrives.
+const articleEntries = new WeakMap();
 
 function icon(name, className = "") {
   return `<svg class="${className}" aria-hidden="true"><use href="/static/icons.svg#${name}"></use></svg>`;
@@ -38,6 +49,61 @@ function resizeQuestion() {
   ui.question.style.height = "auto";
   ui.question.style.height = `${Math.min(ui.question.scrollHeight, 200)}px`;
   updateControls();
+}
+
+function loadThread() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    if (!Array.isArray(stored)) return [];
+    return stored
+      .filter((entry) => entry && typeof entry.id === "string" && typeof entry.question === "string" && entry.question.trim())
+      .map((entry) => ({
+        id: entry.id,
+        createdAt: Number(entry.createdAt) || 0,
+        question: entry.question,
+        payload: entry.payload && typeof entry.payload === "object" ? entry.payload : null,
+      }))
+      .slice(-HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function writeThread(entries) {
+  while (true) {
+    try {
+      if (entries.length) localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
+      else localStorage.removeItem(HISTORY_KEY);
+      return;
+    } catch (error) {
+      // Drop the oldest exchanges when storage is full; give up if storage is unavailable.
+      if (error?.name !== "QuotaExceededError" || entries.length <= 1) return;
+      entries = entries.slice(1);
+    }
+  }
+}
+
+// Serialize read-modify-write cycles across tabs where the Web Locks API is available.
+function withHistoryLock(callback) {
+  if (navigator.locks?.request) navigator.locks.request(HISTORY_KEY, callback).catch(() => {});
+  else callback();
+}
+
+// Merge into the stored thread so exchanges saved by other tabs are kept.
+function saveEntry(entry) {
+  const generation = historyGeneration;
+  const saved = { id: entry.id, createdAt: entry.createdAt, question: entry.question, payload: entry.payload };
+  withHistoryLock(() => {
+    if (generation !== historyGeneration) return;
+    const entries = loadThread().filter((stored) => stored.id !== saved.id);
+    entries.push(saved);
+    entries.sort((a, b) => a.createdAt - b.createdAt);
+    writeThread(entries.slice(-HISTORY_LIMIT));
+  });
+}
+
+function newEntryId() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 async function checkAvailability() {
@@ -115,6 +181,27 @@ function answerHtml(text, citations, answerId) {
   return blocks.join("");
 }
 
+function appendQuestion(question) {
+  const user = document.createElement("p");
+  user.className = "question-message";
+  user.textContent = question;
+  ui.messages.append(user);
+}
+
+function renderError(article, entry, text) {
+  const body = article.querySelector(".answer-body");
+  body.replaceChildren();
+  const message = document.createElement("p");
+  message.className = "error-message";
+  message.textContent = text;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "quiet-button";
+  retry.innerHTML = `${icon("rotate-ccw")}<span>Try again</span>`;
+  retry.addEventListener("click", () => ask(entry.question, article));
+  body.append(message, retry);
+}
+
 function createAnswer() {
   const article = document.createElement("article");
   article.className = "answer-message";
@@ -128,6 +215,7 @@ function createAnswer() {
 function renderAnswer(article, payload) {
   const citations = (payload.citations || []).filter((citation) => Number.isInteger(citation.id) && citation.id > 0);
   const rawAnswer = String(payload.answer || "");
+  // Added by the backend when the language model was unreachable.
   const fallback = rawAnswer.includes("Generation backend was unavailable, so this answer uses extractive retrieval.");
   let answer = rawAnswer
     .replace(/^Generation backend was unavailable, so this answer uses extractive retrieval\..*$/gm, "")
@@ -179,6 +267,7 @@ function renderAnswer(article, payload) {
     details.append(list);
     tools.append(details);
   }
+
   const copy = document.createElement("button");
   copy.type = "button";
   copy.className = "icon-button copy-button";
@@ -202,13 +291,14 @@ async function ask(question, existingArticle = null) {
   if (activeRequest || !ready || !question.trim()) return;
   ui.welcome.hidden = true;
   ui.messages.hidden = false;
-  if (!existingArticle) {
-    const user = document.createElement("p");
-    user.className = "question-message";
-    user.textContent = question;
-    ui.messages.append(user);
-  }
+  if (!existingArticle) appendQuestion(question);
   const article = existingArticle || createAnswer();
+  let entry = articleEntries.get(article);
+  if (!entry) {
+    entry = { id: newEntryId(), createdAt: Date.now(), question, payload: null };
+    articleEntries.set(article, entry);
+    saveEntry(entry);
+  }
   if (existingArticle) {
     if (ui.question.value.trim() === question) {
       ui.question.value = "";
@@ -231,26 +321,19 @@ async function ask(question, existingArticle = null) {
     });
     if (!response.ok) throw new Error("Request failed");
     const payload = await response.json();
+    // The thread was reset while waiting ("Start fresh" or another tab); drop the result.
     if (activeRequest !== controller) return;
     renderAnswer(article, payload);
+    entry.payload = payload;
+    saveEntry(entry);
     ui.status.textContent = "Answer ready";
   } catch (error) {
     if (activeRequest !== controller) return;
-    const body = article.querySelector(".answer-body");
-    body.replaceChildren();
-    const message = document.createElement("p");
-    message.className = "error-message";
-    message.textContent = error.name === "AbortError"
+    renderError(article, entry, error.name === "AbortError"
       ? "You stopped waiting for this answer."
       : response?.status === 409
         ? "The study library is not ready yet. Please try again later."
-        : "We could not get an answer right now. Please try again.";
-    const retry = document.createElement("button");
-    retry.type = "button";
-    retry.className = "quiet-button";
-    retry.innerHTML = `${icon("rotate-ccw")}<span>Try again</span>`;
-    retry.addEventListener("click", () => ask(question, article));
-    body.append(message, retry);
+        : "We could not get an answer right now. Please try again.");
     ui.status.textContent = error.name === "AbortError" ? "Stopped" : "Answer unavailable";
     if (!ui.question.value) {
       ui.question.value = question;
@@ -260,8 +343,54 @@ async function ask(question, existingArticle = null) {
     if (activeRequest === controller) {
       activeRequest = null;
       updateControls();
+      if (pendingSync) queueRenderThread();
     }
   }
+}
+
+function renderThread() {
+  pendingSync = false;
+  const entries = loadThread();
+  ui.messages.replaceChildren();
+  ui.messages.hidden = !entries.length;
+  ui.welcome.hidden = Boolean(entries.length);
+  if (!entries.length) return;
+  for (const entry of entries) {
+    appendQuestion(entry.question);
+    const article = createAnswer();
+    articleEntries.set(article, entry);
+    try {
+      if (!entry.payload) throw new Error("Unfinished answer");
+      renderAnswer(article, entry.payload);
+    } catch {
+      entry.payload = null;
+      renderError(article, entry, "This answer did not finish. Please try again.");
+    }
+  }
+  ui.messages.lastElementChild.scrollIntoView({ block: "end" });
+}
+
+// Redraw after this tab's queued saves land, but never over an answer that is still loading.
+function queueRenderThread() {
+  pendingSync = true;
+  withHistoryLock(() => {
+    if (!activeRequest && pendingSync) renderThread();
+  });
+}
+
+// When following another tab's reset, leave storage alone so exchanges saved since are kept.
+function startFresh(clearStorage = true) {
+  activeRequest?.abort();
+  activeRequest = null;
+  pendingSync = false;
+  historyGeneration++;
+  if (clearStorage) withHistoryLock(() => writeThread([]));
+  ui.messages.replaceChildren();
+  ui.messages.hidden = true;
+  ui.welcome.hidden = false;
+  ui.question.value = "";
+  ui.status.textContent = ready ? "Ready for your question" : "Temporarily unavailable";
+  resizeQuestion();
 }
 
 ui.form.addEventListener("submit", (event) => {
@@ -281,17 +410,21 @@ ui.question.addEventListener("keydown", (event) => {
 });
 ui.stop.addEventListener("click", () => activeRequest?.abort());
 ui.checkStatus.addEventListener("click", checkAvailability);
+
 document.querySelector("#new-session").addEventListener("click", () => {
-  activeRequest?.abort();
-  activeRequest = null;
-  ui.messages.replaceChildren();
-  ui.messages.hidden = true;
-  ui.welcome.hidden = false;
-  ui.question.value = "";
-  ui.status.textContent = ready ? "Ready for your question" : "Temporarily unavailable";
-  resizeQuestion();
+  startFresh();
   ui.question.focus();
 });
+
+// Follow changes made in other tabs; a reset there also stops this tab's pending answer.
+window.addEventListener("storage", (event) => {
+  // key is null when another tab called localStorage.clear().
+  if (event.key !== HISTORY_KEY && event.key !== null) return;
+  if (event.key === null || event.newValue === null) startFresh(false);
+  else if (activeRequest) pendingSync = true;
+  else queueRenderThread();
+});
+
 document.querySelectorAll("[data-question]").forEach((button) => {
   button.addEventListener("click", () => {
     ui.question.value = button.dataset.question;
@@ -299,6 +432,7 @@ document.querySelectorAll("[data-question]").forEach((button) => {
     ui.question.focus();
   });
 });
+
 ui.messages.addEventListener("click", (event) => {
   const button = event.target.closest("[data-source]");
   if (!button) return;
@@ -308,4 +442,6 @@ ui.messages.addEventListener("click", (event) => {
   source.focus({ preventScroll: true });
   source.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
+
+renderThread();
 checkAvailability();
