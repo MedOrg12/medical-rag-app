@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -175,6 +175,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "api_max_retries": app_settings.api_max_retries,
             "request_timeout_seconds": app_settings.request_timeout_seconds,
         }
+
+    @app.get("/ready")
+    def ready(response: Response) -> dict[str, Any]:
+        # Container healthchecks and deploy tooling treat any non-2xx as not ready. A vector
+        # store that cannot be reached is reported as not ready rather than as a 500.
+        try:
+            index_exists: bool | None = rag.index_exists()
+        except Exception:  # noqa: BLE001 - any backend failure means the app is not ready
+            index_exists = None
+        if not index_exists:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "ok" if index_exists else "not_ready", "index_exists": index_exists}
 
     @app.post("/ingest")
     def ingest(request: IngestRequest) -> dict[str, Any]:

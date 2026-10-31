@@ -43,6 +43,8 @@ docker compose up --build
 
 The container mounts `./pdfs` into `/app/pdfs`, stores the generated vector index in a named volume, and auto-ingests on first startup. The app is available at `http://127.0.0.1:8000`.
 
+The image does not include the PDF corpus; mount one at `/app/pdfs` when running it outside Compose. `GET /ready` returns 200 once an index exists and 503 until then (or while the vector store is unreachable), and the image's Docker healthcheck uses it. `GET /health` always returns 200 with diagnostic details.
+
 To run with Ollama generation using the Ollama app already running on your Mac:
 
 ```bash
