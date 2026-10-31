@@ -332,7 +332,7 @@ ui.question.addEventListener("keydown", (event) => {
 });
 ui.stop.addEventListener("click", () => activeRequest?.abort());
 ui.checkStatus.addEventListener("click", checkAvailability);
-document.querySelector("#new-session").addEventListener("click", () => {
+function startFresh() {
   activeRequest?.abort();
   activeRequest = null;
   thread = [];
@@ -343,7 +343,14 @@ document.querySelector("#new-session").addEventListener("click", () => {
   ui.question.value = "";
   ui.status.textContent = ready ? "Ready for your question" : "Temporarily unavailable";
   resizeQuestion();
+}
+document.querySelector("#new-session").addEventListener("click", () => {
+  startFresh();
   ui.question.focus();
+});
+// Follow a reset made in another tab so this tab cannot write the cleared thread back.
+window.addEventListener("storage", (event) => {
+  if ((event.key === HISTORY_KEY && event.newValue === null) || event.key === null) startFresh();
 });
 document.querySelectorAll("[data-question]").forEach((button) => {
   button.addEventListener("click", () => {
