@@ -18,6 +18,7 @@ let ready = false;
 let activeRequest = null;
 let answerSequence = 0;
 let pendingSync = false;
+let historyGeneration = 0;
 // Saved entries are { id, createdAt, question, payload }; payload stays null until an answer arrives.
 const articleEntries = new WeakMap();
 
@@ -77,12 +78,23 @@ function writeThread(entries) {
   }
 }
 
+// Serialize read-modify-write cycles across tabs where the Web Locks API is available.
+function withHistoryLock(callback) {
+  if (navigator.locks?.request) navigator.locks.request(HISTORY_KEY, callback).catch(() => {});
+  else callback();
+}
+
 // Merge into the stored thread so exchanges saved by other tabs are kept.
 function saveEntry(entry) {
-  const entries = loadThread().filter((stored) => stored.id !== entry.id);
-  entries.push({ id: entry.id, createdAt: entry.createdAt, question: entry.question, payload: entry.payload });
-  entries.sort((a, b) => a.createdAt - b.createdAt);
-  writeThread(entries.slice(-HISTORY_LIMIT));
+  const generation = historyGeneration;
+  const saved = { id: entry.id, createdAt: entry.createdAt, question: entry.question, payload: entry.payload };
+  withHistoryLock(() => {
+    if (generation !== historyGeneration) return;
+    const entries = loadThread().filter((stored) => stored.id !== saved.id);
+    entries.push(saved);
+    entries.sort((a, b) => a.createdAt - b.createdAt);
+    writeThread(entries.slice(-HISTORY_LIMIT));
+  });
 }
 
 function newEntryId() {
@@ -345,11 +357,12 @@ ui.question.addEventListener("keydown", (event) => {
 });
 ui.stop.addEventListener("click", () => activeRequest?.abort());
 ui.checkStatus.addEventListener("click", checkAvailability);
-function startFresh() {
+function startFresh(clearStorage = true) {
   activeRequest?.abort();
   activeRequest = null;
   pendingSync = false;
-  writeThread([]);
+  historyGeneration++;
+  if (clearStorage) withHistoryLock(() => writeThread([]));
   ui.messages.replaceChildren();
   ui.messages.hidden = true;
   ui.welcome.hidden = false;
@@ -364,7 +377,7 @@ document.querySelector("#new-session").addEventListener("click", () => {
 // Follow changes made in other tabs; a reset there also stops this tab's pending answer.
 window.addEventListener("storage", (event) => {
   if (event.key !== HISTORY_KEY && event.key !== null) return;
-  if (event.key === null || event.newValue === null) startFresh();
+  if (event.key === null || event.newValue === null) startFresh(false);
   else if (activeRequest) pendingSync = true;
   else renderThread();
 });
