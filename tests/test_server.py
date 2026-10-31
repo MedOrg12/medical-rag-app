@@ -55,6 +55,47 @@ def test_patient_status_checks_index_without_provider_call(tmp_path, monkeypatch
     assert response.json() == {"ready": True}
 
 
+def test_ready_reflects_index_without_provider_call(tmp_path, monkeypatch) -> None:
+    def unexpected_provider_call(*args, **kwargs):
+        raise AssertionError("Readiness must not query Ollama")
+
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / "index.json",
+        embedding_backend="hash",
+    )
+    monkeypatch.setattr("medical_rag.server.list_ollama_models", unexpected_provider_call)
+    client = TestClient(create_app(settings))
+
+    response = client.get("/ready")
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "index_exists": False}
+
+    settings.index_path.touch()
+    response = client.get("/ready")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "index_exists": True}
+
+
+def test_ready_reports_unreachable_qdrant_as_not_ready(tmp_path) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+        vector_store_backend="qdrant",
+        qdrant_url="http://127.0.0.1:9",
+        qdrant_timeout_seconds=1.0,
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "index_exists": None}
+
+
 def test_missing_developer_view_returns_not_found(tmp_path) -> None:
     settings = Settings(
         root_dir=tmp_path,
