@@ -23,6 +23,7 @@ This project follows Semantic Versioning for the application release number:
 - Standalone GPU embedding service (`embedder` compose profile) and a `remote` embedding backend so the API host never loads torch.
 - `RAG_QDRANT_TIMEOUT_SECONDS`, `QDRANT_DATA_DIR`, and `QDRANT_WAL_CAPACITY_MB` for slow-disk Qdrant hosts.
 - `RAG_QDRANT_PREFER_GRPC` and `RAG_QDRANT_GRPC_PORT` to talk to Qdrant over gRPC; the Slurm job opens a gRPC tunnel when enabled, and the compose `qdrant` service publishes port `6334`.
+- `RAG_QDRANT_STAGING_DIR` to embed the whole corpus into a local staging file and upload it to Qdrant afterwards. The Slurm job enables it by default (`RAG_QDRANT_STAGED_UPLOAD=true`) and stages on node-local NVMe in `$SLURM_TMPDIR`.
 
 ### Removed
 
