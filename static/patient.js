@@ -12,9 +12,14 @@ const ui = {
   availabilityMessage: document.querySelector("#availability-message"),
   checkStatus: document.querySelector("#check-status"),
 };
+const HISTORY_KEY = "stroke-companion:thread:v1";
+const HISTORY_LIMIT = 50;
 let ready = false;
 let activeRequest = null;
 let answerSequence = 0;
+// Each entry is { question, payload }; payload stays null until an answer arrives.
+let thread = [];
+const articleEntries = new WeakMap();
 
 function icon(name, className = "") {
   return `<svg class="${className}" aria-hidden="true"><use href="/static/icons.svg#${name}"></use></svg>`;
@@ -38,6 +43,37 @@ function resizeQuestion() {
   ui.question.style.height = "auto";
   ui.question.style.height = `${Math.min(ui.question.scrollHeight, 200)}px`;
   updateControls();
+}
+
+function saveThread() {
+  let entries = thread.slice(-HISTORY_LIMIT);
+  while (true) {
+    try {
+      if (entries.length) localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
+      else localStorage.removeItem(HISTORY_KEY);
+      return;
+    } catch (error) {
+      // Drop the oldest exchanges when storage is full; give up if storage is unavailable.
+      if (error?.name !== "QuotaExceededError" || entries.length <= 1) return;
+      entries = entries.slice(1);
+    }
+  }
+}
+
+function loadThread() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    if (!Array.isArray(stored)) return [];
+    return stored
+      .filter((entry) => entry && typeof entry.question === "string" && entry.question.trim())
+      .map((entry) => ({
+        question: entry.question,
+        payload: entry.payload && typeof entry.payload === "object" ? entry.payload : null,
+      }))
+      .slice(-HISTORY_LIMIT);
+  } catch {
+    return [];
+  }
 }
 
 async function checkAvailability() {
@@ -113,6 +149,27 @@ function answerHtml(text, citations, answerId) {
   flushParagraph();
   flushList();
   return blocks.join("");
+}
+
+function appendQuestion(question) {
+  const user = document.createElement("p");
+  user.className = "question-message";
+  user.textContent = question;
+  ui.messages.append(user);
+}
+
+function renderError(article, entry, text) {
+  const body = article.querySelector(".answer-body");
+  body.replaceChildren();
+  const message = document.createElement("p");
+  message.className = "error-message";
+  message.textContent = text;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "quiet-button";
+  retry.innerHTML = `${icon("rotate-ccw")}<span>Try again</span>`;
+  retry.addEventListener("click", () => ask(entry.question, article));
+  body.append(message, retry);
 }
 
 function createAnswer() {
@@ -202,13 +259,15 @@ async function ask(question, existingArticle = null) {
   if (activeRequest || !ready || !question.trim()) return;
   ui.welcome.hidden = true;
   ui.messages.hidden = false;
-  if (!existingArticle) {
-    const user = document.createElement("p");
-    user.className = "question-message";
-    user.textContent = question;
-    ui.messages.append(user);
-  }
+  if (!existingArticle) appendQuestion(question);
   const article = existingArticle || createAnswer();
+  let entry = articleEntries.get(article);
+  if (!entry) {
+    entry = { question, payload: null };
+    articleEntries.set(article, entry);
+    thread.push(entry);
+    saveThread();
+  }
   if (existingArticle) {
     if (ui.question.value.trim() === question) {
       ui.question.value = "";
@@ -233,24 +292,16 @@ async function ask(question, existingArticle = null) {
     const payload = await response.json();
     if (activeRequest !== controller) return;
     renderAnswer(article, payload);
+    entry.payload = payload;
+    saveThread();
     ui.status.textContent = "Answer ready";
   } catch (error) {
     if (activeRequest !== controller) return;
-    const body = article.querySelector(".answer-body");
-    body.replaceChildren();
-    const message = document.createElement("p");
-    message.className = "error-message";
-    message.textContent = error.name === "AbortError"
+    renderError(article, entry, error.name === "AbortError"
       ? "You stopped waiting for this answer."
       : response?.status === 409
         ? "The study library is not ready yet. Please try again later."
-        : "We could not get an answer right now. Please try again.";
-    const retry = document.createElement("button");
-    retry.type = "button";
-    retry.className = "quiet-button";
-    retry.innerHTML = `${icon("rotate-ccw")}<span>Try again</span>`;
-    retry.addEventListener("click", () => ask(question, article));
-    body.append(message, retry);
+        : "We could not get an answer right now. Please try again.");
     ui.status.textContent = error.name === "AbortError" ? "Stopped" : "Answer unavailable";
     if (!ui.question.value) {
       ui.question.value = question;
@@ -284,6 +335,8 @@ ui.checkStatus.addEventListener("click", checkAvailability);
 document.querySelector("#new-session").addEventListener("click", () => {
   activeRequest?.abort();
   activeRequest = null;
+  thread = [];
+  saveThread();
   ui.messages.replaceChildren();
   ui.messages.hidden = true;
   ui.welcome.hidden = false;
@@ -308,4 +361,25 @@ ui.messages.addEventListener("click", (event) => {
   source.focus({ preventScroll: true });
   source.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
+function restoreThread() {
+  thread = loadThread();
+  if (!thread.length) return;
+  ui.welcome.hidden = true;
+  ui.messages.hidden = false;
+  for (const entry of thread) {
+    appendQuestion(entry.question);
+    const article = createAnswer();
+    articleEntries.set(article, entry);
+    try {
+      if (!entry.payload) throw new Error("Unfinished answer");
+      renderAnswer(article, entry.payload);
+    } catch {
+      entry.payload = null;
+      renderError(article, entry, "This answer did not finish. Please try again.");
+    }
+  }
+  ui.messages.lastElementChild.scrollIntoView({ block: "end" });
+}
+
+restoreThread();
 checkAvailability();
