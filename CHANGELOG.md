@@ -18,6 +18,7 @@ This project follows Semantic Versioning for the application release number:
 - `/eval/questions` and `/eval/run` API endpoints for evaluation metadata and execution.
 - Package-level eval suite data under `medical_rag/eval_data.json`.
 - Health metadata for active embedding model, Ollama/API availability, and embedding fallback state.
+- Controlled answer-generation evaluation cases and a CLI (`python -m medical_rag.answer_evaluation`) with fixed evidence and review rubrics for synthesis, partial support, and unsupported questions.
 - Qdrant vector store backend (`RAG_VECTOR_STORE=qdrant`) with idempotent upserts into an existing collection, stale-point cleanup, and vector-config validation.
 - Slurm ingestion job (`scripts/slurm_ingest_qdrant.sbatch`) that embeds on a GPU node with sentence-transformers and writes to Qdrant over an SSH tunnel, with GPU and timing diagnostics.
 - Standalone GPU embedding service (`embedder` compose profile) and a `remote` embedding backend so the API host never loads torch.
@@ -30,6 +31,8 @@ This project follows Semantic Versioning for the application release number:
 
 ### Changed
 
+- API and Ollama prompts now explicitly synthesize evidence across sources and handle fully supported, partially supported, and unsupported questions without inventing missing recommendations.
+- No-evidence answers now state the retrieval limitation naturally instead of suggesting index repairs to patients.
 - Query embeddings no longer load or rewrite the disk-backed ingestion cache. Sparse vector scoring, partial top-k selection, precomputed BM25 lengths/IDF, and direct chunk lookups reduce search overhead without changing the index format.
 - Answers now include retrieval, reranking, index-load, and generation timings, shown in the developer Playground.
 - Reorganized the developer workbench into Playground, Documents, Evaluations, and System views, with paginated document search, indexing status recovery, inspectable evaluation failures, and JSON exports.

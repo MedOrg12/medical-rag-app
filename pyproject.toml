@@ -35,4 +35,4 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 ignore = ["E501"]
 
 [tool.setuptools.package-data]
-medical_rag = ["eval_data.json"]
+medical_rag = ["eval_data.json", "answer_eval_data.json"]

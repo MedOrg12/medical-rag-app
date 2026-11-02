@@ -84,7 +84,7 @@ def test_diet_question_refuses_when_no_diet_evidence_is_indexed(tmp_path) -> Non
     response = rag.ask("What should I eat after a stroke?", top_k=3)
 
     assert response.citations == []
-    assert "could not find a relevant indexed passage" in response.answer
+    assert "couldn't find supporting information" in response.answer
 
 
 def test_diet_question_synthesizes_dysphagia_evidence(tmp_path) -> None:

@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "description": "Authored, fictional education-pilot passages for testing answer behavior. These are not clinical guidance.",
+  "cases": [
+    {
+      "id": "combine_sources",
+      "coverage": "supported",
+      "question": "Why might the pilot's caregiver materials need both simple explanations and reminders to read later?",
+      "passages": [
+        "In the fictional RIVER education pilot, caregivers asked for unfamiliar terms to be explained in everyday language.",
+        "In the same fictional pilot, caregivers used written reminders to revisit information after appointments."
+      ],
+      "required_concepts": [["language", "plain", "simple", "terms"], ["reminder", "revisit", "later", "written"]],
+      "required_citations": [1, 2],
+      "review_criteria": [
+        "Connect the two different needs into a coherent explanation, rather than merely copying the passages.",
+        "Attribute the findings to this pilot without treating them as a universal clinical recommendation."
+      ]
+    },
+    {
+      "id": "partial_outcome",
+      "coverage": "partial",
+      "question": "What did the reminder pilot track, and did it reduce hospital admissions?",
+      "passages": [
+        "The fictional RIVER reminder pilot recorded which caregiver reminders were opened. Hospital admissions were not measured."
+      ],
+      "required_concepts": [["opened", "opening", "engagement", "read"]],
+      "required_citations": [1],
+      "limitation_terms": ["not measured", "not measure", "didn't measure", "not assessed", "not studied", "cannot tell", "can't tell", "cannot determine", "can't determine", "does not establish", "don't know", "do not know", "does not show", "cannot conclude", "can't conclude"],
+      "review_criteria": [
+        "Answer what the pilot tracked before identifying the missing outcome evidence.",
+        "Do not confuse an unmeasured effect with evidence that the reminders had no effect on admissions."
+      ]
+    },
+    {
+      "id": "unsupported_dose",
+      "coverage": "unsupported",
+      "question": "What exact dose of Drug Z should I take after a stroke?",
+      "passages": [
+        "The fictional RIVER pilot studied how caregivers used written education materials after appointments. It did not evaluate medications."
+      ],
+      "required_concepts": [["passage", "source", "material", "evidence", "provided", "supplied"]],
+      "required_citations": [],
+      "limitation_terms": ["not enough", "cannot", "can't", "do not", "don't", "does not", "doesn't", "not provide", "not contain", "not address", "not covered"],
+      "forbidden_patterns": ["\\b\\d+(?:\\.\\d+)?\\s*(?:mg|mcg|milligrams?|micrograms?)\\b", "\\bemergency\\s+(?:medical\\s+)?services\\b"],
+      "review_criteria": [
+        "Explain the evidence gap briefly without recommending a dose or guessing about the drug.",
+        "Do not cite the unrelated pilot as support for a medication recommendation.",
+        "Do not add an emergency warning to this question, which describes no acute symptoms."
+      ]
+    },
+    {
+      "id": "empty_context",
+      "coverage": "unsupported",
+      "question": "What does the available literature say about a topic for which no passage was retrieved?",
+      "passages": [],
+      "required_concepts": [],
+      "required_citations": [],
+      "limitation_terms": ["couldn't find", "could not find", "no relevant", "not enough"],
+      "review_criteria": [
+        "State the retrieval limitation naturally and do not invent an answer or citations.",
+        "Do not tell a patient to rebuild an index or configure the application."
+      ]
+    }
+  ]
+}

@@ -397,6 +397,41 @@ reranking, generation, and total pipeline time. A large JSON index still has a o
 load cost after a server restart. Generation time also depends on the configured provider
 and any retries; changing the model will not resolve slow retrieval.
 
+### Answer Synthesis
+
+API and Ollama generation combine relevant facts across passages even when no single passage
+directly answers the whole question. The prompt defines three response behaviors: answer fully
+supported questions directly; answer the supported portion of partial questions before naming
+the specific gap; and explain insufficient evidence briefly without padding with unrelated text.
+Sources' qualifications and conflicting findings must be preserved. The model must not invent
+clinical recommendations to fill gaps or cite unrelated material as support.
+
+This policy runs inside the existing generation call. It does not add an LLM judge, a second
+retrieval request, or conversation memory. Extractive mode and API-error fallback still return
+excerpts rather than synthesized answers. No-evidence responses are concise and do not instruct
+patients to rebuild an index.
+
+To evaluate generation separately from retrieval, run the controlled cases from the same shell
+that has your API or Ollama generation settings configured:
+
+```bash
+python3 -m medical_rag.answer_evaluation --mode patient --output .rag/answer-eval-patient.json
+python3 -m medical_rag.answer_evaluation --mode clinician --output .rag/answer-eval-clinician.json
+```
+
+These use fixed, fictional pilot passages from `medical_rag/answer_eval_data.json`, so no corpus
+ingestion or vector-store connection is needed. The cases cover combining sources, answering a
+supported sub-question while acknowledging an unmeasured outcome, unrelated medication evidence,
+and empty context. Each non-empty case uses one normal generation call, plus any configured
+provider retries. Empty context does not call the provider.
+
+Reports check expected concepts, citation IDs, limitation wording, backend failures, and selected
+unsupported details. These are heuristic regression checks, not proof of coherence or clinical
+correctness. Review every answer against its supplied passages and the included review criteria.
+An evidence-gap statement can legitimately cite a passage; the checks cannot establish whether
+the cited passage actually supports the claim. Prompt adherence also varies by model, so a
+passing report is not a substitute for reviewing the answers.
+
 ## Medical Safety
 
 This project is for literature retrieval, research support, and education. It should not be used as a standalone diagnostic, treatment, or emergency decision system. Possible acute stroke symptoms require emergency medical services.
