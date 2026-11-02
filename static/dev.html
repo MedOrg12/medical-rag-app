@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Developer Workbench | Stroke Companion</title>
-  <link rel="stylesheet" href="/static/dev.css" /><script src="/static/dev.js" defer></script>
+  <link rel="stylesheet" href="/static/dev.css" /><script src="/static/browser-state.js" defer></script><script src="/static/stream.js" defer></script><script src="/static/dev.js" defer></script>
 </head>
 <body>
   <aside class="rail">
@@ -24,7 +24,7 @@
         <div class="page-heading"><div><p class="eyebrow">Test and inspect</p><h1 id="playground-title">Playground</h1></div><button id="clear-query" class="quiet-button" type="button"><svg aria-hidden="true"><use href="/static/icons.svg#rotate-ccw"></use></svg>Reset</button></div>
         <div id="query-models" class="model-line">Loading configuration...</div><div id="query-warning" class="notice warning" hidden></div>
         <form id="ask-form" class="query-form">
-          <div class="query-settings"><fieldset class="segmented"><legend class="sr-only">Answer mode</legend><button id="mode-patient" type="button" data-mode="patient" aria-pressed="true">Patient</button><button id="mode-clinician" type="button" data-mode="clinician" aria-pressed="false">Clinician</button></fieldset><label class="number-label" for="top-k">Retrieved passages<input id="top-k" type="number" min="1" max="20" value="5" title="Top K: maximum passages used to generate the answer" /></label></div>
+          <div class="query-settings"><fieldset class="segmented"><legend class="sr-only">Answer mode</legend><button id="mode-patient" type="button" data-mode="patient" aria-pressed="true">Patient</button><button id="mode-clinician" type="button" data-mode="clinician" aria-pressed="false">Clinician</button></fieldset><label class="number-label" for="top-k">Top K passages<input id="top-k" type="number" min="1" max="20" value="5" title="Top K: maximum passages used to generate the answer" /></label></div>
           <label class="sr-only" for="question">Test question</label><textarea id="question" rows="3" placeholder="Enter a stroke question to test..." maxlength="4000" required></textarea>
           <div class="query-actions"><label class="example-label" for="example-question">Example<select id="example-question"><option value="">Choose a question</option><option>What should I eat after a stroke?</option><option>What is dysphagia after stroke?</option><option>When is thrombectomy discussed?</option><option>What does SPAN-100 mean?</option></select></label><div class="toolbar"><button id="stop-query" class="quiet-button" type="button" hidden><svg aria-hidden="true"><use href="/static/icons.svg#square"></use></svg>Stop waiting</button><button id="ask-button" type="submit"><svg aria-hidden="true"><use href="/static/icons.svg#play"></use></svg>Run query</button></div></div>
         </form>
@@ -32,7 +32,7 @@
         <div id="query-empty" class="empty-state"><svg aria-hidden="true"><use href="/static/icons.svg#flask-conical"></use></svg><p>No result yet</p></div><div id="query-error" class="notice error" role="alert" hidden></div>
         <div id="query-result" hidden><div id="query-metadata" class="run-metadata"></div><div class="result-grid">
           <section aria-labelledby="answer-title"><div class="section-heading compact"><h2 id="answer-title">Answer</h2><button id="copy-answer" class="icon-button" type="button" title="Copy answer" aria-label="Copy answer"><svg aria-hidden="true"><use href="/static/icons.svg#copy"></use></svg></button></div><div id="answer" class="answer"></div></section>
-          <section class="evidence-section" aria-labelledby="evidence-title"><div class="section-heading compact"><h2 id="evidence-title">Retrieved evidence</h2><span id="evidence-count" class="muted"></span></div><div id="evidence-list"></div></section>
+          <section class="evidence-section" aria-labelledby="evidence-title"><div class="section-heading compact"><h2 id="evidence-title">Retrieved evidence (Top K)</h2><span id="evidence-count" class="muted"></span></div><div id="evidence-list"></div></section>
         </div><details class="raw-response"><summary>Response JSON</summary><div class="section-heading compact"><span class="muted">Latest query response</span><button id="download-query" class="icon-button" type="button" title="Download query JSON" aria-label="Download query JSON"><svg aria-hidden="true"><use href="/static/icons.svg#download"></use></svg></button></div><pre id="query-json"></pre></details></div>
       </section>
       <section id="view-documents" class="view" aria-labelledby="documents-title" hidden>
@@ -43,9 +43,9 @@
         </section>
         <div id="ingest-result" class="notice" role="status" hidden></div><div id="ingest-report" class="report-strip" hidden></div>
         <section class="ingest-panel" aria-labelledby="screen-title">
-          <h2 id="screen-title">Gemini PDF screening</h2>
+          <h2 id="screen-title">PDF screening</h2>
           <p>Checks abstract relevance and usable content. This does not certify scientific validity. Scanning leaves the vector index unchanged.</p>
-          <form id="screen-form"><label>PDF or directory<input id="screen-source" placeholder="Default corpus directory" /></label><label class="check"><input id="screen-force" type="checkbox" />Recheck cached decisions (uses Gemini API)</label><button id="screen-run" type="submit">Scan PDFs</button></form>
+          <form id="screen-form"><label>Screening provider<select id="screen-provider"><option value="openai">OpenAI</option><option value="gemini">Gemini</option></select></label><p id="screen-provider-info" class="muted">The selected provider receives extracted abstracts for this scan. Indexing uses the server's default screening provider.</p><label>PDF or directory<input id="screen-source" placeholder="Default corpus directory" /></label><label class="check"><input id="screen-force" type="checkbox" />Recheck cached decisions (uses the selected provider)</label><button id="screen-run" type="submit">Scan PDFs</button></form>
           <p id="screen-status" role="status"></p><button id="screen-download" type="button" hidden>Download scan report</button>
           <div id="screen-results"></div>
           <div class="section-heading"><h3>Manual review queue</h3><button id="review-refresh" type="button">Refresh reviews</button></div>
@@ -59,7 +59,7 @@
       </section>
       <section id="view-evaluations" class="view" aria-labelledby="evaluations-title" hidden>
         <div class="page-heading"><div><p class="eyebrow">Quality checks</p><h1 id="evaluations-title">Evaluations</h1></div><button id="eval-run-button" type="button" disabled><svg aria-hidden="true"><use href="/static/icons.svg#play"></use></svg><span id="eval-run-label">Run selected</span></button></div>
-        <div class="eval-settings"><label>Answer mode<select id="eval-answer-mode"><option value="patient">Patient</option><option value="clinician">Clinician</option></select></label><label>Retrieved passages<input id="eval-top-k" type="number" min="1" max="20" value="5" /></label><label class="check"><input id="eval-include-answers" type="checkbox" checked />Include full answers</label></div>
+        <div class="eval-settings"><label>Answer mode<select id="eval-answer-mode"><option value="patient">Patient</option><option value="clinician">Clinician</option></select></label><label>Top K passages<input id="eval-top-k" type="number" min="1" max="20" value="5" /></label><label class="check"><input id="eval-include-answers" type="checkbox" checked />Include full answers</label></div>
         <details id="question-selection" class="question-selection" open><summary>Question set<span id="selected-count" class="muted">Loading...</span></summary><div class="selection-toolbar"><label class="check"><input id="select-all" type="checkbox" checked />Select all</label><button id="reload-eval-questions" class="icon-button" type="button" title="Reload question set" aria-label="Reload question set"><svg aria-hidden="true"><use href="/static/icons.svg#rotate-ccw"></use></svg></button></div><div id="eval-question-list">Loading questions...</div></details>
         <div id="eval-status" class="run-status" role="status">No evaluation run yet</div><div id="eval-error" class="notice error" role="alert" hidden></div><div id="eval-output" hidden><div id="eval-summary" class="stats-strip"></div><div id="eval-run-metadata" class="run-metadata"></div><div class="section-heading"><h2>Results</h2><div class="toolbar"><label class="sr-only" for="eval-filter">Filter evaluation results</label><select id="eval-filter"><option value="all">All results</option><option value="fail">Failed</option><option value="error">Errors</option><option value="pass">Passed</option></select><button id="download-eval" class="icon-button" type="button" title="Download evaluation JSON" aria-label="Download evaluation JSON"><svg aria-hidden="true"><use href="/static/icons.svg#download"></use></svg></button></div></div><div id="eval-results"></div></div>
       </section>

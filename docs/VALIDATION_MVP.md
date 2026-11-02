@@ -1,5 +1,29 @@
 # Validation rollout
 
+## Choosing a screening provider
+
+The developer dashboard's Documents tab supports OpenAI and Gemini for individual
+PDF scans. The selector changes that scan only. The default for scans, CLI validation
+and screening during ingestion is controlled by `RAG_VALIDATION_PROVIDER`:
+
+```dotenv
+RAG_VALIDATION_PROVIDER=openai
+RAG_VALIDATION_OPENAI_MODEL=gpt-4o-mini
+RAG_VALIDATION_GEMINI_MODEL=gemini-3.1-flash-lite
+```
+
+OpenAI uses `OPENAI_API_KEY` (or `RAG_VALIDATION_OPENAI_API_KEY`); Gemini uses
+`GEMINI_API_KEY` (or `RAG_VALIDATION_GEMINI_API_KEY`). Keep credentials in the
+server's local environment. Gemini native transport and OpenAI structured JSON
+output remain available. A missing key blocks a requested UI scan rather than
+silently using the other provider. Provider selection does not change answer generation.
+
+`configured` preserves the existing shared/custom endpoint settings. Saved
+assessments include the provider endpoint and model in their cache key, so an OpenAI
+scan does not reuse Gemini assessments. Existing audits and reviews are retained.
+
+The historical rollout and corpus measurements below used Gemini.
+
 The implementation supports off, report-only and enforced screening for JSON and
 Qdrant, with no-vector-write dry runs, audit records, versioned assessments and a
 manual review queue. The local rollout selects report-only mode, Gemini 3.1

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import threading
 import time
+from dataclasses import replace
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,7 +13,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -57,6 +59,7 @@ class EvalRunRequest(BaseModel):
 class ScreeningRequest(BaseModel):
     source_path: str | None = None
     force: bool = False
+    provider: Literal["openai", "gemini", "configured"] | None = None
 
 
 class ReviewRequest(BaseModel):
@@ -102,9 +105,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     screening_executor = ThreadPoolExecutor(max_workers=1)
     screening_status = {"running": False, "last_error": None, "results": None}
 
-    def run_screening(source: Path, force: bool) -> None:
+    def run_screening(source: Path, force: bool, settings: Settings) -> None:
         try:
-            results = validate_source(source, app_settings, force)
+            results = validate_source(source, settings, force)
             with screening_lock:
                 screening_status.update(running=False, results=results)
         except Exception as exc:
@@ -117,16 +120,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         source = Path(request.source_path).expanduser().resolve() if request.source_path else app_settings.corpus_dir.resolve()
         if not source.exists():
             raise HTTPException(400, "Source does not exist")
+        settings = app_settings if request.provider is None else replace(app_settings, validation_provider=request.provider)
+        effective = AbstractValidator(settings).settings
+        if not effective.api_key:
+            raise HTTPException(400, "The selected screening provider has no API key configured")
         with screening_lock:
             if screening_status["running"]:
                 raise HTTPException(409, "PDF screening is already running")
             screening_status.update(running=True, last_error=None, results=None)
             try:
-                screening_executor.submit(run_screening, source, request.force)
+                screening_executor.submit(run_screening, source, request.force, settings)
             except Exception:
                 screening_status["running"] = False
                 raise
         return {"accepted": True}
+
+    @app.get("/validation/providers")
+    def screening_providers() -> dict[str, Any]:
+        choices = []
+        for provider in dict.fromkeys([app_settings.validation_provider, "openai", "gemini"]):
+            effective = AbstractValidator(replace(app_settings, validation_provider=provider)).settings
+            choices.append({"id": provider, "model": effective.validation_model,
+                            "configured": bool(effective.api_key)})
+        return {"default": app_settings.validation_provider, "providers": choices}
 
     @app.get("/validation/status")
     def get_screening_status() -> dict[str, Any]:
@@ -354,8 +370,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "api_base_url": app_settings.api_base_url,
             "api_key_configured": bool(app_settings.api_key),
             "validation_mode": app_settings.effective_validation_mode,
-            "validation_model": app_settings.validation_model,
-            "validation_transport": app_settings.validation_transport,
+            "validation_model": app_settings.for_validation_provider().validation_model,
+            "validation_transport": app_settings.for_validation_provider().validation_transport,
+            "validation_provider": app_settings.validation_provider,
             "validation_threshold": app_settings.validation_threshold,
             "api_generation_model": app_settings.api_generation_model,
             "api_embedding_model": app_settings.api_embedding_model,
@@ -411,6 +428,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with conversation_lock:
             memory.clear(conversation_id)
         return {"cleared": True}
+
+    @app.post("/ask/stream")
+    def stream_answer(request: AskRequest) -> StreamingResponse:
+        def events():
+            try:
+                with conversation_lock:
+                    history = (prompt_history(memory.context(request.conversation_id))
+                               if request.conversation_id else [])
+                for event in rag.ask_stream(request.question, request.top_k, request.filters,
+                                            request.answer_mode, history):
+                    if event["type"] == "done":
+                        payload = event["answer"].to_dict()
+                        if request.conversation_id:
+                            with conversation_lock:
+                                memory.append(request.conversation_id, payload)
+                            payload["conversation_id"] = request.conversation_id
+                        event = {"type": "done", "payload": payload}
+                    yield json.dumps(event) + "\n"
+            except Exception as exc:
+                logger.exception("Answer stream failed")
+                yield json.dumps({"type": "error", "message": user_error(exc)}) + "\n"
+        return StreamingResponse(events(), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.post("/ask")
     def ask(request: AskRequest) -> dict[str, Any]:

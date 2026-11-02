@@ -133,7 +133,7 @@ textarea:focus-visible { outline: none; }
 .source-list li { border-bottom: 1px solid var(--line); padding: 16px 0; scroll-margin-top: 24px; }
 .source-title { color: var(--ink); font-weight: 600; overflow-wrap: anywhere; }
 .source-page { display: block; margin-top: 3px; color: var(--muted); }
-.source-excerpt { margin-top: 8px; font-size: 14px; line-height: 1.65; color: var(--muted); overflow-wrap: anywhere; }
+.source-excerpt { margin: 8px 0 0; padding-left: 12px; border-left: 2px solid var(--line); font-size: 14px; line-height: 1.65; color: var(--muted); overflow-wrap: anywhere; }
 .source-list li:focus { outline: 2px solid var(--accent); outline-offset: 5px; }
 .answer-note { margin-top: 18px; padding-left: 12px; border-left: 2px solid #b98437; color: var(--muted); font-size: 14px; }
 .pending { color: var(--muted); display: flex; align-items: center; gap: 12px; font-size: 15px; }

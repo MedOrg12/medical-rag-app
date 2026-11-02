@@ -15,6 +15,37 @@ const ui = {
 let ready = false;
 let activeRequest = null;
 let answerSequence = 0;
+let conversationId = crypto.randomUUID();
+let savedTurns = [];
+let pendingQuestion = "";
+
+function saveConversation() {
+  return BrowserState.write("patient", {
+    conversationId, turns: savedTurns.slice(-50), draft: ui.question.value.slice(0, 4000), pendingQuestion,
+  });
+}
+
+function restoreConversation() {
+  const saved = BrowserState.read("patient");
+  if (!saved || typeof saved.conversationId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(saved.conversationId)) return;
+  conversationId = saved.conversationId;
+  savedTurns = (Array.isArray(saved.turns) ? saved.turns : []).filter(turn =>
+    typeof turn?.question === "string" && typeof turn?.payload?.answer === "string" &&
+    Array.isArray(turn.payload.citations) && turn.payload.citations.every(citation => citation && typeof citation === "object")
+  ).slice(-50);
+  for (const turn of savedTurns) {
+    const question = document.createElement("p");
+    question.className = "question-message";
+    question.textContent = turn.question;
+    ui.messages.append(question);
+    renderAnswer(createAnswer(), turn.payload);
+  }
+  ui.messages.hidden = savedTurns.length === 0;
+  ui.welcome.hidden = savedTurns.length > 0;
+  const draft = typeof saved.draft === "string" ? saved.draft : "";
+  ui.question.value = (draft || (typeof saved.pendingQuestion === "string" ? saved.pendingQuestion : "")).slice(0, 4000);
+  resizeQuestion();
+}
 
 function icon(name, className = "") {
   return `<svg class="${className}" aria-hidden="true"><use href="/static/icons.svg#${name}"></use></svg>`;
@@ -125,9 +156,14 @@ function createAnswer() {
   return article;
 }
 
+function citedSources(answer, citations) {
+  const citedIds = new Set(Array.from(String(answer).matchAll(/\[(\d+)\]/g), match => Number(match[1])));
+  return citations.filter(citation => Number.isInteger(citation.id) && citation.id > 0 && citedIds.has(citation.id));
+}
+
 function renderAnswer(article, payload) {
-  const citations = (payload.citations || []).filter((citation) => Number.isInteger(citation.id) && citation.id > 0);
   const rawAnswer = String(payload.answer || "");
+  const citations = citedSources(rawAnswer, payload.citations || []);
   const fallback = rawAnswer.includes("Generation backend was unavailable, so this answer uses extractive retrieval.");
   let answer = rawAnswer
     .replace(/^Generation backend was unavailable, so this answer uses extractive retrieval\..*$/gm, "")
@@ -148,7 +184,7 @@ function renderAnswer(article, payload) {
   } else if (!citations.length) {
     const note = document.createElement("p");
     note.className = "answer-note";
-    note.textContent = "No supporting source was found in the study library.";
+    note.textContent = "No sources were cited in this answer.";
     article.append(note);
   }
 
@@ -157,7 +193,7 @@ function renderAnswer(article, payload) {
   if (citations.length) {
     const details = document.createElement("details");
     details.className = "sources";
-    details.innerHTML = `<summary>${icon("file-text")}<span>View ${citations.length} source${citations.length === 1 ? "" : "s"}</span>${icon("chevron-down", "chevron")}</summary>`;
+    details.innerHTML = `<summary>${icon("file-text")}<span>View ${citations.length} cited source${citations.length === 1 ? "" : "s"}</span>${icon("chevron-down", "chevron")}</summary>`;
     const list = document.createElement("ol");
     list.className = "source-list";
     for (const citation of citations) {
@@ -170,7 +206,7 @@ function renderAnswer(article, payload) {
       const page = document.createElement("span");
       page.className = "source-page";
       page.textContent = citation.page != null ? `Page ${citation.page}` : "Page not available";
-      const excerpt = document.createElement("p");
+      const excerpt = document.createElement("blockquote");
       excerpt.className = "source-excerpt";
       excerpt.textContent = citation.excerpt || "";
       item.append(title, page, excerpt);
@@ -218,22 +254,28 @@ async function ask(question, existingArticle = null) {
   }
   const controller = new AbortController();
   activeRequest = controller;
+  pendingQuestion = question;
+  saveConversation();
   ui.status.textContent = "Preparing your answer...";
   updateControls();
   article.scrollIntoView({ behavior: "smooth", block: "start" });
   let response;
   try {
-    response = await fetch("/ask", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, answer_mode: "patient" }),
-      signal: controller.signal,
+    const payload = await streamAnswer({ question, answer_mode: "patient", conversation_id: conversationId }, controller.signal, text => {
+      if (activeRequest !== controller) return;
+      article.querySelector(".answer-body").textContent = text;
+      article.querySelector(".answer-body").style.whiteSpace = "pre-wrap";
+      ui.status.textContent = "Writing your answer...";
     });
-    if (!response.ok) throw new Error("Request failed");
-    const payload = await response.json();
+    article.querySelector(".answer-body").style.whiteSpace = "";
     if (activeRequest !== controller) return;
     renderAnswer(article, payload);
+    savedTurns.push({ question, payload });
+    savedTurns = savedTurns.slice(-50);
+    pendingQuestion = "";
+    const persisted = saveConversation();
     ui.status.textContent = "Answer ready";
+    if (!persisted) ui.status.textContent = "Answer ready. Browser history could not be saved.";
   } catch (error) {
     if (activeRequest !== controller) return;
     const body = article.querySelector(".answer-body");
@@ -256,6 +298,8 @@ async function ask(question, existingArticle = null) {
       ui.question.value = question;
       resizeQuestion();
     }
+    pendingQuestion = "";
+    saveConversation();
   } finally {
     if (activeRequest === controller) {
       activeRequest = null;
@@ -272,7 +316,7 @@ ui.form.addEventListener("submit", (event) => {
   resizeQuestion();
   ask(question);
 });
-ui.question.addEventListener("input", resizeQuestion);
+ui.question.addEventListener("input", () => { resizeQuestion(); saveConversation(); });
 ui.question.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
@@ -284,6 +328,10 @@ ui.checkStatus.addEventListener("click", checkAvailability);
 document.querySelector("#new-session").addEventListener("click", () => {
   activeRequest?.abort();
   activeRequest = null;
+  conversationId = crypto.randomUUID();
+  savedTurns = [];
+  pendingQuestion = "";
+  BrowserState.remove("patient");
   ui.messages.replaceChildren();
   ui.messages.hidden = true;
   ui.welcome.hidden = false;
@@ -295,6 +343,7 @@ document.querySelector("#new-session").addEventListener("click", () => {
 document.querySelectorAll("[data-question]").forEach((button) => {
   button.addEventListener("click", () => {
     ui.question.value = button.dataset.question;
+    saveConversation();
     resizeQuestion();
     ui.question.focus();
   });
@@ -308,4 +357,5 @@ ui.messages.addEventListener("click", (event) => {
   source.focus({ preventScroll: true });
   source.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
+restoreConversation();
 checkAvailability();

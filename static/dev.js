@@ -16,6 +16,30 @@ const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&":
 const number = (value) => new Intl.NumberFormat().format(Number(value || 0));
 const percent = (value) => `${Math.round(Number(value || 0) * 100)}%`;
 const seconds = (value) => `${Number(value || 0).toFixed(1)}s`;
+
+function saveWorkbench() {
+  BrowserState.write("workbench", {
+    question: $("#question").value.slice(0, 4000), topK: Number($("#top-k").value),
+    answerMode: state.answerMode, query: state.query, screeningProvider: $("#screen-provider").value,
+  });
+}
+
+function restoreWorkbench() {
+  const saved = BrowserState.read("workbench");
+  if (!saved) return;
+  if (typeof saved.question === "string") $("#question").value = saved.question.slice(0, 4000);
+  if (Number.isInteger(saved.topK) && saved.topK >= 1 && saved.topK <= 20) $("#top-k").value = saved.topK;
+  if (["patient", "clinician"].includes(saved.answerMode)) state.answerMode = saved.answerMode;
+  document.querySelectorAll("[data-mode]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.mode === state.answerMode)));
+  const query = saved.query;
+  if (query?.request && query?.response && typeof query.response.answer === "string" &&
+      Array.isArray(query.response.citations) && query.response.citations.every(citation => citation && typeof citation === "object")) {
+    state.query = query;
+    renderQuery();
+    $("#query-empty").hidden = true;
+    $("#query-status").textContent = "Restored previous result";
+  }
+}
 const icon = (name) => `<svg aria-hidden="true"><use href="/static/icons.svg#${name}"></use></svg>`;
 
 async function request(path, body, signal) {
@@ -53,6 +77,7 @@ function showView() {
     if (state.sources === null) loadSources();
     checkIngestion();
     refreshScreening();
+    loadScreeningProviders();
     loadReviews();
   }
   if (state.view === "evaluations" && state.questions === null) loadQuestions();
@@ -131,6 +156,7 @@ function clearQuery() {
   $("#query-empty").hidden = false;
   $("#query-status").textContent = "No query run yet";
   notice("#query-error", "");
+  saveWorkbench();
   queryControls();
   $("#question").focus();
 }
@@ -152,10 +178,18 @@ async function runQuery(event) {
   state.queryTimer = setInterval(progress, 500);
   queryControls();
   try {
-    const payload = await request("/ask", inputs, controller.signal);
+    const payload = await streamAnswer(inputs, controller.signal, text => {
+      if (state.queryRequest !== controller) return;
+      $("#query-result").hidden = false;
+      $("#query-metadata").textContent = "Answer streaming...";
+      $("#evidence-list").textContent = "Evidence will appear when the answer completes.";
+      $("#query-json").textContent = "";
+      $("#answer").textContent = text;
+    });
     if (state.queryRequest !== controller) return;
     const latency = (performance.now() - started) / 1000;
     state.query = { request: inputs, latency_seconds: latency, response: payload };
+    saveWorkbench();
     renderQuery();
     $("#query-status").textContent = `Completed in ${seconds(latency)}`;
   } catch (error) {
@@ -180,7 +214,7 @@ function renderQuery() {
   const citations = payload.citations || [];
   const answer = String(payload.answer || "No answer returned.");
   const fallback = answer.includes("Generation backend was unavailable");
-  $("#query-metadata").innerHTML = `<span class="run-question"><strong>Question:</strong> ${esc(inputs.question)}</span><span><strong>${esc(inputs.answer_mode)}</strong> mode</span><span><strong>${inputs.top_k}</strong> requested passages</span><span>${esc(payload.retrieval_mode || "vector")} retrieval</span><span>${esc(payload.retrieval_model)}</span><span>${esc(payload.generation_model)}</span>${fallback ? '<span class="badge warning">Generation fallback</span>' : ""}<span>${seconds(latency)}</span>`;
+  $("#query-metadata").innerHTML = `<span class="run-question"><strong>Question:</strong> ${esc(inputs.question)}</span><span><strong>${esc(inputs.answer_mode)}</strong> mode</span><span>Top K: <strong>${esc(inputs.top_k)}</strong> requested passages</span><span>${esc(payload.retrieval_mode || "vector")} retrieval</span><span>${esc(payload.retrieval_model)}</span><span>${esc(payload.generation_model)}</span>${fallback ? '<span class="badge warning">Generation fallback</span>' : ""}<span>${seconds(latency)}</span>`;
   if (payload.timings) {
     const stages = [["Index load", "index_load_seconds"], ["Retrieval", "retrieval_seconds"], ["Reranking", "reranking_seconds"], ["Generation", "generation_seconds"]];
     $("#query-metadata").innerHTML += `<span class="run-question muted">${stages.map(([label, key]) => `${label} ${seconds(payload.timings[key])}`).join(" · ")}</span>`;
@@ -378,7 +412,9 @@ function download(payload, filename) {
 }
 
 $("#ask-form").addEventListener("submit", runQuery);
-$("#question").addEventListener("input", queryControls);
+$("#question").addEventListener("input", () => { queryControls(); saveWorkbench(); });
+$("#top-k").addEventListener("input", saveWorkbench);
+$("#screen-provider").addEventListener("change", saveWorkbench);
 $("#question").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.isComposing) { event.preventDefault(); if (!$("#ask-button").disabled) $("#ask-form").requestSubmit(); }
 });
@@ -386,9 +422,10 @@ $("#stop-query").addEventListener("click", () => state.queryRequest?.abort());
 $("#clear-query").addEventListener("click", clearQuery);
 document.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => {
   state.answerMode = button.dataset.mode;
+  saveWorkbench();
   document.querySelectorAll("[data-mode]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
 }));
-$("#example-question").addEventListener("change", () => { if ($("#example-question").value) { $("#question").value = $("#example-question").value; $("#question").focus(); queryControls(); } });
+$("#example-question").addEventListener("change", () => { if ($("#example-question").value) { $("#question").value = $("#example-question").value; $("#question").focus(); queryControls(); saveWorkbench(); } });
 $("#answer").addEventListener("click", (event) => { const button = event.target.closest("[data-evidence]"); if (button) document.getElementById(button.dataset.evidence)?.focus(); });
 $("#copy-answer").addEventListener("click", async () => { try { await navigator.clipboard.writeText(state.query.response.answer); announce("Answer copied"); } catch { announce("Could not copy answer"); } });
 $("#download-query").addEventListener("click", () => download(state.query, "rag-query.json"));
@@ -414,6 +451,7 @@ $("#refresh-button").addEventListener("click", async () => {
 });
 window.addEventListener("hashchange", showView);
 window.addEventListener("pagehide", () => { clearTimeout(state.ingestTimer); clearInterval(state.queryTimer); });
+restoreWorkbench();
 showView();
 loadHealth();
 queryControls();
@@ -435,6 +473,17 @@ async function refreshScreening() {
   } catch (error) { $("#screen-status").textContent = error.message; }
 }
 
+async function loadScreeningProviders() {
+  try {
+    const configuration = await request("/validation/providers");
+    $("#screen-provider").innerHTML = configuration.providers.map(provider => `<option value="${esc(provider.id)}" ${provider.id === configuration.default ? "selected" : ""} ${provider.configured ? "" : "disabled"}>${esc(provider.id === "openai" ? "OpenAI" : provider.id === "gemini" ? "Gemini" : "Configured provider")} · ${esc(provider.model)}${provider.configured ? "" : " (API key missing)"}</option>`).join("");
+    const saved = BrowserState.read("workbench");
+    if (configuration.providers.some(provider => provider.id === saved?.screeningProvider && provider.configured)) {
+      $("#screen-provider").value = saved.screeningProvider;
+    }
+  } catch (error) { $("#screen-status").textContent = error.message; }
+}
+
 async function loadReviews() {
   try {
     const rows = await request(`/validation/reviews?limit=50&offset=${reviewOffset}`);
@@ -448,7 +497,7 @@ $("#screen-form").addEventListener("submit", async event => {
   event.preventDefault();
   $("#screen-run").disabled = true;
   try {
-    await request("/validation/run", { source_path: $("#screen-source").value.trim() || null, force: $("#screen-force").checked });
+    await request("/validation/run", { source_path: $("#screen-source").value.trim() || null, force: $("#screen-force").checked, provider: $("#screen-provider").value });
     $("#screen-results").textContent = "";
     $("#screen-download").hidden = true;
     await refreshScreening();

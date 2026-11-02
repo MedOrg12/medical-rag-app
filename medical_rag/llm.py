@@ -56,6 +56,9 @@ _RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 class Generator(ABC):
     model_name: str
 
+    def stream(self, question, results, answer_mode="patient", history=None):
+        yield self.generate(question, results, answer_mode=answer_mode, history=history)
+
     @abstractmethod
     def generate(
         self, question: str, results: list[SearchResult], answer_mode: str = "patient",
@@ -106,6 +109,39 @@ class OllamaGenerator(Generator):
     model_name: str
     temperature: float = 0.1
     timeout_seconds: float = 20.0
+
+    def stream(self, question, results, answer_mode="patient", history=None):
+        if not results and not history:
+            yield self.generate(question, results, answer_mode=answer_mode, history=history)
+            return
+        payload = {"model": self.model_name, "stream": True,
+                   "messages": [{"role": "system", "content": _system_prompt(answer_mode)},
+                                *(history or []),
+                                {"role": "user", "content": _user_prompt(question, results, answer_mode)}],
+                   "options": {"temperature": self.temperature}}
+        request = urllib.request.Request(self.base_url.rstrip("/") + "/api/chat",
+                                         data=json.dumps(payload).encode(),
+                                         headers={"Content-Type": "application/json"})
+        received = False
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                for raw in response:
+                    if not raw.strip():
+                        continue
+                    data = json.loads(raw)
+                    if data.get("error"):
+                        raise RuntimeError("Ollama reported a streaming error")
+                    content = (data.get("message") or {}).get("content")
+                    if content:
+                        received = True
+                        yield content
+                    if data.get("done"):
+                        if not received:
+                            raise RuntimeError("Ollama returned an empty answer")
+                        return
+            raise RuntimeError("Ollama stream ended before completion")
+        except (OSError, ValueError) as exc:
+            raise RuntimeError("Ollama answer stream was interrupted") from exc
 
     def generate(
         self, question: str, results: list[SearchResult], answer_mode: str = "patient",
@@ -163,6 +199,53 @@ class ApiGenerator(Generator):
     @property
     def model_name(self) -> str:
         return f"api:{self.model}"
+
+    def stream(self, question, results, answer_mode="patient", history=None):
+        if not results and not history:
+            yield self.generate(question, results, answer_mode=answer_mode, history=history)
+            return
+        payload = {
+            "model": self.model, "stream": True,
+            "messages": [{"role": "system", "content": _system_prompt(answer_mode)},
+                         *(history or []),
+                         {"role": "user", "content": _user_prompt(question, results, answer_mode)}],
+        }
+        effort = _reasoning_effort(self.base_url, self.model, self.reasoning_effort)
+        if effort:
+            payload["reasoning_effort"] = effort
+        if not (_is_openai_host(self.base_url) and effort):
+            payload["temperature"] = self.temperature
+        if self.max_output_tokens > 0:
+            payload["max_completion_tokens" if _is_openai_host(self.base_url) else "max_tokens"] = self.max_output_tokens
+        request = urllib.request.Request(
+            self.base_url.rstrip("/") + "/chat/completions", data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"},
+        )
+        received = False
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                for raw in response:
+                    line = raw.decode("utf-8").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    value = line[5:].strip()
+                    if value == "[DONE]":
+                        if not received:
+                            raise RuntimeError("Provider returned an empty answer")
+                        return
+                    data = json.loads(value)
+                    if data.get("error"):
+                        raise RuntimeError("Provider reported a streaming error")
+                    for choice in data.get("choices", []):
+                        if choice.get("finish_reason") not in {None, "stop"}:
+                            raise RuntimeError("Provider did not finish the answer normally")
+                        content = (choice.get("delta") or {}).get("content")
+                        if content:
+                            received = True
+                            yield content
+            raise RuntimeError("Provider stream ended before completion")
+        except (OSError, ValueError) as exc:
+            raise RuntimeError("Answer stream was interrupted") from exc
 
     def generate(
         self, question: str, results: list[SearchResult], answer_mode: str = "patient",
@@ -252,6 +335,19 @@ class FallbackGenerator(Generator):
     @property
     def model_name(self) -> str:
         return self.primary.model_name
+
+    def stream(self, question, results, answer_mode="patient", history=None):
+        emitted = False
+        try:
+            for chunk in self.primary.stream(question, results, answer_mode=answer_mode, history=history):
+                emitted = True
+                yield chunk
+        except (RuntimeError, ValueError, TypeError, KeyError) as exc:
+            logger.exception("Streaming generation failed")
+            if emitted:
+                raise RuntimeError("Answer interrupted before completion. Please try again.") from exc
+            yield self.fallback.generate(question, results, answer_mode=answer_mode, history=history)
+            yield "\n\n" + user_error(exc) + " I’ve shown relevant document excerpts instead of a full answer."
 
     def generate(
         self, question: str, results: list[SearchResult], answer_mode: str = "patient",

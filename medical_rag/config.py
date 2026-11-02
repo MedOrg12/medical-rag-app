@@ -98,6 +98,13 @@ class Settings:
     validation_model: str = "gpt-4o-mini"
     validation_mode: str = "off"
     validation_transport: str = "auto"
+    validation_api_base_url: str = ""
+    validation_api_key: str = ""
+    validation_provider: str = "configured"
+    validation_openai_api_key: str = ""
+    validation_gemini_api_key: str = ""
+    validation_openai_model: str = "gpt-4o-mini"
+    validation_gemini_model: str = "gemini-3.1-flash-lite"
     validation_threshold: float = 0.7
     validation_max_abstract_chars: int = 3000
     validation_concurrency: int = 2
@@ -140,6 +147,8 @@ class Settings:
         return "enforce" if self.validation_enabled and self.validation_mode == "off" else self.validation_mode
 
     def __post_init__(self) -> None:
+        if self.validation_provider not in {"configured", "openai", "gemini"}:
+            raise ValueError("Invalid validation provider")
         if self.validation_transport not in {"auto", "compatible", "gemini_native"}:
             raise ValueError("Invalid validation transport")
         if self.validation_mode not in {"off", "report_only", "enforce"}:
@@ -218,6 +227,15 @@ class Settings:
             validation_scope=os.getenv("RAG_VALIDATION_SCOPE") or cls.validation_scope,
             validation_mode=(os.getenv("RAG_VALIDATION_MODE") or "off").lower(),
             validation_transport=os.getenv("RAG_VALIDATION_TRANSPORT", "auto").lower(),
+            validation_provider=os.getenv("RAG_VALIDATION_PROVIDER", "configured").lower(),
+            validation_openai_api_key=_first_env("RAG_VALIDATION_OPENAI_API_KEY", "OPENAI_API_KEY", default=(api_key if not gemini else "")),
+            validation_gemini_api_key=_first_env("RAG_VALIDATION_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", default=(api_key if gemini else "")),
+            validation_openai_model=os.getenv("RAG_VALIDATION_OPENAI_MODEL", "gpt-4o-mini"),
+            validation_gemini_model=os.getenv("RAG_VALIDATION_GEMINI_MODEL", "gemini-3.1-flash-lite"),
+            validation_api_base_url=os.getenv("RAG_VALIDATION_API_BASE_URL", ""),
+            validation_api_key=(_first_env("RAG_VALIDATION_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", default="")
+                                if urlparse(os.getenv("RAG_VALIDATION_API_BASE_URL", "")).hostname == "generativelanguage.googleapis.com"
+                                else os.getenv("RAG_VALIDATION_API_KEY", "")),
             validation_threshold=_env_float("RAG_VALIDATION_THRESHOLD", 0.7),
             validation_max_abstract_chars=_env_int("RAG_VALIDATION_MAX_ABSTRACT_CHARS", 3000),
             validation_concurrency=_env_int("RAG_VALIDATION_CONCURRENCY", 2),
@@ -269,6 +287,21 @@ class Settings:
             corpus_dir=corpus_dir or self.corpus_dir,
             index_path=index_path or self.index_path,
         )
+
+    def for_validation_provider(self, provider: str | None = None) -> Settings:
+        provider = provider or self.validation_provider
+        if provider == "configured":
+            return self
+        if provider == "openai":
+            url, key, model, transport = ("https://api.openai.com/v1", self.validation_openai_api_key,
+                                          self.validation_openai_model, "compatible")
+        elif provider == "gemini":
+            url, key, model, transport = ("https://generativelanguage.googleapis.com/v1beta/openai",
+                                          self.validation_gemini_api_key, self.validation_gemini_model, "gemini_native")
+        else:
+            raise ValueError("Invalid validation provider")
+        return replace(self, validation_provider=provider, validation_api_base_url=url,
+                       validation_api_key=key, validation_model=model, validation_transport=transport)
 
     def with_ingestion_options(
         self,

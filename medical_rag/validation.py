@@ -270,6 +270,10 @@ class ValidationStore:
 
 class AbstractValidator:
     def __init__(self, settings: Settings):
+        settings = settings.for_validation_provider()
+        if settings.validation_api_base_url:
+            settings = replace(settings, api_base_url=settings.validation_api_base_url,
+                               api_key=settings.validation_api_key)
         self.settings = settings
         self._failure_lock = threading.Lock()
         self._provider_failures = 0
@@ -418,6 +422,8 @@ class AbstractValidator:
             "response_format": {"type": "json_schema", "json_schema": {
                 "name": "abstract_validation", "strict": True, "schema": _schema()}},
         }
+        if urlparse(self.settings.api_base_url).hostname == "api.openai.com":
+            payload["max_completion_tokens"] = payload.pop("max_tokens")
         request = urllib.request.Request(self.settings.api_base_url.rstrip("/") + "/chat/completions",
                                          data=json.dumps(payload).encode(), headers={"Content-Type": "application/json",
                                          "Authorization": f"Bearer {self.settings.api_key}"}, method="POST")
@@ -472,6 +478,7 @@ def screen_pages(pages: list[PageText], settings: Settings, force: bool = False)
 def validate_source(source: Path, settings: Settings, force: bool = False,
                     pdf_workers: int | None = None, ocr_scanned: bool = False) -> dict[str, dict[str, Any]]:
     """Read/cache documents and screen a bounded window before any vector-store mutation."""
+    settings = settings.for_validation_provider()
     from medical_rag.ingestion import (
         IngestionOptions,
         discover_source_files,

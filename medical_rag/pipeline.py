@@ -310,6 +310,20 @@ class StrokeRAG:
         answer_mode: str | None = None,
         history: list[dict[str, str]] | None = None,
     ) -> RagAnswer:
+        for event in self.ask_stream(question, top_k, filters, answer_mode, history, streaming=False):
+            if event["type"] == "done":
+                return event["answer"]
+        raise RuntimeError("Answer did not complete")
+
+    def ask_stream(
+        self,
+        question: str,
+        top_k: int | None = None,
+        filters: dict[str, str] | None = None,
+        answer_mode: str | None = None,
+        history: list[dict[str, str]] | None = None,
+        streaming: bool = True,
+    ) -> Iterator[dict]:
         started = time.perf_counter()
         timings: dict[str, float] = {}
         question = question.strip()
@@ -344,13 +358,20 @@ class StrokeRAG:
         timings["reranking_seconds"] = round(time.perf_counter() - rerank_started, 4)
 
         generation_started = time.perf_counter()
-        answer = self.generator.generate(question, results, answer_mode=mode)
+        answer_parts = []
+        context = {"history": history} if history else {}
+        chunks = (self.generator.stream(question, results, answer_mode=mode, **context) if streaming
+                  else [self.generator.generate(question, results, answer_mode=mode, **context)])
+        for chunk in chunks:
+            answer_parts.append(chunk)
+            yield {"type": "delta", "text": chunk}
+        answer = "".join(answer_parts)
         timings["generation_seconds"] = round(time.perf_counter() - generation_started, 4)
         citations = [_citation(result, citation_id) for citation_id, result in enumerate(results, 1)]
 
         timings["total_seconds"] = round(time.perf_counter() - started, 4)
 
-        return RagAnswer(
+        yield {"type": "done", "answer": RagAnswer(
             question=question,
             answer=answer,
             citations=citations,
@@ -361,7 +382,7 @@ class StrokeRAG:
             retrieval_mode=store.retrieval_mode,
             fallback_embedding=self._fallback_embedding,
             timings=timings,
-        )
+        )}
 
     def sources(self) -> list[dict[str, object]]:
         return self._load_store().source_summaries()
