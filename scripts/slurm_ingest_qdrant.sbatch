@@ -173,6 +173,22 @@ export RAG_QDRANT_RECREATE_COLLECTION="${RAG_QDRANT_RECREATE_COLLECTION:-false}"
 # Collection create/delete on the shared Qdrant host can take well over the 5s client default.
 export RAG_QDRANT_TIMEOUT_SECONDS="${RAG_QDRANT_TIMEOUT_SECONDS:-120}"
 export RAG_QDRANT_PREFER_GRPC="${RAG_QDRANT_PREFER_GRPC:-false}"
+# Embed the whole corpus into a local staging file first, then upload it to Qdrant at the
+# end, so the GPU never waits on writes through the tunnel. SLURM_TMPDIR is the node-local
+# NVMe (/localscratch/$USER.$SLURM_JOB_ID.0 on Fir, 7.84 TB per node), much faster than the
+# Lustre filesystems. It is wiped when the job ends, which is fine: the file is only needed
+# until the upload finishes, and a re-run after a failed upload reuses the points that landed.
+if [ "${RAG_QDRANT_STAGED_UPLOAD:-true}" = "true" ]; then
+  if [ -n "${SLURM_TMPDIR:-}" ]; then
+    export RAG_QDRANT_STAGING_DIR="${RAG_QDRANT_STAGING_DIR:-$SLURM_TMPDIR/qdrant-staging}"
+  else
+    echo "SLURM_TMPDIR is unset; staging Qdrant points under $RAG_SCRATCH_DIR instead of node-local disk" >&2
+    export RAG_QDRANT_STAGING_DIR="${RAG_QDRANT_STAGING_DIR:-$RAG_SCRATCH_DIR/qdrant-staging}"
+  fi
+  echo "Staging Qdrant points in ${RAG_QDRANT_STAGING_DIR} and uploading after embedding"
+else
+  unset RAG_QDRANT_STAGING_DIR
+fi
 
 export RAG_CORPUS_DIR
 export RAG_MANIFEST_PATH="${RAG_MANIFEST_PATH:-$RAG_SCRATCH_DIR/manifest.sqlite}"

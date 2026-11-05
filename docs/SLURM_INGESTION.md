@@ -65,7 +65,19 @@ prints the SSH target, forwarded port, and the relevant log path:
   points already hold a vector for the identical text and model, and only embeds the rest, so
   re-running over an unchanged corpus does no GPU work. The ingestion report shows
   `chunks_embedded` and `chunks_reused`.
-- Writes overlap embedding: each batch is upserted with `wait=False` on a background thread
+- `RAG_QDRANT_STAGED_UPLOAD`: defaults to `true`. The job embeds the whole corpus into a
+  staging file on node-local NVMe (`$SLURM_TMPDIR`, which is `/localscratch/$USER.$SLURM_JOB_ID.0`
+  and 7.84 TB per node on Fir) and uploads it to Qdrant only once embedding is done, so the GPU
+  never waits on writes through the tunnel. Reuse lookups and collection setup still go to Qdrant
+  during embedding, so a mismatched collection still fails before any GPU work. Requests are cut
+  to the same size limits as live writes, and the file is deleted when the job ends. If the
+  upload fails part way, re-running reuses the points that did land. Set `false` to write while
+  embedding instead (below), which overlaps the two and finishes sooner when Qdrant keeps up.
+  The report's `vector_store` section shows `staging_seconds`, `upload_seconds` and `staged_mb`.
+- `RAG_QDRANT_STAGING_DIR`: staging directory. Defaults to `$SLURM_TMPDIR/qdrant-staging`, or
+  `$RAG_SCRATCH_DIR/qdrant-staging` if `SLURM_TMPDIR` is unset. Plan for about 5 KB per
+  embedded 768-dim chunk (roughly 1.2 GB per 250k chunks).
+- With `RAG_QDRANT_STAGED_UPLOAD=false`, writes overlap embedding: each batch is upserted with `wait=False` on a background thread
   while the GPU embeds the next one, with at most two upserts outstanding. Every eighth upsert
   and the final one wait, which keeps Qdrant's backlog of acknowledged-but-unapplied writes
   bounded so no single wait has to drain the whole run. The job then checks that the collection's point count matches the corpus, so a
@@ -115,7 +127,8 @@ The ingestion report's `vector_store` section splits the vector-store stage's wa
 phases that add up exactly: `setup`, `source_wait` (waiting for PDFs to be parsed and chunked,
 which run on `RAG_PDF_WORKERS` processes alongside embedding), `lookup` (reuse checks),
 `embedding`, `point_build`,
-`write_wait` (stuck behind the background writer) and `cleanup`. `upsert_busy_seconds` is how
+`write_wait` (stuck behind the background writer), `staging` and `upload` (staged uploads
+only) and `cleanup`. `upsert_busy_seconds` is how
 long the writer thread spent in upsert calls, so comparing it with `write_wait_seconds` shows
 how much write time overlapped embedding.
 
