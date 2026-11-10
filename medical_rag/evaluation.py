@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from medical_rag.types import Citation, RagAnswer
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_EVAL_DATA_PATH = Path(__file__).with_name("eval_data.json")
 DEFAULT_ANSWER_TERM_THRESHOLD = 0.4
@@ -164,7 +167,8 @@ def evaluate_question(
     started = time.perf_counter()
     try:
         response: RagAnswer = rag.ask(item.question, top_k=top_k, answer_mode=answer_mode)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - recorded on the result so the suite keeps going
+        logger.warning("Eval question %s failed: %s: %s", item.id, exc.__class__.__name__, exc)
         return EvalQuestionResult(
             question_id=item.id,
             question=item.question,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import patch
 
@@ -271,3 +272,63 @@ def test_unhandled_errors_return_json(tmp_path) -> None:
     assert response.status_code == 500
     assert "server log" in response.json()["detail"]
     assert "internal:6333" not in response.text
+
+
+def test_request_failures_are_logged(tmp_path, caplog) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings), raise_server_exceptions=False)
+
+    with caplog.at_level(logging.WARNING, logger="medical_rag"):
+        with patch(
+            "medical_rag.pipeline.StrokeRAG.ask", side_effect=RuntimeError("backend exploded")
+        ):
+            assert client.post("/ask", json={"question": "What is a stroke?"}).status_code == 400
+        with patch(
+            "medical_rag.pipeline.StrokeRAG.ask", side_effect=FileNotFoundError("no index")
+        ):
+            assert client.post("/ask", json={"question": "What is a stroke?"}).status_code == 409
+        with patch(
+            "medical_rag.pipeline.StrokeRAG.sources", side_effect=TimeoutError("timed out")
+        ):
+            assert client.get("/sources").status_code == 503
+        with patch(
+            "medical_rag.pipeline.StrokeRAG.ask", side_effect=TimeoutError("http://internal:6333")
+        ):
+            assert client.post("/ask", json={"question": "What is a stroke?"}).status_code == 500
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Ask request failed" in m and "backend exploded" in m for m in messages)
+    assert any("index not available" in m and "no index" in m for m in messages)
+    assert any("Sources request failed" in m and "timed out" in m for m in messages)
+    assert any("Unhandled error on POST /ask" in m and "internal:6333" in m for m in messages)
+    assert all(record.name.startswith("medical_rag") for record in caplog.records)
+
+
+def test_background_ingestion_failure_is_logged(tmp_path, caplog) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings))
+
+    with caplog.at_level(logging.INFO, logger="medical_rag"):
+        with patch("medical_rag.pipeline.StrokeRAG.ingest", side_effect=RuntimeError("disk full")):
+            assert client.post("/ingest", json={"background": True}).json()["accepted"] is True
+            deadline = 50
+            while client.get("/ingest/status").json()["running"] and deadline:
+                import time
+
+                time.sleep(0.05)
+                deadline -= 1
+
+    assert client.get("/ingest/status").json()["last_error"] == "disk full"
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any("Background ingestion failed" in r.getMessage() for r in errors)
+    assert any(r.exc_info is not None for r in errors)

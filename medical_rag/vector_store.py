@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import time
 import uuid
@@ -19,6 +20,8 @@ from medical_rag.bm25 import BM25Index
 from medical_rag.config import Settings
 from medical_rag.embeddings import EmbeddingModel
 from medical_rag.types import Chunk, SearchResult
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
@@ -213,7 +216,10 @@ class VectorStore:
         if path.exists():
             try:
                 previous = cls.load(path)
-            except (ValueError, OSError, KeyError):
+            except (ValueError, OSError, KeyError) as exc:
+                logger.warning(
+                    "Could not load existing index %s; re-embedding every chunk: %s", path, exc
+                )
                 previous = None
             if previous is not None and previous.embedding_model == embedding_model.name:
                 existing = {

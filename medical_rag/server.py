@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +16,10 @@ from medical_rag import __version__
 from medical_rag.config import Settings
 from medical_rag.embeddings import list_ollama_models, ollama_model_name_matches
 from medical_rag.evaluation import evaluate_rag, load_eval_suite
+from medical_rag.logging_config import configure_logging
 from medical_rag.pipeline import StrokeRAG
+
+logger = logging.getLogger(__name__)
 
 
 class AskRequest(BaseModel):
@@ -43,6 +47,7 @@ class EvalRunRequest(BaseModel):
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    configure_logging()
     app_settings = settings or Settings.from_env()
     rag = StrokeRAG(app_settings)
     ingestion_executor = ThreadPoolExecutor(max_workers=1)
@@ -65,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
     def _run_background_ingestion(request: IngestRequest, source: Path | None) -> None:
+        logger.info("Background ingestion started (source=%s, force=%s)", source, request.force)
         try:
             report = rag.ingest(
                 source,
@@ -83,7 +89,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "last_error": None,
                     }
                 )
+            logger.info("Background ingestion finished")
         except Exception as exc:  # noqa: BLE001 - preserve failure for status endpoint.
+            logger.exception("Background ingestion failed (source=%s)", source)
             with ingestion_lock:
                 ingestion_status.update(
                     {
@@ -97,7 +105,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def unhandled_error(request: Request, exc: Exception) -> JSONResponse:
         # Starlette's default 500 body is plain text, which the UI cannot parse as JSON. The
         # exception can carry anything, so it stays out of the response; Starlette re-raises
-        # it after this handler, so the server log still gets the traceback.
+        # it after this handler, so uvicorn still prints the traceback. Log one line here
+        # that ties the failure to the request.
+        logger.error(
+            "Unhandled error on %s %s: %s: %s",
+            request.method,
+            request.url.path,
+            exc.__class__.__name__,
+            exc,
+        )
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error; see the server log for details."},
@@ -134,6 +150,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             active_embedding_model: str | None = rag.embedding_model.name
             embedding_model_error: str | None = None
         except Exception as exc:  # noqa: BLE001 - surface any backend failure in health
+            logger.warning("Health check: embedding backend unavailable: %s", exc)
             active_embedding_model = None
             embedding_model_error = str(exc)
         # Likewise, the Qdrant backend has to ask the server whether the collection exists.
@@ -141,6 +158,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             index_exists: bool | None = rag.index_exists()
             vector_store_error: str | None = None
         except Exception as exc:  # noqa: BLE001 - surface any backend failure in health
+            logger.warning("Health check: vector store unavailable: %s", exc)
             index_exists = None
             vector_store_error = str(exc)
         return {
@@ -182,7 +200,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # store that cannot be reached is reported as not ready rather than as a 500.
         try:
             index_exists: bool | None = rag.index_exists()
-        except Exception:  # noqa: BLE001 - any backend failure means the app is not ready
+        except Exception as exc:  # noqa: BLE001 - any backend failure means the app is not ready
+            logger.warning("Readiness check: vector store unavailable: %s", exc)
             index_exists = None
         if not index_exists:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -217,6 +236,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 pdf_workers=request.pdf_workers,
             ).to_dict()
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            logger.warning("Ingestion request failed (source=%s): %s", source, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/ingest/status")
@@ -234,8 +254,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 answer_mode=request.answer_mode,
             ).to_dict()
         except FileNotFoundError as exc:
+            logger.warning("Ask request rejected: index not available: %s", exc)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (RuntimeError, ValueError) as exc:
+            logger.warning(
+                "Ask request failed (mode=%s, top_k=%s): %s: %s",
+                request.answer_mode,
+                request.top_k,
+                exc.__class__.__name__,
+                exc,
+            )
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/sources")
@@ -243,8 +271,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             return rag.sources()
         except FileNotFoundError as exc:
+            logger.warning("Sources request rejected: index not available: %s", exc)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:  # noqa: BLE001 - qdrant-client raises several transport types
+            logger.error("Sources request failed: could not read the vector store: %s", exc)
             raise HTTPException(
                 status_code=503, detail=f"Could not read sources from the vector store: {exc}"
             ) from exc
@@ -268,8 +298,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 include_answers=request.include_answers,
             ).to_dict()
         except FileNotFoundError as exc:
+            logger.warning("Eval run rejected: index not available: %s", exc)
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except (RuntimeError, ValueError) as exc:
+            logger.warning("Eval run failed: %s: %s", exc.__class__.__name__, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return app
