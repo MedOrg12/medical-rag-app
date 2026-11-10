@@ -6,6 +6,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from medical_rag.logging_config import describe_exception
 from medical_rag.types import PageText
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ def _load_pdf(path: Path, ocr_scanned: bool = False) -> tuple[list[PageText], in
                     "Block extraction failed on page %d of %s; using plain text: %s",
                     page_index,
                     path,
-                    exc,
+                    describe_exception(exc),
                 )
                 text = _fallback_page_text(page)
                 layout_hints = None
@@ -158,7 +159,7 @@ def _find_repeated_blocks(doc) -> set[str]:
         try:
             blocks = page.get_text("dict").get("blocks", [])
         except Exception as exc:  # noqa: BLE001 - skip the page for header detection only
-            logger.debug("Skipping page for repeated-text detection: %s", exc)
+            logger.debug("Skipping page for repeated-text detection: %s", describe_exception(exc))
             continue
         for block in blocks:
             if block.get("type") != 0:

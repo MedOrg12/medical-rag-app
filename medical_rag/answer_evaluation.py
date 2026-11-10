@@ -11,6 +11,7 @@ from typing import Any
 
 from medical_rag.config import Settings
 from medical_rag.llm import Generator, make_generator
+from medical_rag.logging_config import describe_exception
 from medical_rag.types import Chunk, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,9 @@ def evaluate_answers(
             issues = check_answer(case, answer)
             error = None
         except (RuntimeError, ValueError) as exc:
-            logger.warning("Answer evaluation case %s failed: %s", case["id"], exc)
+            logger.warning(
+                "Answer evaluation case %s failed: %s", case["id"], describe_exception(exc)
+            )
             answer = ""
             error = str(exc)
             issues = [f"Generation error: {error}"]

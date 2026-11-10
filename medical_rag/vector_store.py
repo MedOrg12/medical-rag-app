@@ -19,6 +19,7 @@ from typing import Any, Protocol
 from medical_rag.bm25 import BM25Index
 from medical_rag.config import Settings
 from medical_rag.embeddings import EmbeddingModel
+from medical_rag.logging_config import describe_exception
 from medical_rag.types import Chunk, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -218,7 +219,9 @@ class VectorStore:
                 previous = cls.load(path)
             except (ValueError, OSError, KeyError) as exc:
                 logger.warning(
-                    "Could not load existing index %s; re-embedding every chunk: %s", path, exc
+                    "Could not load existing index %s; re-embedding every chunk: %s",
+                    path,
+                    describe_exception(exc),
                 )
                 previous = None
             if previous is not None and previous.embedding_model == embedding_model.name:

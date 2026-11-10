@@ -16,6 +16,7 @@ from typing import Any
 
 from medical_rag.chunking import chunk_pages
 from medical_rag.documents import is_supported_source_file, iter_source_files, load_source_file
+from medical_rag.logging_config import describe_exception
 from medical_rag.types import Chunk, PageText
 
 logger = logging.getLogger(__name__)
@@ -453,7 +454,9 @@ def iter_chunked_documents(
                 try:
                     document = future.result()
                 except Exception as exc:  # noqa: BLE001 - e.g. a worker crash; record and continue.
-                    logger.error("Extraction worker failed for %s: %s", file, exc)
+                    logger.error(
+                        "Extraction worker failed for %s: %s", file, describe_exception(exc)
+                    )
                     document = ChunkedDocument(source=file, error=str(exc))
                 yield document
         finally:
@@ -504,7 +507,7 @@ def _extract_and_chunk(
             document = _extract_one(file, ocr_scanned)
             _write_extraction_cache(document, cache_dir)
     except Exception as exc:  # noqa: BLE001 - record and continue ingestion.
-        logger.error("Failed to extract %s: %s: %s", file, exc.__class__.__name__, exc)
+        logger.error("Failed to extract %s: %s", file, describe_exception(exc))
         return ChunkedDocument(source=file, error=str(exc))
     extracted = time.perf_counter()
     chunks = chunk_document(document, chunk_size_chars, chunk_overlap_chars)
@@ -598,7 +601,7 @@ def _read_extraction_cache(file: SourceFile, cache_dir: Path) -> ExtractedDocume
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Ignoring unreadable extraction cache %s: %s", path, exc)
+        logger.warning("Ignoring unreadable extraction cache %s: %s", path, describe_exception(exc))
         return None
 
     source = payload.get("source", {})

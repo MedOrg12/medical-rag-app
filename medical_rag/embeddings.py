@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from medical_rag.config import Settings
+from medical_rag.logging_config import describe_exception
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ class OllamaEmbeddingModel(EmbeddingModel):
             logger.warning(
                 "Ollama batch embedding of %d texts failed; retrying one at a time: %s",
                 len(texts),
-                exc,
+                describe_exception(exc),
             )
             return [self._embed_one(text) for text in texts]
 
@@ -98,7 +99,10 @@ class OllamaEmbeddingModel(EmbeddingModel):
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError) as exc:
-            raise RuntimeError(f"Could not get Ollama batch embeddings from {self.base_url}") from exc
+            raise RuntimeError(
+                f"Could not get Ollama batch embeddings from {self.base_url}: "
+                f"{_network_error_detail(exc)}"
+            ) from exc
 
         embeddings = data.get("embeddings")
         if not isinstance(embeddings, list) or len(embeddings) != len(texts):
@@ -117,7 +121,9 @@ class OllamaEmbeddingModel(EmbeddingModel):
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError) as exc:
-            raise RuntimeError(f"Could not get Ollama embedding from {self.base_url}") from exc
+            raise RuntimeError(
+                f"Could not get Ollama embedding from {self.base_url}: {_network_error_detail(exc)}"
+            ) from exc
 
         embedding = data.get("embedding")
         if not isinstance(embedding, list):
@@ -259,7 +265,7 @@ class CachedEmbeddingModel(EmbeddingModel):
             logger.warning(
                 "Could not read embedding cache %s; starting with an empty cache: %s",
                 self.cache_path,
-                exc,
+                describe_exception(exc),
             )
 
     def _save(self) -> None:
@@ -480,7 +486,7 @@ def list_ollama_models(base_url: str, timeout: float = 2.0) -> list[str]:
                 return []
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001 - unreachable Ollama is a normal, reportable state
-        logger.warning("Could not list Ollama models at %s: %s", base_url, exc)
+        logger.warning("Could not list Ollama models at %s: %s", base_url, describe_exception(exc))
         return []
 
     models = data.get("models", [])

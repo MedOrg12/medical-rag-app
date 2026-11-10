@@ -34,3 +34,28 @@ def configure_logging(level: str | None = None) -> logging.Logger:
     if not level_known:
         logger.warning("Unknown RAG_LOG_LEVEL %r; using INFO", raw_level)
     return logger
+
+
+def describe_exception(exc: BaseException) -> str:
+    """Render ``exc`` and its cause chain on one line for a log message.
+
+    ``str(exc)`` alone drops the reason a wrapped error was raised, which for network
+    failures is the useful part (timeout, connection refused, name resolution). This
+    follows ``__cause__`` (``raise ... from``) and implicit ``__context__`` and renders
+    each link as ``Type: message``.
+    """
+    parts: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).strip()
+        name = current.__class__.__name__
+        parts.append(f"{name}: {message}" if message else name)
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif not current.__suppress_context__:
+            current = current.__context__
+        else:
+            current = None
+    return " <- caused by ".join(parts)

@@ -24,7 +24,7 @@ This project follows Semantic Versioning for the application release number:
 - Standalone GPU embedding service (`embedder` compose profile) and a `remote` embedding backend so the API host never loads torch.
 - `RAG_QDRANT_TIMEOUT_SECONDS`, `QDRANT_DATA_DIR`, and `QDRANT_WAL_CAPACITY_MB` for slow-disk Qdrant hosts.
 - `RAG_QDRANT_PREFER_GRPC` and `RAG_QDRANT_GRPC_PORT` to talk to Qdrant over gRPC; the Slurm job opens a gRPC tunnel when enabled, and the compose `qdrant` service publishes port `6334`.
-- Plain-text logging of request failures, backend fallbacks, API retries and skipped files under the `medical_rag` logger, with the level set by `RAG_LOG_LEVEL`. Previously these were swallowed or only surfaced in the response body.
+- Plain-text logging of request failures, backend fallbacks, API retries and skipped files under the `medical_rag` logger, with the level set by `RAG_LOG_LEVEL`. Log lines include the exception cause chain, and Ollama errors name the underlying network reason (timeout, connection refused, name resolution). Previously these were swallowed or only surfaced in the response body.
 
 ### Removed
 

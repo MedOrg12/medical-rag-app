@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from medical_rag.logging_config import describe_exception
 from medical_rag.types import Citation, RagAnswer
 
 logger = logging.getLogger(__name__)
@@ -168,7 +169,7 @@ def evaluate_question(
     try:
         response: RagAnswer = rag.ask(item.question, top_k=top_k, answer_mode=answer_mode)
     except Exception as exc:  # noqa: BLE001 - recorded on the result so the suite keeps going
-        logger.warning("Eval question %s failed: %s: %s", item.id, exc.__class__.__name__, exc)
+        logger.warning("Eval question %s failed: %s", item.id, describe_exception(exc))
         return EvalQuestionResult(
             question_id=item.id,
             question=item.question,

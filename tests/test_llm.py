@@ -90,6 +90,26 @@ def test_fallback_generator_includes_backend_error() -> None:
     assert "Could not generate with Ollama" in answer
 
 
+def test_ollama_generator_error_names_the_network_reason(monkeypatch) -> None:
+    def refuse(*args, **kwargs):
+        raise urllib.error.URLError(ConnectionRefusedError(10061, "No connection could be made"))
+
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+    generator = OllamaGenerator(base_url="http://127.0.0.1:1", model_name="llama3.1")
+    passage = SearchResult(
+        chunk=Chunk(id="c1", text="A stroke is a brain attack.", metadata={"source_id": "s"}),
+        score=0.5,
+        rank=1,
+    )
+
+    with pytest.raises(RuntimeError) as info:
+        generator.generate("What is a stroke?", [passage])
+
+    assert "Could not generate with Ollama at http://127.0.0.1:1" in str(info.value)
+    assert "No connection could be made" in str(info.value)
+    assert isinstance(info.value.__cause__, urllib.error.URLError)
+
+
 def test_fallback_generator_logs_backend_failure(caplog) -> None:
     generator = FallbackGenerator(primary=BrokenGenerator(), fallback=ExtractiveGenerator())
 

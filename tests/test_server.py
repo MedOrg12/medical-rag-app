@@ -283,10 +283,10 @@ def test_request_failures_are_logged(tmp_path, caplog) -> None:
     )
     client = TestClient(create_app(settings), raise_server_exceptions=False)
 
+    wrapped = RuntimeError("backend exploded")
+    wrapped.__cause__ = TimeoutError("timed out after 120s")
     with caplog.at_level(logging.WARNING, logger="medical_rag"):
-        with patch(
-            "medical_rag.pipeline.StrokeRAG.ask", side_effect=RuntimeError("backend exploded")
-        ):
+        with patch("medical_rag.pipeline.StrokeRAG.ask", side_effect=wrapped):
             assert client.post("/ask", json={"question": "What is a stroke?"}).status_code == 400
         with patch(
             "medical_rag.pipeline.StrokeRAG.ask", side_effect=FileNotFoundError("no index")
@@ -302,7 +302,10 @@ def test_request_failures_are_logged(tmp_path, caplog) -> None:
             assert client.post("/ask", json={"question": "What is a stroke?"}).status_code == 500
 
     messages = [record.getMessage() for record in caplog.records]
-    assert any("Ask request failed" in m and "backend exploded" in m for m in messages)
+    assert any(
+        "Ask request failed" in m and "backend exploded" in m and "timed out after 120s" in m
+        for m in messages
+    )
     assert any("index not available" in m and "no index" in m for m in messages)
     assert any("Sources request failed" in m and "timed out" in m for m in messages)
     assert any("Unhandled error on POST /ask" in m and "internal:6333" in m for m in messages)

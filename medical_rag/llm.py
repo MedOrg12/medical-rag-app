@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from medical_rag.config import Settings
+from medical_rag.logging_config import describe_exception
 from medical_rag.relevance import is_diet_query
 from medical_rag.types import SearchResult
 
@@ -155,7 +156,9 @@ class OllamaGenerator(Generator):
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError) as exc:
-            raise RuntimeError(f"Could not generate with Ollama at {self.base_url}") from exc
+            raise RuntimeError(
+                f"Could not generate with Ollama at {self.base_url}: {_network_error_detail(exc)}"
+            ) from exc
 
         content = (data.get("message") or {}).get("content")
         if not content:
@@ -276,7 +279,7 @@ class FallbackGenerator(Generator):
             logger.warning(
                 "Generation backend %s failed; falling back to extractive answer: %s",
                 self.primary.model_name,
-                exc,
+                describe_exception(exc),
             )
             fallback_answer = self.fallback.generate(question, results, answer_mode=answer_mode)
             return (
