@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from medical_rag.config import Settings
+from medical_rag.logging_config import configure_logging
 from medical_rag.pipeline import StrokeRAG
 
 
@@ -48,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.add_argument("--port", type=int, default=8000)
 
     args = parser.parse_args(argv)
+    configure_logging()
     settings = Settings.from_env()
     if args.index:
         settings = settings.with_paths(index_path=args.index.expanduser().resolve())

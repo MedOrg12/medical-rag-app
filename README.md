@@ -322,6 +322,8 @@ Environment variables:
 - `RAG_API_REASONING_EFFORT`: optional; for Gemini 3 models the app defaults to `low` when unset
 - `RAG_API_MAX_RETRIES`: default `2` for retryable API `429`/`5xx` responses
 - `RAG_REQUEST_TIMEOUT_SECONDS`: default `120`
+- `RAG_LOG_LEVEL`: default `INFO`. Request failures, backend fallbacks, retries and skipped files
+  are logged to stderr under the `medical_rag` logger; set `DEBUG` for more detail.
 - `RAG_VECTOR_STORE`: `json` or `qdrant`. With docker compose, start the bundled server with
   `docker compose --profile qdrant up -d qdrant` or point `RAG_QDRANT_URL` at an external one.
 - `RAG_QDRANT_URL`: default `http://localhost:6333`

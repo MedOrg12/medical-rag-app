@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import time
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 
@@ -7,6 +10,15 @@ from fastapi.testclient import TestClient
 
 from medical_rag.config import Settings
 from medical_rag.server import create_app
+
+
+def _wait_until(condition: Callable[[], bool], timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.02)
+    return condition()
 
 
 def test_patient_and_developer_views_are_separate(tmp_path) -> None:
@@ -271,3 +283,61 @@ def test_unhandled_errors_return_json(tmp_path) -> None:
     assert response.status_code == 500
     assert "server log" in response.json()["detail"]
     assert "internal:6333" not in response.text
+
+
+def test_request_failures_are_logged(tmp_path, caplog) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings), raise_server_exceptions=False)
+
+    wrapped = RuntimeError("backend exploded")
+    wrapped.__cause__ = TimeoutError("timed out after 120s")
+    with caplog.at_level(logging.WARNING, logger="medical_rag"):
+        with patch("medical_rag.pipeline.StrokeRAG.ask", side_effect=wrapped):
+            assert client.post("/ask", json={"question": "What is a stroke?"}).status_code == 400
+        with patch(
+            "medical_rag.pipeline.StrokeRAG.ask", side_effect=FileNotFoundError("no index")
+        ):
+            assert client.post("/ask", json={"question": "What is a stroke?"}).status_code == 409
+        with patch(
+            "medical_rag.pipeline.StrokeRAG.sources", side_effect=TimeoutError("timed out")
+        ):
+            assert client.get("/sources").status_code == 503
+        with patch(
+            "medical_rag.pipeline.StrokeRAG.ask", side_effect=TimeoutError("http://internal:6333")
+        ):
+            assert client.post("/ask", json={"question": "What is a stroke?"}).status_code == 500
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "Ask request failed" in m and "backend exploded" in m and "timed out after 120s" in m
+        for m in messages
+    )
+    assert any("index not available" in m and "no index" in m for m in messages)
+    assert any("Sources request failed" in m and "timed out" in m for m in messages)
+    assert any("Unhandled error on POST /ask" in m and "internal:6333" in m for m in messages)
+
+
+def test_background_ingestion_failure_is_logged(tmp_path, caplog) -> None:
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path / "corpus",
+        index_path=tmp_path / ".rag" / "index.json",
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings))
+
+    with caplog.at_level(logging.INFO, logger="medical_rag"):
+        with patch("medical_rag.pipeline.StrokeRAG.ingest", side_effect=RuntimeError("disk full")):
+            assert client.post("/ingest", json={"background": True}).json()["accepted"] is True
+            # The worker logs before it flips ``running``, so once this returns the record exists.
+            assert _wait_until(lambda: not client.get("/ingest/status").json()["running"])
+
+    assert client.get("/ingest/status").json()["last_error"] == "disk full"
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert any("Background ingestion failed" in r.getMessage() for r in errors)
+    assert any(r.exc_info is not None for r in errors)

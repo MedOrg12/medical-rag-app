@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import urllib.error
@@ -10,8 +11,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from medical_rag.config import Settings
+from medical_rag.logging_config import describe_exception
 from medical_rag.relevance import is_diet_query
 from medical_rag.types import SearchResult
+
+logger = logging.getLogger(__name__)
 
 SAFETY_NOTICE = (
     "This system is for literature review and clinical education support only. "
@@ -152,7 +156,9 @@ class OllamaGenerator(Generator):
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError) as exc:
-            raise RuntimeError(f"Could not generate with Ollama at {self.base_url}") from exc
+            raise RuntimeError(
+                f"Could not generate with Ollama at {self.base_url}: {_network_error_detail(exc)}"
+            ) from exc
 
         content = (data.get("message") or {}).get("content")
         if not content:
@@ -238,6 +244,12 @@ class ApiGenerator(Generator):
                     return json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
                 if _should_retry_http(exc, attempt, attempts):
+                    logger.warning(
+                        "API chat completion returned HTTP %s; retrying (attempt %d/%d)",
+                        exc.code,
+                        attempt + 1,
+                        attempts,
+                    )
                     _sleep_before_retry(exc, attempt)
                     continue
                 raise RuntimeError(_api_error_message("chat completion", exc)) from exc
@@ -264,6 +276,11 @@ class FallbackGenerator(Generator):
         try:
             return self.primary.generate(question, results, answer_mode=answer_mode)
         except RuntimeError as exc:
+            logger.warning(
+                "Generation backend %s failed; falling back to extractive answer: %s",
+                self.primary.model_name,
+                describe_exception(exc),
+            )
             fallback_answer = self.fallback.generate(question, results, answer_mode=answer_mode)
             return (
                 fallback_answer

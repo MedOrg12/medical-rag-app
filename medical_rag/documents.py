@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from medical_rag.logging_config import describe_exception
 from medical_rag.types import PageText
+
+logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md", ".markdown"}
 EXCLUDED_SOURCE_FILENAMES = {"sources.md"}
@@ -82,7 +86,13 @@ def _load_pdf(path: Path, ocr_scanned: bool = False) -> tuple[list[PageText], in
                 break
             try:
                 text, layout_hints, stop = _extract_blocks(page, repeated, stop)
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - PyMuPDF raises assorted errors on odd pages
+                logger.warning(
+                    "Block extraction failed on page %d of %s; using plain text: %s",
+                    page_index,
+                    path,
+                    describe_exception(exc),
+                )
                 text = _fallback_page_text(page)
                 layout_hints = None
 
@@ -148,7 +158,8 @@ def _find_repeated_blocks(doc) -> set[str]:
         seen: set[str] = set()
         try:
             blocks = page.get_text("dict").get("blocks", [])
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - skip the page for header detection only
+            logger.debug("Skipping page for repeated-text detection: %s", describe_exception(exc))
             continue
         for block in blocks:
             if block.get("type") != 0:

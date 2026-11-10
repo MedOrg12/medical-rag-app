@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
 from medical_rag.config import Settings
 from medical_rag.llm import Generator, make_generator
+from medical_rag.logging_config import describe_exception
 from medical_rag.types import Chunk, SearchResult
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_ANSWER_EVAL_PATH = Path(__file__).with_name("answer_eval_data.json")
 
@@ -71,6 +75,9 @@ def evaluate_answers(
             issues = check_answer(case, answer)
             error = None
         except (RuntimeError, ValueError) as exc:
+            logger.warning(
+                "Answer evaluation case %s failed: %s", case["id"], describe_exception(exc)
+            )
             answer = ""
             error = str(exc)
             issues = [f"Generation error: {error}"]

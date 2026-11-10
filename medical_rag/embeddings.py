@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
 import sys
@@ -13,6 +14,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from medical_rag.config import Settings
+from medical_rag.logging_config import describe_exception
+
+logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_+-]*|\d+(?:\.\d+)?")
 _RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -75,7 +79,12 @@ class OllamaEmbeddingModel(EmbeddingModel):
 
         try:
             return self._embed_batch(texts)
-        except RuntimeError:
+        except RuntimeError as exc:
+            logger.warning(
+                "Ollama batch embedding of %d texts failed; retrying one at a time: %s",
+                len(texts),
+                describe_exception(exc),
+            )
             return [self._embed_one(text) for text in texts]
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
@@ -90,7 +99,10 @@ class OllamaEmbeddingModel(EmbeddingModel):
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError) as exc:
-            raise RuntimeError(f"Could not get Ollama batch embeddings from {self.base_url}") from exc
+            raise RuntimeError(
+                f"Could not get Ollama batch embeddings from {self.base_url}: "
+                f"{_network_error_detail(exc)}"
+            ) from exc
 
         embeddings = data.get("embeddings")
         if not isinstance(embeddings, list) or len(embeddings) != len(texts):
@@ -109,7 +121,9 @@ class OllamaEmbeddingModel(EmbeddingModel):
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError) as exc:
-            raise RuntimeError(f"Could not get Ollama embedding from {self.base_url}") from exc
+            raise RuntimeError(
+                f"Could not get Ollama embedding from {self.base_url}: {_network_error_detail(exc)}"
+            ) from exc
 
         embedding = data.get("embedding")
         if not isinstance(embedding, list):
@@ -169,6 +183,12 @@ class ApiEmbeddingModel(EmbeddingModel):
                     return json.loads(response.read().decode("utf-8"))
             except urllib.error.HTTPError as exc:
                 if _should_retry_http(exc, attempt, attempts):
+                    logger.warning(
+                        "API embedding returned HTTP %s; retrying (attempt %d/%d)",
+                        exc.code,
+                        attempt + 1,
+                        attempts,
+                    )
                     _sleep_before_retry(exc, attempt)
                     continue
                 raise RuntimeError(_api_error_message("embedding", exc)) from exc
@@ -233,10 +253,20 @@ class CachedEmbeddingModel(EmbeddingModel):
         try:
             payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
             if payload.get("model_name") != self.inner.name:
-                return  # model changed → stale, ignore
+                logger.info(
+                    "Embedding cache %s was built with model %r, current is %r; ignoring it",
+                    self.cache_path,
+                    payload.get("model_name"),
+                    self.inner.name,
+                )
+                return
             self._cache = payload.get("entries", {})
-        except (json.JSONDecodeError, KeyError, OSError):
-            pass
+        except (json.JSONDecodeError, KeyError, OSError) as exc:
+            logger.warning(
+                "Could not read embedding cache %s; starting with an empty cache: %s",
+                self.cache_path,
+                describe_exception(exc),
+            )
 
     def _save(self) -> None:
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -365,8 +395,8 @@ class RemoteEmbeddingModel(EmbeddingModel):
             error = data.get("error")
             if isinstance(error, dict) and isinstance(error.get("message"), str):
                 message = error["message"]
-        except Exception:
-            pass
+        except Exception as parse_exc:  # noqa: BLE001 - body is best-effort detail only
+            logger.debug("Could not parse embedding service error body: %s", parse_exc)
         return f"Embedding service returned HTTP {exc.code}: {message}"
 
 
@@ -444,17 +474,31 @@ def _ollama_available(base_url: str, timeout: float = 2.0) -> bool:
     return bool(list_ollama_models(base_url, timeout=timeout))
 
 
-def list_ollama_models(base_url: str, timeout: float = 2.0) -> list[str]:
-    """Return installed Ollama model names, or an empty list when Ollama is unreachable."""
+def list_ollama_models(
+    base_url: str, timeout: float = 2.0, *, log_level: int = logging.WARNING
+) -> list[str]:
+    """Return installed Ollama model names, or an empty list when Ollama is unreachable.
+
+    An unreachable Ollama is logged at ``log_level``. Callers that poll this routinely,
+    such as the health endpoint, pass ``logging.DEBUG`` so a deployment without Ollama does
+    not warn on every probe; the startup auto-fallback keeps the default so the reason it
+    fell back is in the log.
+    """
     try:
         with urllib.request.urlopen(
             urllib.request.Request(f"{base_url.rstrip('/')}/api/tags"),
             timeout=timeout,
         ) as resp:
             if resp.status != 200:
+                logger.log(
+                    log_level, "Ollama at %s returned HTTP %s listing models", base_url, resp.status
+                )
                 return []
             data = json.loads(resp.read().decode("utf-8"))
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - unreachable Ollama is a normal state
+        logger.log(
+            log_level, "Could not list Ollama models at %s: %s", base_url, describe_exception(exc)
+        )
         return []
 
     models = data.get("models", [])
@@ -499,6 +543,11 @@ def make_embedding_model(settings: Settings) -> tuple[EmbeddingModel, bool]:
         if ollama_model_available(settings.ollama_base_url, settings.ollama_embedding_model):
             backend = "ollama"
         else:
+            logger.warning(
+                "Ollama embedding model %r is not available at %s; falling back to hash embeddings",
+                settings.ollama_embedding_model,
+                settings.ollama_base_url,
+            )
             backend = "hash"
             fallback_used = True
 

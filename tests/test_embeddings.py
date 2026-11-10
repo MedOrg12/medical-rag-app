@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 import urllib.error
 from dataclasses import replace
 
@@ -98,6 +99,7 @@ def test_auto_embedding_uses_ollama_when_configured_model_is_installed(
 def test_auto_embedding_falls_back_when_configured_model_is_missing(
     monkeypatch,
     tmp_path,
+    caplog,
 ) -> None:
     monkeypatch.setattr(
         "medical_rag.embeddings.list_ollama_models",
@@ -111,10 +113,66 @@ def test_auto_embedding_falls_back_when_configured_model_is_missing(
         ollama_embedding_model="nomic-embed-text",
     )
 
-    model, fallback = make_embedding_model(settings)
+    with caplog.at_level(logging.WARNING, logger="medical_rag"):
+        model, fallback = make_embedding_model(settings)
 
     assert isinstance(model, HashingEmbeddingModel)
     assert fallback is True
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == [
+        "Ollama embedding model 'nomic-embed-text' is not available at "
+        f"{settings.ollama_base_url}; falling back to hash embeddings"
+    ]
+
+
+def test_auto_embedding_fallback_logs_why_ollama_was_unreachable(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    def refuse(*_args, **_kwargs):
+        raise urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path,
+        index_path=tmp_path / "index.json",
+        embedding_backend="auto",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="medical_rag"):
+        model, fallback = make_embedding_model(settings)
+
+    assert isinstance(model, HashingEmbeddingModel)
+    assert fallback is True
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2
+    assert "Could not list Ollama models" in warnings[0]
+    assert "Connection refused" in warnings[0]
+    assert "falling back to hash embeddings" in warnings[1]
+
+
+def test_health_lists_ollama_models_without_warning(tmp_path, monkeypatch, caplog) -> None:
+    from fastapi.testclient import TestClient
+
+    from medical_rag.server import create_app
+
+    def refuse(*_args, **_kwargs):
+        raise urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+    settings = Settings(
+        root_dir=tmp_path,
+        corpus_dir=tmp_path,
+        index_path=tmp_path / "index.json",
+        embedding_backend="hash",
+    )
+    client = TestClient(create_app(settings))
+    monkeypatch.setattr("urllib.request.urlopen", refuse)
+
+    with caplog.at_level(logging.DEBUG, logger="medical_rag"):
+        assert client.get("/health").json()["ollama_available"] is False
+
+    listing = [r for r in caplog.records if "Could not list Ollama models" in r.getMessage()]
+    assert [r.levelno for r in listing] == [logging.DEBUG]
 
 
 def test_ollama_model_name_matches_latest_tag() -> None:
