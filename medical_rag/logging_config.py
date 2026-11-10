@@ -58,4 +58,4 @@ def describe_exception(exc: BaseException) -> str:
             current = current.__context__
         else:
             current = None
-    return " <- caused by ".join(parts)
+    return "; caused by ".join(parts)

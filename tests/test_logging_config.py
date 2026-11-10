@@ -45,7 +45,7 @@ def test_describe_exception_includes_cause_chain() -> None:
         described = describe_exception(exc)
 
     assert described == (
-        "RuntimeError: Could not generate with Ollama <- caused by TimeoutError: timed out"
+        "RuntimeError: Could not generate with Ollama; caused by TimeoutError: timed out"
     )
 
 
