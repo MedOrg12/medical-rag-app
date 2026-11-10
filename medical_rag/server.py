@@ -278,7 +278,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except Exception as exc:  # noqa: BLE001 - qdrant-client raises several transport types
-            logger.error(
+            logger.warning(
                 "Sources request failed: could not read the vector store: %s",
                 describe_exception(exc),
             )

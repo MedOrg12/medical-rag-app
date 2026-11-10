@@ -1,5 +1,6 @@
 import io
 import json
+import logging
 import urllib.error
 from dataclasses import replace
 
@@ -98,6 +99,7 @@ def test_auto_embedding_uses_ollama_when_configured_model_is_installed(
 def test_auto_embedding_falls_back_when_configured_model_is_missing(
     monkeypatch,
     tmp_path,
+    caplog,
 ) -> None:
     monkeypatch.setattr(
         "medical_rag.embeddings.list_ollama_models",
@@ -111,10 +113,16 @@ def test_auto_embedding_falls_back_when_configured_model_is_missing(
         ollama_embedding_model="nomic-embed-text",
     )
 
-    model, fallback = make_embedding_model(settings)
+    with caplog.at_level(logging.WARNING, logger="medical_rag"):
+        model, fallback = make_embedding_model(settings)
 
     assert isinstance(model, HashingEmbeddingModel)
     assert fallback is True
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == [
+        "Ollama embedding model 'nomic-embed-text' is not available at "
+        f"{settings.ollama_base_url}; falling back to hash embeddings"
+    ]
 
 
 def test_ollama_model_name_matches_latest_tag() -> None:

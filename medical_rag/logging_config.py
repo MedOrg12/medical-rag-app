@@ -26,6 +26,10 @@ def configure_logging(level: str | None = None) -> logging.Logger:
 
     logger = logging.getLogger(_PACKAGE_LOGGER)
     logger.setLevel(resolved)
+    # Propagation stays on deliberately. uvicorn leaves the root logger without handlers, so
+    # nothing is printed twice there, and pytest's caplog listens on the root. A deployment that
+    # adds its own root handler would see each record twice; set RAG_LOG_LEVEL and drop that
+    # handler rather than the other way round.
     if not any(getattr(handler, "_medical_rag_handler", False) for handler in logger.handlers):
         handler = logging.StreamHandler(sys.stderr)
         handler.setFormatter(logging.Formatter(_FORMAT))
@@ -49,7 +53,7 @@ def describe_exception(exc: BaseException) -> str:
     current: BaseException | None = exc
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        message = str(current).strip()
+        message = " ".join(str(current).split())
         name = current.__class__.__name__
         parts.append(f"{name}: {message}" if message else name)
         if current.__cause__ is not None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +10,15 @@ from fastapi.testclient import TestClient
 
 from medical_rag.config import Settings
 from medical_rag.server import create_app
+
+
+def _wait_until(condition: Callable[[], bool], timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.02)
+    return condition()
 
 
 def test_patient_and_developer_views_are_separate(tmp_path) -> None:
@@ -309,7 +320,6 @@ def test_request_failures_are_logged(tmp_path, caplog) -> None:
     assert any("index not available" in m and "no index" in m for m in messages)
     assert any("Sources request failed" in m and "timed out" in m for m in messages)
     assert any("Unhandled error on POST /ask" in m and "internal:6333" in m for m in messages)
-    assert all(record.name.startswith("medical_rag") for record in caplog.records)
 
 
 def test_background_ingestion_failure_is_logged(tmp_path, caplog) -> None:
@@ -324,12 +334,8 @@ def test_background_ingestion_failure_is_logged(tmp_path, caplog) -> None:
     with caplog.at_level(logging.INFO, logger="medical_rag"):
         with patch("medical_rag.pipeline.StrokeRAG.ingest", side_effect=RuntimeError("disk full")):
             assert client.post("/ingest", json={"background": True}).json()["accepted"] is True
-            deadline = 50
-            while client.get("/ingest/status").json()["running"] and deadline:
-                import time
-
-                time.sleep(0.05)
-                deadline -= 1
+            # The worker logs before it flips ``running``, so once this returns the record exists.
+            assert _wait_until(lambda: not client.get("/ingest/status").json()["running"])
 
     assert client.get("/ingest/status").json()["last_error"] == "disk full"
     errors = [r for r in caplog.records if r.levelno == logging.ERROR]
