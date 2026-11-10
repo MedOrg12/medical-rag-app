@@ -138,7 +138,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        ollama_models = list_ollama_models(app_settings.ollama_base_url)
+        # Polled by container healthchecks and the UI; an absent Ollama is not worth a warning
+        # each time, and the startup auto-fallback already logged the reason once.
+        ollama_models = list_ollama_models(app_settings.ollama_base_url, log_level=logging.DEBUG)
         ollama_embedding_model_available = any(
             ollama_model_name_matches(app_settings.ollama_embedding_model, model)
             for model in ollama_models

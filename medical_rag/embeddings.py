@@ -474,21 +474,31 @@ def _ollama_available(base_url: str, timeout: float = 2.0) -> bool:
     return bool(list_ollama_models(base_url, timeout=timeout))
 
 
-def list_ollama_models(base_url: str, timeout: float = 2.0) -> list[str]:
-    """Return installed Ollama model names, or an empty list when Ollama is unreachable."""
+def list_ollama_models(
+    base_url: str, timeout: float = 2.0, *, log_level: int = logging.WARNING
+) -> list[str]:
+    """Return installed Ollama model names, or an empty list when Ollama is unreachable.
+
+    An unreachable Ollama is logged at ``log_level``. Callers that poll this routinely,
+    such as the health endpoint, pass ``logging.DEBUG`` so a deployment without Ollama does
+    not warn on every probe; the startup auto-fallback keeps the default so the reason it
+    fell back is in the log.
+    """
     try:
         with urllib.request.urlopen(
             urllib.request.Request(f"{base_url.rstrip('/')}/api/tags"),
             timeout=timeout,
         ) as resp:
             if resp.status != 200:
-                logger.debug("Ollama at %s returned HTTP %s listing models", base_url, resp.status)
+                logger.log(
+                    log_level, "Ollama at %s returned HTTP %s listing models", base_url, resp.status
+                )
                 return []
             data = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:  # noqa: BLE001 - unreachable Ollama is a normal state
-        # /health polls this on every call and most deployments do not run Ollama, so this
-        # stays at DEBUG. The decision that matters (auto-fallback to hash) warns separately.
-        logger.debug("Could not list Ollama models at %s: %s", base_url, describe_exception(exc))
+        logger.log(
+            log_level, "Could not list Ollama models at %s: %s", base_url, describe_exception(exc)
+        )
         return []
 
     models = data.get("models", [])
