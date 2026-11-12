@@ -12,6 +12,7 @@ This project follows Semantic Versioning for the application release number:
 
 ### Added
 
+- Clerk sign-in. The patient view stays public; the new clinician view (`/clinician`) needs a signed-in user, and the developer workbench (`/dev`) with its API (`/health`, `/sources`, `/ingest`, `/eval/*`) needs `"admin": true` in the user's Clerk public metadata. Configure with `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`.
 - Browser evaluation dashboard for running the RAG eval suite from the UI.
 - Redesigned frontend workbench with corpus controls, source search, chat history, citation evidence, health indicators, and integrated eval controls.
 - Opt-in OpenAI-compatible API backends for generation and embeddings via `RAG_GENERATION_BACKEND=api` and `RAG_EMBEDDING_BACKEND=api`.

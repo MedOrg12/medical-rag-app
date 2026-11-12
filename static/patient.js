@@ -11,12 +11,26 @@ const ui = {
   availability: document.querySelector("#availability"),
   availabilityMessage: document.querySelector("#availability-message"),
   checkStatus: document.querySelector("#check-status"),
+  composerArea: document.querySelector("#composer-area"),
+  newSession: document.querySelector("#new-session"),
+  signIn: document.querySelector("#sign-in"),
+  signInMessage: document.querySelector("#sign-in-message"),
+  signInWidget: document.querySelector("#sign-in-widget"),
+  userButton: document.querySelector("#user-button"),
 };
 
-const HISTORY_KEY = "stroke-companion:thread:v1";
+// /clinician serves this same page. Clinician answers need a Clerk sign-in, which the
+// server enforces on /ask; the patient view never loads Clerk.
+const CLINICIAN = location.pathname.replace(/\/+$/, "") === "/clinician";
+const ANSWER_MODE = CLINICIAN ? "clinician" : "patient";
+// Clinician threads are kept apart from patient threads, stored per Clerk user, and cleared
+// on sign-out. The key stays null on the clinician page until a user is known.
+const CLINICIAN_HISTORY_PREFIX = "stroke-companion:clinician-thread:v1";
+let historyKey = CLINICIAN ? null : "stroke-companion:thread:v1";
 const HISTORY_LIMIT = 50;
 
 let ready = false;
+let signedIn = !CLINICIAN;
 let activeRequest = null;
 let answerSequence = 0;
 // Another tab changed the thread while this tab was busy; redraw once the request ends.
@@ -41,7 +55,7 @@ function updateControls() {
   const busy = Boolean(activeRequest);
   ui.send.hidden = busy;
   ui.stop.hidden = !busy;
-  ui.send.disabled = !ready || !ui.question.value.trim() || busy;
+  ui.send.disabled = !ready || !signedIn || !ui.question.value.trim() || busy;
   ui.messages.setAttribute("aria-busy", String(busy));
 }
 
@@ -51,9 +65,10 @@ function resizeQuestion() {
   updateControls();
 }
 
-function loadThread() {
+function loadThread(key = historyKey) {
+  if (!key) return [];
   try {
-    const stored = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    const stored = JSON.parse(localStorage.getItem(key) || "[]");
     if (!Array.isArray(stored)) return [];
     return stored
       .filter((entry) => entry && typeof entry.id === "string" && typeof entry.question === "string" && entry.question.trim())
@@ -69,11 +84,12 @@ function loadThread() {
   }
 }
 
-function writeThread(entries) {
+function writeThread(entries, key = historyKey) {
+  if (!key) return;
   while (true) {
     try {
-      if (entries.length) localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
-      else localStorage.removeItem(HISTORY_KEY);
+      if (entries.length) localStorage.setItem(key, JSON.stringify(entries));
+      else localStorage.removeItem(key);
       return;
     } catch (error) {
       // Drop the oldest exchanges when storage is full; give up if storage is unavailable.
@@ -84,21 +100,24 @@ function writeThread(entries) {
 }
 
 // Serialize read-modify-write cycles across tabs where the Web Locks API is available.
+// Callbacks receive the key current when they were queued, so a user switch cannot redirect them.
 function withHistoryLock(callback) {
-  if (navigator.locks?.request) navigator.locks.request(HISTORY_KEY, callback).catch(() => {});
-  else callback();
+  const key = historyKey;
+  if (!key) return;
+  if (navigator.locks?.request) navigator.locks.request(key, () => callback(key)).catch(() => {});
+  else callback(key);
 }
 
 // Merge into the stored thread so exchanges saved by other tabs are kept.
 function saveEntry(entry) {
   const generation = historyGeneration;
   const saved = { id: entry.id, createdAt: entry.createdAt, question: entry.question, payload: entry.payload };
-  withHistoryLock(() => {
+  withHistoryLock((key) => {
     if (generation !== historyGeneration) return;
-    const entries = loadThread().filter((stored) => stored.id !== saved.id);
+    const entries = loadThread(key).filter((stored) => stored.id !== saved.id);
     entries.push(saved);
     entries.sort((a, b) => a.createdAt - b.createdAt);
-    writeThread(entries.slice(-HISTORY_LIMIT));
+    writeThread(entries.slice(-HISTORY_LIMIT), key);
   });
 }
 
@@ -288,7 +307,7 @@ function renderAnswer(article, payload) {
 }
 
 async function ask(question, existingArticle = null) {
-  if (activeRequest || !ready || !question.trim()) return;
+  if (activeRequest || !ready || !signedIn || !question.trim()) return;
   ui.welcome.hidden = true;
   ui.messages.hidden = false;
   if (!existingArticle) appendQuestion(question);
@@ -313,10 +332,12 @@ async function ask(question, existingArticle = null) {
   article.scrollIntoView({ behavior: "smooth", block: "start" });
   let response;
   try {
+    const authHeaders = CLINICIAN ? await window.appAuth.authHeaders() : {};
+    if (activeRequest !== controller) return;
     response = await fetch("/ask", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, answer_mode: "patient" }),
+      headers: { "Content-Type": "application/json", ...authHeaders },
+      body: JSON.stringify({ question, answer_mode: ANSWER_MODE }),
       signal: controller.signal,
     });
     if (!response.ok) throw new Error("Request failed");
@@ -333,7 +354,9 @@ async function ask(question, existingArticle = null) {
       ? "You stopped waiting for this answer."
       : response?.status === 409
         ? "The study library is not ready yet. Please try again later."
-        : "We could not get an answer right now. Please try again.");
+        : response?.status === 401
+          ? "Your sign-in has expired. Please sign in again, then try once more."
+          : "We could not get an answer right now. Please try again.");
     ui.status.textContent = error.name === "AbortError" ? "Stopped" : "Answer unavailable";
     if (!ui.question.value) {
       ui.question.value = question;
@@ -350,6 +373,7 @@ async function ask(question, existingArticle = null) {
 
 function renderThread() {
   pendingSync = false;
+  if (!signedIn) return;
   const entries = loadThread();
   ui.messages.replaceChildren();
   ui.messages.hidden = !entries.length;
@@ -384,10 +408,10 @@ function startFresh(clearStorage = true) {
   activeRequest = null;
   pendingSync = false;
   historyGeneration++;
-  if (clearStorage) withHistoryLock(() => writeThread([]));
+  if (clearStorage) withHistoryLock((key) => writeThread([], key));
   ui.messages.replaceChildren();
   ui.messages.hidden = true;
-  ui.welcome.hidden = false;
+  ui.welcome.hidden = !signedIn;
   ui.question.value = "";
   ui.status.textContent = ready ? "Ready for your question" : "Temporarily unavailable";
   resizeQuestion();
@@ -396,7 +420,7 @@ function startFresh(clearStorage = true) {
 ui.form.addEventListener("submit", (event) => {
   event.preventDefault();
   const question = ui.question.value.trim();
-  if (!question || activeRequest || !ready) return;
+  if (!question || activeRequest || !ready || !signedIn) return;
   ui.question.value = "";
   resizeQuestion();
   ask(question);
@@ -411,7 +435,7 @@ ui.question.addEventListener("keydown", (event) => {
 ui.stop.addEventListener("click", () => activeRequest?.abort());
 ui.checkStatus.addEventListener("click", checkAvailability);
 
-document.querySelector("#new-session").addEventListener("click", () => {
+ui.newSession.addEventListener("click", () => {
   startFresh();
   ui.question.focus();
 });
@@ -419,7 +443,7 @@ document.querySelector("#new-session").addEventListener("click", () => {
 // Follow changes made in other tabs; a reset there also stops this tab's pending answer.
 window.addEventListener("storage", (event) => {
   // key is null when another tab called localStorage.clear().
-  if (event.key !== HISTORY_KEY && event.key !== null) return;
+  if ((!historyKey || event.key !== historyKey) && event.key !== null) return;
   if (event.key === null || event.newValue === null) startFresh(false);
   else if (activeRequest) pendingSync = true;
   else queueRenderThread();
@@ -443,5 +467,104 @@ ui.messages.addEventListener("click", (event) => {
   source.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
 
-renderThread();
+const CLINICIAN_SUGGESTIONS = [
+  ["When is endovascular thrombectomy indicated?", "Thrombectomy eligibility"],
+  ["What does the SPAN-100 index predict?", "SPAN-100 prognosis"],
+  ["How is stroke severity assessed before hospital arrival?", "Prehospital severity scales"],
+  ["What secondary prevention is recommended after a TIA?", "Secondary prevention after TIA"],
+];
+
+function applyClinicianText() {
+  document.title = "Clinician view | Stroke Companion";
+  document.querySelector("#welcome-eyebrow").textContent = "For clinicians";
+  document.querySelector("#welcome-title").textContent = "Stroke evidence, with sources.";
+  document.querySelector("#welcome-intro").textContent = "Answers use clinical language and cite the indexed literature.";
+  document.querySelector("#education-note").textContent = "For clinical reference. Check answers against the cited sources and current guidelines.";
+  document.querySelector("label[for='question']").textContent = "Your clinical question";
+  ui.question.placeholder = "Ask a clinical question about stroke...";
+  const viewSwitch = document.querySelector("#view-switch");
+  viewSwitch.textContent = "Patient view";
+  viewSwitch.href = "/";
+  document.querySelectorAll("[data-question]").forEach((button, index) => {
+    const suggestion = CLINICIAN_SUGGESTIONS[index];
+    if (!suggestion) return;
+    button.dataset.question = suggestion[0];
+    button.querySelector("span").textContent = suggestion[1];
+  });
+}
+
+// Show the sign-in form in place of the conversation, or the conversation once signed in.
+function showSignedIn(value, message = "") {
+  const changed = value !== signedIn;
+  signedIn = value;
+  ui.signIn.hidden = value;
+  ui.composerArea.hidden = !value;
+  ui.newSession.hidden = !value;
+  if (message) ui.signInMessage.textContent = message;
+  if (value && changed) renderThread();
+  if (!value) {
+    ui.welcome.hidden = true;
+    ui.messages.hidden = true;
+  }
+  updateControls();
+}
+
+async function setUpClinicianSignIn() {
+  applyClinicianText();
+  showSignedIn(false, "Loading sign-in...");
+  let state;
+  try {
+    state = await window.appAuth.load();
+  } catch {
+    showSignedIn(false, "Sign-in could not be loaded. Check your connection, then reload the page.");
+    return;
+  }
+  if (!state.enabled) {
+    historyKey = CLINICIAN_HISTORY_PREFIX;
+    showSignedIn(true);
+    return;
+  }
+  if (!state.configured) {
+    showSignedIn(false, "Clinician sign-in is not set up on this server yet.");
+    return;
+  }
+  const clerk = state.clerk;
+  let signInMounted = false;
+  let userButtonMounted = false;
+  let currentUserId; // undefined until the first sync
+  const sync = () => {
+    const userId = clerk.user?.id || null;
+    if (userId === currentUserId) return;
+    const previousUserId = currentUserId;
+    currentUserId = userId;
+    // Never show one user's exchanges to another. On sign-out (here or in another tab) also
+    // remove them from storage, so they are not left for whoever uses this browser next.
+    if (previousUserId) startFresh(!userId);
+    if (userId) {
+      historyKey = `${CLINICIAN_HISTORY_PREFIX}:${userId}`;
+      if (signInMounted) clerk.unmountSignIn(ui.signInWidget);
+      signInMounted = false;
+      if (!userButtonMounted) clerk.mountUserButton(ui.userButton);
+      userButtonMounted = true;
+      ui.userButton.hidden = false;
+      signedIn = false; // force showSignedIn to render this user's thread
+      showSignedIn(true);
+    } else {
+      historyKey = null;
+      if (userButtonMounted) clerk.unmountUserButton(ui.userButton);
+      userButtonMounted = false;
+      ui.userButton.hidden = true;
+      showSignedIn(false, "Clinician answers use technical language and are meant for healthcare professionals.");
+      if (!signInMounted) {
+        clerk.mountSignIn(ui.signInWidget, { forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href });
+      }
+      signInMounted = true;
+    }
+  };
+  sync();
+  clerk.addListener(sync);
+}
+
+if (CLINICIAN) setUpClinicianSignIn();
+else renderThread();
 checkAvailability();
