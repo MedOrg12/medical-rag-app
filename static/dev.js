@@ -15,8 +15,10 @@ const seconds = (value) => `${Number(value || 0).toFixed(1)}s`;
 const icon = (name) => `<svg aria-hidden="true"><use href="/static/icons.svg#${name}"></use></svg>`;
 
 async function request(path, body, signal) {
-  const response = await fetch(path, body === undefined ? { signal } : {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+  // Every workbench endpoint needs an administrator's Clerk session token.
+  const authHeaders = await window.appAuth.authHeaders();
+  const response = await fetch(path, body === undefined ? { signal, headers: authHeaders } : {
+    method: "POST", headers: { "Content-Type": "application/json", ...authHeaders }, body: JSON.stringify(body), signal,
   });
   const payload = await response.json();
   if (!response.ok) {
@@ -406,8 +408,59 @@ $("#refresh-button").addEventListener("click", async () => {
   await Promise.allSettled(operations);
   $("#refresh-button").disabled = false;
 });
-window.addEventListener("hashchange", showView);
 window.addEventListener("pagehide", () => { clearTimeout(state.ingestTimer); clearInterval(state.queryTimer); });
-showView();
-loadHealth();
+
+function gate(message, { signOut = false } = {}) {
+  $("#auth-gate").hidden = false;
+  $("#auth-gate-message").textContent = message;
+  $("#auth-sign-out").hidden = !signOut;
+}
+
+// Resolves true once the viewer is a signed-in administrator (or sign-in is disabled).
+async function authorize() {
+  let auth;
+  try {
+    auth = await window.appAuth.load();
+  } catch (error) {
+    gate(`Sign-in could not be loaded: ${error.message} Reload the page to try again.`);
+    return false;
+  }
+  if (!auth.enabled) return true;
+  if (!auth.configured) {
+    gate("Sign-in is not set up on this server. Set CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY, then restart it.");
+    return false;
+  }
+  const clerk = auth.clerk;
+  // Start over whenever the signed-in user changes (sign-in, sign-out, account switch).
+  const userId = clerk.user?.id || null;
+  clerk.addListener(({ user }) => { if ((user?.id || null) !== userId) location.reload(); });
+  $("#auth-sign-out").onclick = () => clerk.signOut();
+  if (!userId) {
+    gate("Sign in with an administrator account to continue.");
+    clerk.mountSignIn($("#auth-gate-widget"), { forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href });
+    return false;
+  }
+  let me;
+  try {
+    me = await request("/auth/me");
+  } catch (error) {
+    gate(`Could not check your access: ${error.message}`, { signOut: true });
+    return false;
+  }
+  if (!me.admin) {
+    gate("This account is not an administrator. An administrator must set \"admin\": true in its Clerk public metadata.", { signOut: true });
+    return false;
+  }
+  clerk.mountUserButton($("#user-button"));
+  $("#user-button").hidden = false;
+  return true;
+}
+
 queryControls();
+authorize().then((allowed) => {
+  if (!allowed) return;
+  $("#auth-gate").hidden = true;
+  window.addEventListener("hashchange", showView);
+  showView();
+  loadHealth();
+});

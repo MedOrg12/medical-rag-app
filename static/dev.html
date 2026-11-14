@@ -3,9 +3,18 @@
 <head>
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Developer Workbench | Stroke Companion</title>
-  <link rel="stylesheet" href="/static/dev.css" /><script src="/static/dev.js" defer></script>
+  <link rel="stylesheet" href="/static/dev.css" /><script src="/static/auth.js" defer></script><script src="/static/dev.js" defer></script>
 </head>
 <body>
+  <div id="auth-gate" class="auth-gate">
+    <section class="auth-gate-panel" aria-labelledby="auth-gate-title">
+      <a class="brand" href="/"><svg aria-hidden="true"><use href="/static/icons.svg#heart-pulse"></use></svg><span>Stroke Companion<small>Developer workbench</small></span></a>
+      <h1 id="auth-gate-title">Administrator sign-in</h1>
+      <p id="auth-gate-message" role="status">Checking access...</p>
+      <div id="auth-gate-widget"></div>
+      <div class="toolbar"><a class="quiet-button" href="/">Patient view</a><button id="auth-sign-out" class="quiet-button" type="button" hidden>Sign out</button></div>
+    </section>
+  </div>
   <aside class="rail">
     <a class="brand" href="/dev"><svg aria-hidden="true"><use href="/static/icons.svg#heart-pulse"></use></svg><span>Stroke Companion<small>Developer workbench</small></span></a>
     <nav aria-label="Workbench views">
@@ -17,7 +26,7 @@
     <div class="rail-bottom"><a href="/">Patient view<svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg></a><a href="/docs">API reference<svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg></a></div>
   </aside>
   <div class="workspace">
-    <header class="topbar"><span id="view-name">Playground</span><div class="toolbar"><a class="patient-link" href="/">Patient view</a><span id="index-status" class="badge">Checking index</span><button id="refresh-button" class="icon-button" type="button" title="Refresh current view" aria-label="Refresh current view"><svg aria-hidden="true"><use href="/static/icons.svg#rotate-ccw"></use></svg></button></div></header>
+    <header class="topbar"><span id="view-name">Playground</span><div class="toolbar"><a class="patient-link" href="/">Patient view</a><span id="index-status" class="badge">Checking index</span><div id="user-button" class="user-button" hidden></div><button id="refresh-button" class="icon-button" type="button" title="Refresh current view" aria-label="Refresh current view"><svg aria-hidden="true"><use href="/static/icons.svg#rotate-ccw"></use></svg></button></div></header>
     <main>
       <div id="connection-error" class="notice error" role="alert" hidden></div>
       <section id="view-playground" class="view" aria-labelledby="playground-title">

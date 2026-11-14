@@ -164,6 +164,7 @@ def test_health_lists_ollama_models_without_warning(tmp_path, monkeypatch, caplo
         corpus_dir=tmp_path,
         index_path=tmp_path / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
     )
     client = TestClient(create_app(settings))
     monkeypatch.setattr("urllib.request.urlopen", refuse)
