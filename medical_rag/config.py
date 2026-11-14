@@ -43,6 +43,12 @@ def _env_float_compat(default: float, *names: str) -> float:
     return default
 
 
+def _env_multiline(name: str) -> str | None:
+    # PEM keys are often put in .env files on one line, with a literal backslash-n per newline.
+    value = os.getenv(name, "").strip()
+    return value.replace("\\n", "\n") or None
+
+
 def _resolve_path(root: Path, value: str) -> Path:
     path = Path(value).expanduser()
     if path.is_absolute():
@@ -117,6 +123,11 @@ class Settings:
     qdrant_timeout_seconds: float = 120.0
     qdrant_prefer_grpc: bool = False
     qdrant_grpc_port: int = 6334
+    clerk_publishable_key: str | None = None
+    clerk_secret_key: str | None = None
+    clerk_jwt_key: str | None = None
+    clerk_authorized_parties: tuple[str, ...] = ()
+    auth_disabled: bool = False
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> "Settings":
@@ -203,6 +214,16 @@ class Settings:
             qdrant_prefer_grpc=os.getenv("RAG_QDRANT_PREFER_GRPC", "false").lower()
             in {"1", "true", "yes", "on"},
             qdrant_grpc_port=_env_int("RAG_QDRANT_GRPC_PORT", 6334),
+            clerk_publishable_key=os.getenv("CLERK_PUBLISHABLE_KEY", "").strip() or None,
+            clerk_secret_key=os.getenv("CLERK_SECRET_KEY", "").strip() or None,
+            clerk_jwt_key=_env_multiline("CLERK_JWT_KEY"),
+            clerk_authorized_parties=tuple(
+                party.strip().rstrip("/")
+                for party in os.getenv("CLERK_AUTHORIZED_PARTIES", "").split(",")
+                if party.strip()
+            ),
+            auth_disabled=os.getenv("RAG_AUTH_DISABLED", "false").lower()
+            in {"1", "true", "yes", "on"},
         )
 
     def with_paths(

@@ -5,14 +5,16 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from medical_rag import __version__
+from medical_rag.auth import Authenticator, Principal
 from medical_rag.config import Settings
 from medical_rag.embeddings import list_ollama_models, ollama_model_name_matches
 from medical_rag.evaluation import evaluate_rag, load_eval_suite
@@ -20,6 +22,12 @@ from medical_rag.logging_config import configure_logging, describe_exception
 from medical_rag.pipeline import StrokeRAG
 
 logger = logging.getLogger(__name__)
+
+# Declares the Bearer scheme so /docs offers an Authorize button. auto_error=False leaves the
+# 401/403/503 decisions to the authenticator, which reads the same header. It lives at module
+# level because these annotations are strings that FastAPI resolves against module globals.
+bearer_scheme = HTTPBearer(auto_error=False, description="A Clerk session token")
+BearerCredentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]
 
 
 class AskRequest(BaseModel):
@@ -46,10 +54,23 @@ class EvalRunRequest(BaseModel):
     include_answers: bool = False
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None, authenticator: Authenticator | None = None
+) -> FastAPI:
     configure_logging()
     app_settings = settings or Settings.from_env()
     rag = StrokeRAG(app_settings)
+    auth = authenticator or Authenticator(app_settings)
+    if auth.disabled:
+        logger.warning(
+            "RAG_AUTH_DISABLED is set: the developer workbench is open to everyone"
+        )
+    elif problem := auth.configuration_problem():
+        logger.warning(
+            "Sign-in is not configured (%s); the developer workbench will refuse requests "
+            "until it is",
+            problem,
+        )
     ingestion_executor = ThreadPoolExecutor(max_workers=1)
     ingestion_lock = threading.Lock()
     ingestion_status: dict[str, Any] = {
@@ -64,6 +85,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description="Stroke-focused retrieval-augmented generation API.",
         version=__version__,
     )
+
+    def require_admin(
+        request: Request,
+        _credentials: BearerCredentials,
+    ) -> Principal:
+        return auth.require_admin(request)
+
+    admin_only = [Depends(require_admin)]
 
     static_dir = app_settings.root_dir / "static"
     if static_dir.exists():
@@ -125,6 +154,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return FileResponse(index_path)
         return {"service": "Stroke Medical RAG", "docs": "/docs"}
 
+    # The page itself holds no data, so it is served to everyone; dev.js asks for an admin
+    # sign-in, and every API endpoint it calls checks for an admin.
     @app.get("/dev", response_model=None, include_in_schema=False)
     def developer_view() -> FileResponse:
         developer_path = static_dir / "dev.html"
@@ -132,11 +163,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Developer view is not available")
         return FileResponse(developer_path)
 
+    @app.get("/auth/config")
+    def auth_config() -> dict[str, Any]:
+        return auth.client_config()
+
+    @app.get("/auth/me")
+    def auth_me(request: Request) -> dict[str, Any]:
+        principal = auth.principal(request)
+        if principal is None:
+            return {"signed_in": False, "admin": False}
+        return {"signed_in": True, "admin": auth.user_is_admin(principal.user_id)}
+
     @app.get("/status")
     def patient_status() -> dict[str, bool]:
         return {"ready": rag.index_exists()}
 
-    @app.get("/health")
+    @app.get("/health", dependencies=admin_only)
     def health() -> dict[str, Any]:
         # Polled by container healthchecks and the UI; an absent Ollama is not worth a warning
         # each time, and the startup auto-fallback already logged the reason once.
@@ -210,7 +252,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {"status": "ok" if index_exists else "not_ready", "index_exists": index_exists}
 
-    @app.post("/ingest")
+    @app.post("/ingest", dependencies=admin_only)
     def ingest(request: IngestRequest) -> dict[str, Any]:
         source = Path(request.source_path).expanduser() if request.source_path else None
         if request.background:
@@ -244,7 +286,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.get("/ingest/status")
+    @app.get("/ingest/status", dependencies=admin_only)
     def ingest_status() -> dict[str, Any]:
         with ingestion_lock:
             return dict(ingestion_status)
@@ -270,7 +312,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.get("/sources")
+    @app.get("/sources", dependencies=admin_only)
     def sources() -> list[dict[str, object]]:
         try:
             return rag.sources()
@@ -288,7 +330,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=503, detail=f"Could not read sources from the vector store: {exc}"
             ) from exc
 
-    @app.get("/eval/questions")
+    @app.get("/eval/questions", dependencies=admin_only)
     def eval_questions() -> dict[str, Any]:
         version, questions = load_eval_suite()
         return {
@@ -296,7 +338,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "questions": [question.to_dict() for question in questions],
         }
 
-    @app.post("/eval/run")
+    @app.post("/eval/run", dependencies=admin_only)
     def eval_run(request: EvalRunRequest) -> dict[str, Any]:
         try:
             return evaluate_rag(

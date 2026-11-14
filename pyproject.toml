@@ -13,6 +13,8 @@ dependencies = [
   "pymupdf>=1.23.0",
   "pydantic>=2.5.0",
   "qdrant-client>=1.19.0",
+  "clerk-backend-api>=7.1.0",
+  "python-dotenv>=1.0.0",
 ]
 
 [project.scripts]

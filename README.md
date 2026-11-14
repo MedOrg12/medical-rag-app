@@ -33,6 +33,28 @@ python app.py
 
 Open `http://127.0.0.1:8000` after starting the server.
 
+## Sign-in
+
+Sign-in uses [Clerk](https://clerk.com). Access is split two ways:
+
+| Area | Who can use it |
+| --- | --- |
+| Patient view (`/`), `/status`, `/ready`, `POST /ask` | Everyone |
+| Developer workbench (`/dev`) and its API: `/health`, `/sources`, `/ingest`, `/ingest/status`, `/eval/questions`, `/eval/run` | Signed-in users whose Clerk **public metadata** contains `{"admin": true}` |
+
+Set the keys from the Clerk dashboard (API keys page) in `.env` at the repository root. `python app.py` and Docker Compose both read it:
+
+```bash
+CLERK_PUBLISHABLE_KEY=pk_test_...
+CLERK_SECRET_KEY=sk_test_...
+```
+
+To make a user an administrator, open the user in the Clerk dashboard and set their public metadata to `{"admin": true}`. Only the JSON value `true` counts. The server caches the admin check for 30 seconds.
+
+The browser sends the Clerk session token as `Authorization: Bearer <token>`; the `__session` cookie is ignored so other sites cannot call the API with a visitor's cookie. To call a protected endpoint with `curl`, copy a token from the browser console of a signed-in page with `await Clerk.session.getToken()` (it expires after about a minute) and pass `-H "Authorization: Bearer $TOKEN"`.
+
+`CLERK_AUTHORIZED_PARTIES` lists the origins of this app's pages, comma-separated (for example `https://stroke.example.org`); tokens issued for any other origin are rejected. It is required with a production (`pk_live_`) key and optional with a development (`pk_test_`) key. Optionally set `CLERK_JWT_KEY` (the PEM public key, to verify tokens without fetching Clerk's JWKS). Until sign-in is fully configured, the protected areas answer 503 and the server logs what is missing at startup. For local development or tests without Clerk, `RAG_AUTH_DISABLED=true` opens them to everyone; the server logs a warning when it starts this way. Docker Compose deliberately does not pass this setting through.
+
 ## Docker
 
 The Docker setup is active at the repository root and targets the refactored app.
@@ -43,7 +65,7 @@ docker compose up --build
 
 The container mounts `./pdfs` into `/app/pdfs`, stores the generated vector index in a named volume, and auto-ingests on first startup. The app is available at `http://127.0.0.1:8000`.
 
-The image does not include the PDF corpus; mount one at `/app/pdfs` when running it outside Compose. `GET /ready` returns 200 once an index exists and 503 until then (or while the vector store is unreachable), and the image's Docker healthcheck uses it. `GET /health` always returns 200 with diagnostic details.
+The image does not include the PDF corpus; mount one at `/app/pdfs` when running it outside Compose. `GET /ready` returns 200 once an index exists and 503 until then (or while the vector store is unreachable), and the image's Docker healthcheck uses it. `GET /health` returns 200 with diagnostic details to administrators (see [Sign-in](#sign-in)); the Compose healthcheck uses the public `GET /status` instead.
 
 To run with Ollama generation using the Ollama app already running on your Mac:
 

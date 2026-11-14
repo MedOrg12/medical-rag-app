@@ -27,6 +27,7 @@ def test_patient_and_developer_views_are_separate(tmp_path) -> None:
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
     )
     client = TestClient(create_app(settings))
 
@@ -56,6 +57,7 @@ def test_patient_status_checks_index_without_provider_call(tmp_path, monkeypatch
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
     )
     monkeypatch.setattr("medical_rag.server.list_ollama_models", unexpected_provider_call)
     client = TestClient(create_app(settings))
@@ -76,6 +78,7 @@ def test_ready_reflects_index_without_provider_call(tmp_path, monkeypatch) -> No
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
     )
     monkeypatch.setattr("medical_rag.server.list_ollama_models", unexpected_provider_call)
     client = TestClient(create_app(settings))
@@ -96,6 +99,7 @@ def test_ready_reports_unreachable_qdrant_as_not_ready(tmp_path) -> None:
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / ".rag" / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
         vector_store_backend="qdrant",
         qdrant_url="http://127.0.0.1:9",
         qdrant_timeout_seconds=1.0,
@@ -114,6 +118,7 @@ def test_missing_developer_view_returns_not_found(tmp_path) -> None:
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
     )
     client = TestClient(create_app(settings))
 
@@ -126,6 +131,7 @@ def test_health_reports_api_configuration_without_secret(tmp_path) -> None:
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / ".rag" / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
         generation_backend="api",
         api_key="secret-key",
         api_base_url="https://api.example.test/v1",
@@ -160,6 +166,7 @@ def test_eval_questions_endpoint_returns_packaged_suite(tmp_path) -> None:
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / ".rag" / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
     )
     client = TestClient(create_app(settings))
 
@@ -186,6 +193,7 @@ def test_eval_run_endpoint_scores_selected_question(tmp_path) -> None:
         chunk_size_chars=400,
         chunk_overlap_chars=40,
         embedding_backend="hash",
+        auth_disabled=True,
     )
     client = TestClient(create_app(settings))
 
@@ -209,6 +217,7 @@ def test_health_survives_unreachable_remote_embedding_service(tmp_path) -> None:
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / ".rag" / "index.json",
         embedding_backend="remote",
+        auth_disabled=True,
         embedding_service_url="http://127.0.0.1:9",
         embedding_service_timeout_seconds=1.0,
     )
@@ -229,6 +238,7 @@ def test_health_survives_unreachable_qdrant(tmp_path) -> None:
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / ".rag" / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
         vector_store_backend="qdrant",
         qdrant_url="http://127.0.0.1:9",
         qdrant_timeout_seconds=1.0,
@@ -254,6 +264,7 @@ def test_sources_reports_vector_store_failure_as_json(tmp_path) -> None:
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / ".rag" / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
     )
     client = TestClient(create_app(settings))
 
@@ -272,6 +283,7 @@ def test_unhandled_errors_return_json(tmp_path) -> None:
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / ".rag" / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
     )
     client = TestClient(create_app(settings), raise_server_exceptions=False)
 
@@ -291,6 +303,7 @@ def test_request_failures_are_logged(tmp_path, caplog) -> None:
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / ".rag" / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
     )
     client = TestClient(create_app(settings), raise_server_exceptions=False)
 
@@ -328,6 +341,7 @@ def test_background_ingestion_failure_is_logged(tmp_path, caplog) -> None:
         corpus_dir=tmp_path / "corpus",
         index_path=tmp_path / ".rag" / "index.json",
         embedding_backend="hash",
+        auth_disabled=True,
     )
     client = TestClient(create_app(settings))
 
