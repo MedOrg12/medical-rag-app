@@ -5,10 +5,11 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,12 @@ from medical_rag.logging_config import configure_logging, describe_exception
 from medical_rag.pipeline import StrokeRAG
 
 logger = logging.getLogger(__name__)
+
+# Declares the Bearer scheme so /docs offers an Authorize button. auto_error=False leaves the
+# 401/403/503 decisions to the authenticator, which reads the same header. It lives at module
+# level because these annotations are strings that FastAPI resolves against module globals.
+bearer_scheme = HTTPBearer(auto_error=False, description="A Clerk session token")
+BearerCredentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]
 
 
 class AskRequest(BaseModel):
@@ -56,13 +63,12 @@ def create_app(
     auth = authenticator or Authenticator(app_settings)
     if auth.disabled:
         logger.warning(
-            "RAG_AUTH_DISABLED is set: the clinician view and the developer workbench are open "
-            "to everyone"
+            "RAG_AUTH_DISABLED is set: the developer workbench is open to everyone"
         )
     elif problem := auth.configuration_problem():
         logger.warning(
-            "Sign-in is not configured (%s); the clinician view and the developer workbench "
-            "will refuse requests until it is",
+            "Sign-in is not configured (%s); the developer workbench will refuse requests "
+            "until it is",
             problem,
         )
     ingestion_executor = ThreadPoolExecutor(max_workers=1)
@@ -80,7 +86,10 @@ def create_app(
         version=__version__,
     )
 
-    def require_admin(request: Request) -> Principal:
+    def require_admin(
+        request: Request,
+        _credentials: BearerCredentials,
+    ) -> Principal:
         return auth.require_admin(request)
 
     admin_only = [Depends(require_admin)]
@@ -144,15 +153,6 @@ def create_app(
         if index_path.exists():
             return FileResponse(index_path)
         return {"service": "Stroke Medical RAG", "docs": "/docs"}
-
-    @app.get("/clinician", response_model=None, include_in_schema=False)
-    def clinician_view() -> FileResponse:
-        # The same page as the patient view; patient.js switches to clinician mode by path
-        # and asks the user to sign in. The /ask endpoint enforces the sign-in.
-        index_path = static_dir / "index.html"
-        if not index_path.exists():
-            raise HTTPException(status_code=404, detail="Clinician view is not available")
-        return FileResponse(index_path)
 
     # The page itself holds no data, so it is served to everyone; dev.js asks for an admin
     # sign-in, and every API endpoint it calls checks for an admin.
@@ -292,12 +292,7 @@ def create_app(
             return dict(ingestion_status)
 
     @app.post("/ask")
-    def ask(request: AskRequest, http_request: Request) -> dict[str, Any]:
-        # The patient view is public; clinician answers need a signed-in user. Check the mode
-        # the pipeline will actually use, since RAG_ANSWER_MODE can default it to clinician.
-        mode = (request.answer_mode or app_settings.answer_mode).strip().lower()
-        if mode != "patient":
-            auth.require_user(http_request)
+    def ask(request: AskRequest) -> dict[str, Any]:
         try:
             return rag.ask(
                 question=request.question,

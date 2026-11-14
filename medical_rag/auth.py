@@ -1,8 +1,7 @@
-"""Clerk sign-in for the clinician view and the developer workbench.
+"""Clerk sign-in for the developer workbench.
 
-The patient view stays public. Clinician answers need a signed-in Clerk user, and the
-developer workbench and its API need a user whose Clerk public metadata has
-``"admin": true``.
+The patient view and /ask stay public. The developer workbench API needs a signed-in
+Clerk user whose public metadata has ``"admin": true``.
 
 The browser sends Clerk session tokens as ``Authorization: Bearer <token>``. The
 ``__session`` cookie is deliberately ignored: accepting it would let another site make a

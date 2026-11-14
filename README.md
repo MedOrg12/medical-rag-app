@@ -35,12 +35,11 @@ Open `http://127.0.0.1:8000` after starting the server.
 
 ## Sign-in
 
-Sign-in uses [Clerk](https://clerk.com). Access is split three ways:
+Sign-in uses [Clerk](https://clerk.com). Access is split two ways:
 
 | Area | Who can use it |
 | --- | --- |
-| Patient view (`/`), `/status`, `/ready`, patient-mode `POST /ask` | Everyone |
-| Clinician view (`/clinician`), clinician-mode `POST /ask` | Any signed-in user |
+| Patient view (`/`), `/status`, `/ready`, `POST /ask` | Everyone |
 | Developer workbench (`/dev`) and its API: `/health`, `/sources`, `/ingest`, `/ingest/status`, `/eval/questions`, `/eval/run` | Signed-in users whose Clerk **public metadata** contains `{"admin": true}` |
 
 Set the keys from the Clerk dashboard (API keys page) in `.env` at the repository root. `python app.py` and Docker Compose both read it:

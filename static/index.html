@@ -6,7 +6,6 @@
     <meta name="theme-color" content="#ffffff" />
     <title>Stroke Companion</title>
     <link rel="stylesheet" href="/static/patient.css" />
-    <script src="/static/auth.js" defer></script>
     <script src="/static/patient.js" defer></script>
   </head>
   <body>
@@ -15,14 +14,10 @@
         <svg class="brand-icon" aria-hidden="true"><use href="/static/icons.svg#heart-pulse"></use></svg>
         <span>Stroke Companion</span>
       </a>
-      <div class="topbar-actions">
-        <a id="view-switch" class="quiet-button" href="/clinician">For clinicians</a>
-        <button id="new-session" class="quiet-button" type="button" aria-label="Start fresh" title="Start fresh">
-          <svg aria-hidden="true"><use href="/static/icons.svg#plus"></use></svg>
-          <span>Start fresh</span>
-        </button>
-        <div id="user-button" class="user-button" hidden></div>
-      </div>
+      <button id="new-session" class="quiet-button" type="button" aria-label="Start fresh" title="Start fresh">
+        <svg aria-hidden="true"><use href="/static/icons.svg#plus"></use></svg>
+        <span>Start fresh</span>
+      </button>
     </header>
 
     <main id="main">
@@ -34,17 +29,10 @@
         </button>
       </div>
 
-      <section id="sign-in" class="sign-in" aria-labelledby="sign-in-title" hidden>
-        <p class="eyebrow">For clinicians</p>
-        <h1 id="sign-in-title">Sign in to use the clinician view.</h1>
-        <p id="sign-in-message" class="intro">Clinician answers use technical language and are meant for healthcare professionals.</p>
-        <div id="sign-in-widget" class="sign-in-widget"></div>
-      </section>
-
       <section id="welcome" class="welcome" aria-labelledby="welcome-title">
-        <p id="welcome-eyebrow" class="eyebrow">For patients and caregivers</p>
+        <p class="eyebrow">For patients and caregivers</p>
         <h1 id="welcome-title">Your questions about stroke.</h1>
-        <p id="welcome-intro" class="intro">What is on your mind today?</p>
+        <p class="intro">What is on your mind today?</p>
         <div class="suggestions" aria-label="Suggested questions">
           <button type="button" data-question="What should I eat after a stroke?">
             <span>Eating after a stroke</span>
@@ -67,7 +55,7 @@
 
       <section id="messages" class="messages" aria-label="Questions and answers" tabindex="-1" hidden></section>
 
-      <div id="composer-area" class="composer-area">
+      <div class="composer-area">
         <form id="ask-form" class="composer">
           <label for="question" class="sr-only">Your stroke question</label>
           <textarea id="question" name="question" placeholder="Ask a question about stroke..." rows="2" maxlength="4000" required></textarea>
@@ -81,7 +69,7 @@
             </button>
           </div>
         </form>
-        <p id="education-note" class="education-note">For education. Answers may be incomplete; discuss care decisions with your healthcare team.</p>
+        <p class="education-note">For education. Answers may be incomplete; discuss care decisions with your healthcare team.</p>
       </div>
     </main>
 

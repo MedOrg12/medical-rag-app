@@ -86,13 +86,10 @@ def test_frontend_api_is_decoded_from_publishable_key() -> None:
 def test_pages_are_served_without_sign_in(tmp_path) -> None:
     client = _client(_settings(tmp_path), FakeAuthenticator(_settings(tmp_path)))
 
-    for path in ("/", "/clinician", "/dev", "/status"):
+    for path in ("/", "/dev", "/status"):
         assert client.get(path).status_code == 200, path
     # /ready is public too; 503 here only means no index has been built yet.
     assert client.get("/ready").json() == {"status": "not_ready", "index_exists": False}
-    clinician = client.get("/clinician")
-    assert clinician.status_code == 200
-    assert "/static/auth.js" in clinician.text
     assert 'id="auth-gate"' in client.get("/dev").text
 
 
@@ -109,37 +106,17 @@ def test_auth_config_exposes_publishable_key_only(tmp_path) -> None:
     assert "sk_test_secret" not in response.text
 
 
-def test_patient_answers_stay_public(tmp_path) -> None:
-    settings = _settings(tmp_path)
+@pytest.mark.parametrize("answer_mode", ["patient", "clinician", None])
+@pytest.mark.parametrize("default_mode", ["patient", "clinician"])
+def test_ask_stays_public(tmp_path, answer_mode, default_mode) -> None:
+    settings = _settings(tmp_path, answer_mode=default_mode)
     client = _client(settings, FakeAuthenticator(settings))
+    body = {"question": "What is a stroke?"}
+    if answer_mode:
+        body["answer_mode"] = answer_mode
 
-    # 409 means the request got past the auth check to the (missing) index.
-    response = client.post("/ask", json={"question": "What is a stroke?", "answer_mode": "patient"})
-    assert response.status_code == 409
-
-
-def test_clinician_answers_need_a_signed_in_user(tmp_path) -> None:
-    settings = _settings(tmp_path)
-    client = _client(settings, FakeAuthenticator(settings))
-    body = {"question": "When is thrombectomy indicated?", "answer_mode": "clinician"}
-
-    anonymous = client.post("/ask", json=body)
-    assert anonymous.status_code == 401
-    assert anonymous.headers["www-authenticate"] == "Bearer"
-    assert client.post("/ask", json=body, headers=_bearer("forged")).status_code == 401
-    assert client.post("/ask", json=body, headers=_bearer("user-token")).status_code == 409
-
-
-def test_default_clinician_mode_also_needs_sign_in(tmp_path) -> None:
-    settings = _settings(tmp_path, answer_mode="clinician")
-    client = _client(settings, FakeAuthenticator(settings))
-
-    assert client.post("/ask", json={"question": "What is a stroke?"}).status_code == 401
-    assert (
-        client.post("/ask", json={"question": "What is a stroke?", "answer_mode": "patient"})
-        .status_code
-        == 409
-    )
+    # 409 means the request reached the (missing) index without an auth check.
+    assert client.post("/ask", json=body).status_code == 409
 
 
 @pytest.mark.parametrize(("method", "path", "body"), ADMIN_ENDPOINTS)
@@ -227,8 +204,7 @@ def test_missing_clerk_keys_close_protected_areas(tmp_path, caplog) -> None:
     assert "Sign-in is not configured" in caplog.text
     assert client.get("/auth/config").json()["configured"] is False
     assert client.get("/eval/questions").status_code == 503
-    assert client.post("/ask", json={"question": "x", "answer_mode": "clinician"}).status_code == 503
-    assert client.post("/ask", json={"question": "x", "answer_mode": "patient"}).status_code == 409
+    assert client.post("/ask", json={"question": "x", "answer_mode": "clinician"}).status_code == 409
 
 
 def test_production_key_needs_authorized_parties(tmp_path) -> None:
@@ -257,7 +233,6 @@ def test_auth_disabled_opens_everything(tmp_path) -> None:
 
     assert client.get("/auth/config").json() == {"enabled": False, "configured": True}
     assert client.get("/eval/questions").status_code == 200
-    assert client.post("/ask", json={"question": "x", "answer_mode": "clinician"}).status_code == 409
 
 
 def test_settings_read_clerk_environment(monkeypatch, tmp_path) -> None:
@@ -337,3 +312,12 @@ def test_unreachable_jwks_is_503(tmp_path, signing_key, monkeypatch, caplog) -> 
 
     assert response.status_code == 503
     assert "connection refused" in caplog.text
+
+
+def test_openapi_declares_bearer_auth_on_admin_endpoints(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    schema = _client(settings, FakeAuthenticator(settings)).get("/openapi.json").json()
+
+    assert schema["components"]["securitySchemes"]["HTTPBearer"]["scheme"] == "bearer"
+    assert schema["paths"]["/eval/questions"]["get"]["security"] == [{"HTTPBearer": []}]
+    assert "security" not in schema["paths"]["/ask"]["post"]
