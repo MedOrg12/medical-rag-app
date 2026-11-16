@@ -364,6 +364,57 @@ def test_api_generator_network_error_includes_reason(monkeypatch) -> None:
         raise AssertionError("Expected API generation network error")
 
 
+def test_api_generator_empty_content_error_includes_finish_reason_and_usage(
+    monkeypatch,
+) -> None:
+    class FakeResponse:
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "choices": [
+                        {"message": {"content": ""}, "finish_reason": "length"}
+                    ],
+                    "usage": {
+                        "completion_tokens": 800,
+                        "completion_tokens_details": {"reasoning_tokens": 800},
+                    },
+                }
+            ).encode("utf-8")
+
+    monkeypatch.setattr(
+        "medical_rag.llm.urllib.request.urlopen",
+        lambda _request, timeout=None: FakeResponse(),  # noqa: ARG005
+    )
+    result = SearchResult(
+        chunk=Chunk(
+            id="dysphagia",
+            text="Dysphagia after stroke can involve difficulty swallowing.",
+            metadata={"source_id": "rehab.txt", "page": 1},
+        ),
+        score=0.5,
+        rank=1,
+    )
+    generator = ApiGenerator(
+        base_url="https://api.openai.com/v1",
+        api_key="secret",
+        model="gpt-6.1-sol",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        generator.generate("What is dysphagia?", [result])
+
+    message = str(exc_info.value)
+    assert "did not include message.content" in message
+    assert "finish_reason=length" in message
+    assert '"reasoning_tokens": 800' in message
+
+
 def test_api_generation_requires_api_key(tmp_path) -> None:
     settings = Settings(
         root_dir=tmp_path,

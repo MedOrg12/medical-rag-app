@@ -264,7 +264,14 @@ class ApiGenerator(Generator):
             else None
         )
         if not content:
-            raise RuntimeError("API chat completion response did not include message.content")
+            finish_reason = (
+                first_choice.get("finish_reason") if isinstance(first_choice, dict) else None
+            )
+            usage = json.dumps(data.get("usage"), sort_keys=True)
+            raise RuntimeError(
+                "API chat completion response did not include message.content "
+                f"(finish_reason={finish_reason}, usage={usage})"
+            )
         return str(content).strip()
 
     def _send_request(self, request: urllib.request.Request) -> dict:
