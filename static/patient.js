@@ -17,6 +17,7 @@ const ui = {
   threadList: document.querySelector("#thread-list"),
   threadsEmpty: document.querySelector("#threads-empty"),
   deleteAll: document.querySelector("#delete-all"),
+  threadsAnnounce: document.querySelector("#threads-announce"),
 };
 
 // The conversation a tab shows survives a reload of that tab; other tabs keep their own.
@@ -406,6 +407,7 @@ function deleteThread(id) {
     if (!ui.threadsDialog.open) return;
     renderThreadList();
     focusThreadList();
+    ui.threadsAnnounce.textContent = "Conversation deleted";
   });
 }
 
@@ -444,6 +446,7 @@ ui.newSession.addEventListener("click", () => {
 });
 
 ui.showThreads.addEventListener("click", () => {
+  ui.threadsAnnounce.textContent = "";
   renderThreadList();
   ui.threadsDialog.showModal();
   focusThreadList();
@@ -475,6 +478,7 @@ ui.deleteAll.addEventListener("click", () => {
     leaveIfDeleted();
     renderThreadList();
     focusThreadList();
+    ui.threadsAnnounce.textContent = "All conversations deleted";
   });
 });
 

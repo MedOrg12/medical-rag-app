@@ -82,10 +82,10 @@
   // the kept thread. Returns false if nothing could be written, putting the old copy back.
   function write(storage, threads, keepId = null) {
     threads = threads.slice().sort((a, b) => b.updatedAt - a.updatedAt);
-    let legacy = null;
+    let legacy; // undefined until looked up once
     const fail = () => {
       try {
-        if (legacy !== null) storage.setItem(LEGACY_KEY, legacy);
+        if (typeof legacy === "string") storage.setItem(LEGACY_KEY, legacy);
       } catch {
         // Nothing more can be done without room in storage.
       }
@@ -99,7 +99,7 @@
         return true;
       } catch (error) {
         if (error?.name !== "QuotaExceededError") return fail();
-        if (legacy === null) {
+        if (legacy === undefined) {
           try {
             legacy = storage.getItem(LEGACY_KEY);
             if (legacy !== null) {
