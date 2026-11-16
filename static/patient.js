@@ -89,12 +89,16 @@ function setActiveThread(id, saved = Boolean(id)) {
   }
 }
 
+// Conversations this tab has created; a later save must not create them again after a deletion.
+const createdThreads = new Set();
+
 // Merge into the stored conversation so exchanges saved by other tabs are kept.
 function saveEntry(entry, create = false) {
   withHistoryLock(() => {
     const store = storage();
     if (!store) return;
-    const saved = ThreadStore.saveEntry(store, entry.threadId, entry, { create });
+    const saved = ThreadStore.saveEntry(store, entry.threadId, entry, { create: create && !createdThreads.has(entry.threadId) });
+    if (saved) createdThreads.add(entry.threadId);
     if (saved && entry.threadId === activeThreadId) activeThreadSaved = true;
     if (ui.threadsDialog.open) renderThreadList();
   });
@@ -344,6 +348,10 @@ function formatUpdated(timestamp) {
 
 function renderThreadList() {
   const threads = loadThreads();
+  // Keep keyboard focus on the same control when the list redraws.
+  const focused = ui.threadList.contains(document.activeElement) ? document.activeElement : null;
+  const focusSelector = focused?.dataset.threadId ? `[data-thread-id="${CSS.escape(focused.dataset.threadId)}"]`
+    : focused?.dataset.deleteThread ? `[data-delete-thread="${CSS.escape(focused.dataset.deleteThread)}"]` : null;
   ui.threadList.replaceChildren();
   ui.threadList.hidden = !threads.length;
   ui.threadsEmpty.hidden = Boolean(threads.length);
@@ -374,6 +382,10 @@ function renderThreadList() {
     item.append(open, remove);
     ui.threadList.append(item);
   }
+  if (!focused) return;
+  const target = focusSelector && ui.threadList.querySelector(focusSelector);
+  if (target) target.focus();
+  else focusThreadList();
 }
 
 function focusThreadList() {
