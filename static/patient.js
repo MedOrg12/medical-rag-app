@@ -380,11 +380,17 @@ function focusThreadList() {
   (ui.threadList.querySelector('[aria-current="true"]') || ui.threadList.querySelector(".thread-open") || ui.threadsDialog.querySelector(".dialog-close")).focus();
 }
 
+// The open conversation may have been reopened while a deletion waited for the lock.
+function leaveIfDeleted() {
+  if (activeThreadSaved && !findThread(activeThreadId)) startNewChat();
+}
+
 function deleteThread(id) {
   if (id === activeThreadId) startNewChat();
   withHistoryLock(() => {
     const store = storage();
     if (store) ThreadStore.remove(store, id);
+    leaveIfDeleted();
     if (!ui.threadsDialog.open) return;
     renderThreadList();
     focusThreadList();
@@ -454,6 +460,7 @@ ui.deleteAll.addEventListener("click", () => {
   withHistoryLock(() => {
     const store = storage();
     if (store) ThreadStore.removeAll(store);
+    leaveIfDeleted();
     renderThreadList();
     focusThreadList();
   });

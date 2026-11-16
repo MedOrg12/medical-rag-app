@@ -83,6 +83,15 @@ test("migration keeps every old exchange when both copies do not fit side by sid
   assert.deepEqual(store.read(storage)[0].entries.map((item) => item.id), ["1", "2", "3"]);
 });
 
+test("a failed migration puts the old conversation back", () => {
+  const legacy = JSON.stringify([entry("1", "Old question", 1)]);
+  const storage = memoryStorage({ [store.LEGACY_KEY]: legacy }, 200);
+  const [thread] = store.read(storage);
+  const huge = { answer: "x".repeat(1000) };
+  assert.equal(store.saveEntry(storage, thread.id, entry("1", "Old question", 1, huge)), false);
+  assert.equal(storage.getItem(store.LEGACY_KEY), legacy);
+});
+
 test("damaged storage reads as no conversations and long titles are shortened", () => {
   assert.equal(store.read(memoryStorage({ [store.KEY]: "{not json" })).length, 0);
   assert.equal(store.read(memoryStorage({ [store.KEY]: JSON.stringify([{ id: "bad id!", entries: [entry("1", "q", 1)] }]) })).length, 0);
