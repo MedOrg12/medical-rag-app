@@ -77,8 +77,9 @@
       .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
-  // When storage is full, drop the least recently used other threads, then the oldest
-  // exchanges of the kept thread. Returns false if nothing could be written.
+  // When storage is full, first free the old single-conversation copy (its exchanges are already
+  // in `threads`), then drop the least recently used other threads, then the oldest exchanges of
+  // the kept thread. Returns false if nothing could be written.
   function write(storage, threads, keepId = null) {
     threads = threads.slice().sort((a, b) => b.updatedAt - a.updatedAt);
     while (true) {
@@ -89,6 +90,14 @@
         return true;
       } catch (error) {
         if (error?.name !== "QuotaExceededError") return false;
+        try {
+          if (storage.getItem(LEGACY_KEY) !== null) {
+            storage.removeItem(LEGACY_KEY);
+            continue;
+          }
+        } catch {
+          return false;
+        }
         const dropIndex = threads.findLastIndex((thread) => thread.id !== keepId);
         if (dropIndex !== -1) {
           threads.splice(dropIndex, 1);

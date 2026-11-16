@@ -234,7 +234,8 @@ async function ask(question, existingArticle = null) {
     if (!activeThreadId) setActiveThread(newEntryId(), false);
     entry = { id: newEntryId(), threadId: activeThreadId, createdAt: Date.now(), question, payload: null };
     articleEntries.set(article, entry);
-    saveEntry(entry, true);
+    // Only a new conversation may be created, so a save queued behind a deletion elsewhere does not undo it.
+    saveEntry(entry, !activeThreadSaved);
   }
   if (existingArticle) {
     if (ui.question.value.trim() === question) {

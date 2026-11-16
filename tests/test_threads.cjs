@@ -66,6 +66,23 @@ test("a full storage drops other conversations before the one being saved", () =
   assert.deepEqual(store.read(storage).map((thread) => thread.id), ["new"]);
 });
 
+test("migration keeps every old exchange when both copies do not fit side by side", () => {
+  const legacy = JSON.stringify([entry("1", "a".repeat(300), 1), entry("2", "b".repeat(300), 2)]);
+  const storage = memoryStorage({ [store.LEGACY_KEY]: legacy });
+  const setItem = storage.setItem;
+  // The quota counts every stored value, like a browser's per-origin limit.
+  storage.setItem = (key, value) => {
+    let used = value.length;
+    for (const [other, stored] of storage.items) if (other !== key) used += stored.length;
+    if (used > 1100) throw Object.assign(new Error("full"), { name: "QuotaExceededError" });
+    setItem(key, value);
+  };
+  const [thread] = store.read(storage);
+  assert.equal(store.saveEntry(storage, thread.id, entry("3", "New question", 3)), true);
+  assert.equal(storage.getItem(store.LEGACY_KEY), null);
+  assert.deepEqual(store.read(storage)[0].entries.map((item) => item.id), ["1", "2", "3"]);
+});
+
 test("damaged storage reads as no conversations and long titles are shortened", () => {
   assert.equal(store.read(memoryStorage({ [store.KEY]: "{not json" })).length, 0);
   assert.equal(store.read(memoryStorage({ [store.KEY]: JSON.stringify([{ id: "bad id!", entries: [entry("1", "q", 1)] }]) })).length, 0);
