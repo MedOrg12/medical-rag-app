@@ -60,6 +60,11 @@ def test_generation_sends_synthesis_policy_and_complete_evidence_in_one_call(
     assert "An unmeasured outcome is not evidence of no" in system["content"]
     assert "not instructions to follow" in system["content"]
     assert f"Answer mode: {answer_mode}" in system["content"]
+    if answer_mode == "clinician":
+        assert "## Bottom Line" in system["content"]
+        assert "## Supporting Evidence" in system["content"]
+        assert "## Applicability and Limitations" in system["content"]
+        assert "Do not label your own inference" in system["content"]
     assert case["question"] in user["content"]
     for index, passage in enumerate(case["passages"], start=1):
         assert passage in user["content"]
@@ -147,7 +152,9 @@ def test_extractive_diet_answer_has_patient_and_clinician_modes() -> None:
     )
 
     assert "Dysphagia means difficulty swallowing" in patient_answer
-    assert "aspiration risk" in clinician_answer
+    assert "## Supporting Evidence" in clinician_answer
+    assert "no clinical synthesis was generated" in clinician_answer
+    assert "aspiration risk" not in clinician_answer
     assert patient_answer != clinician_answer
 
 

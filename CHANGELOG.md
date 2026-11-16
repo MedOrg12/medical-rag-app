@@ -12,7 +12,13 @@ This project follows Semantic Versioning for the application release number:
 
 ### Added
 
-- Clerk sign-in for the developer workbench. `/dev` and its API (`/health`, `/sources`, `/ingest`, `/eval/*`) need a signed-in user with `"admin": true` in their Clerk public metadata; the patient view and `/ask` stay public. Configure with `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`.
+- Clerk sign-in for the developer workbench. `/dev` and its API (`/health`, `/sources`, `/library`, `/library/documents`, `/ingest`, `/eval/*`) need a signed-in user with `"admin": true` in their Clerk public metadata; the patient view and `/ask` stay public. Configure with `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`.
+- Library metadata editor and API for document type, population/topic tags, jurisdiction, publication date, version, lifecycle status, replacement links, and contextual source disagreements; optimistic revisions and atomic cross-process writes protect edits.
+- Pre-retrieval curation filters for JSON vector/BM25 and Qdrant search, with superseded/withdrawn sources excluded by default and explicit clinician-only historical access.
+- Curation labels and curator-recorded disagreement comparisons in source evidence, including missing-counterpart warnings.
+- Full indexed passages, bibliography fields, page ranges, original-PDF page links, citation-ID warnings, and an optional reloadable source catalog in both answer views.
+- Safe original-PDF endpoint backed by indexed chunk lookup for JSON and Qdrant, restricted to the configured corpus root.
+- Statement-level source-review worksheets and clinician-section checks in controlled answer evaluations.
 - Browser evaluation dashboard for running the RAG eval suite from the UI.
 - Redesigned frontend workbench with corpus controls, source search, chat history, citation evidence, health indicators, and integrated eval controls.
 - Opt-in OpenAI-compatible API backends for generation and embeddings via `RAG_GENERATION_BACKEND=api` and `RAG_EMBEDDING_BACKEND=api`.
@@ -33,6 +39,8 @@ This project follows Semantic Versioning for the application release number:
 
 ### Changed
 
+- `citations` contains only passages referenced in the answer; uncited results move to `retrieved_evidence`, preserving original numbering. Corpus retrieval evaluation uses both groups.
+- Clinician prompts request Bottom Line, Supporting Evidence, and Applicability and Limitations; excerpt-only clinician fallbacks use the same sections without implying generated clinical synthesis.
 - API and Ollama prompts now explicitly synthesize evidence across sources and handle fully supported, partially supported, and unsupported questions without inventing missing recommendations.
 - No-evidence answers now state the retrieval limitation naturally instead of suggesting index repairs to patients.
 - Query embeddings no longer load or rewrite the disk-backed ingestion cache. Sparse vector scoring, partial top-k selection, precomputed BM25 lengths/IDF, and direct chunk lookups reduce search overhead without changing the index format.

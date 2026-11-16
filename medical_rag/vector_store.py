@@ -62,6 +62,9 @@ class VectorStoreBackend(Protocol):
     def chunk_count(self) -> int:
         ...
 
+    def get_chunk(self, chunk_id: str) -> Chunk | None:
+        ...
+
     def search(
         self,
         query: str,
@@ -197,6 +200,9 @@ class VectorStore:
     def chunk_count(self) -> int:
         return len(self.chunks)
 
+    def get_chunk(self, chunk_id: str) -> Chunk | None:
+        return self._chunks_by_id.get(chunk_id)
+
     @classmethod
     def build(cls, path: Path, chunks: list[Chunk], embedding_model: EmbeddingModel) -> VectorStore:
         vectors = embedding_model.embed([chunk.text for chunk in chunks])
@@ -321,6 +327,9 @@ class VectorStore:
 
         candidate_limit = min(max(top_k * 4, top_k), 50)
 
+        if filters and isinstance(filters.get("source_id"), dict):
+            filters = {**filters, "source_id": {key: set(values) for key, values in filters["source_id"].items()}}
+
         # Vector search
         query_vector = embedding_model.embed_query(query)
         # Hash query vectors are sparse. Skipping zero dimensions preserves their dot products.
@@ -355,7 +364,8 @@ class VectorStore:
 
         # Hybrid: RRF combination
         assert self._bm25 is not None
-        bm25_top = self._bm25.search(query, top_k=candidate_limit)
+        allowed_ids = {chunk.id for chunk in self.chunks if _matches_filters(chunk.metadata, filters)} if filters else None
+        bm25_top = self._bm25.search(query, top_k=candidate_limit, allowed_ids=allowed_ids)
 
         vec_rank: dict[str, int] = {chunk.id: rank for rank, (_, chunk) in enumerate(vec_top, start=1)}
         bm25_rank: dict[str, float] = {cid: rank for rank, (cid, _) in enumerate(bm25_top, start=1)}
@@ -422,6 +432,13 @@ def _dot(left: list[float], right: list[float]) -> float:
 
 def _matches_filters(metadata: dict[str, Any], filters: dict[str, Any]) -> bool:
     for key, expected in filters.items():
+        if key == "source_id" and isinstance(expected, dict):
+            actual = metadata.get(key)
+            if "$in" in expected and actual not in expected["$in"]:
+                return False
+            if "$nin" in expected and actual in expected["$nin"]:
+                return False
+            continue
         if metadata.get(key) != expected:
             return False
     return True
@@ -728,6 +745,18 @@ class QdrantVectorStore:
         result = self.client.count(collection_name=self.settings.qdrant_collection, exact=True)
         return int(getattr(result, "count", result))
 
+    def get_chunk(self, chunk_id: str) -> Chunk | None:
+        records = self.client.retrieve(
+            collection_name=self.settings.qdrant_collection,
+            ids=[_point_id(chunk_id)],
+            with_payload=["chunk_id", "text", "metadata"],
+            with_vectors=False,
+        )
+        if not records:
+            return None
+        chunk = _chunk_from_payload(records[0].payload or {})
+        return chunk if chunk.id == chunk_id else None
+
     def search(
         self,
         query: str,
@@ -908,14 +937,21 @@ def _qdrant_filter(filters: dict[str, Any] | None, embedding_model: str) -> Any:
             match=models.MatchValue(value=embedding_model),
         )
     ]
+    excluded = []
     for key, expected in (filters or {}).items():
+        if key == "source_id" and isinstance(expected, dict):
+            if "$in" in expected:
+                conditions.append(models.FieldCondition(key="metadata.source_id", match=models.MatchAny(any=expected["$in"])))
+            if "$nin" in expected:
+                excluded.append(models.FieldCondition(key="metadata.source_id", match=models.MatchAny(any=expected["$nin"])))
+            continue
         conditions.append(
             models.FieldCondition(
                 key=f"metadata.{key}",
                 match=models.MatchValue(value=expected),
             )
         )
-    return models.Filter(must=conditions)
+    return models.Filter(must=conditions, must_not=excluded or None)
 
 
 def _chunk_from_payload(payload: dict[str, Any]) -> Chunk:

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from medical_rag import __version__
 from medical_rag.auth import Authenticator, Principal
 from medical_rag.config import Settings
+from medical_rag.curation import CatalogConflictError, DocumentMetadata, LibraryFilters
 from medical_rag.embeddings import list_ollama_models, ollama_model_name_matches
 from medical_rag.evaluation import evaluate_rag, load_eval_suite
 from medical_rag.logging_config import configure_logging, describe_exception
@@ -35,6 +36,13 @@ class AskRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=20)
     filters: dict[str, str] | None = None
     answer_mode: Literal["patient", "clinician"] | None = None
+    library_filters: LibraryFilters | None = None
+
+
+class CurateRequest(BaseModel):
+    source_id: str = Field(min_length=1, max_length=500)
+    metadata: DocumentMetadata
+    revision: str = Field(min_length=1, max_length=100)
 
 
 class IngestRequest(BaseModel):
@@ -174,6 +182,20 @@ def create_app(
             return {"signed_in": False, "admin": False}
         return {"signed_in": True, "admin": auth.user_is_admin(principal.user_id)}
 
+    @app.get("/evidence/{chunk_id}/document", response_class=FileResponse)
+    def evidence_document(chunk_id: str) -> FileResponse:
+        try:
+            path = rag.source_document(chunk_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Original PDF is not available.") from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail="Source library is unavailable.") from exc
+        return FileResponse(
+            path, media_type="application/pdf", filename=path.name,
+            content_disposition_type="inline",
+            headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"},
+        )
+
     @app.get("/status")
     def patient_status() -> dict[str, bool]:
         return {"ready": rag.index_exists()}
@@ -299,6 +321,7 @@ def create_app(
                 top_k=request.top_k,
                 filters=request.filters,
                 answer_mode=request.answer_mode,
+                library_filters=request.library_filters,
             ).to_dict()
         except FileNotFoundError as exc:
             logger.warning("Ask request rejected: index not available: %s", describe_exception(exc))
@@ -329,6 +352,30 @@ def create_app(
             raise HTTPException(
                 status_code=503, detail=f"Could not read sources from the vector store: {exc}"
             ) from exc
+
+    @app.get("/library", dependencies=admin_only)
+    def library() -> dict:
+        try:
+            return rag.library()
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=409, detail="Index the library before curating documents.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail="Source library is unavailable.") from exc
+
+    @app.post("/library/documents", dependencies=admin_only)
+    def curate_document(request: CurateRequest) -> dict:
+        try:
+            return rag.curate_source(request.source_id, request.metadata, request.revision)
+        except CatalogConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (KeyError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail="Indexed source not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(status_code=503, detail="Could not save the source metadata.") from exc
 
     @app.get("/eval/questions", dependencies=admin_only)
     def eval_questions() -> dict[str, Any]:

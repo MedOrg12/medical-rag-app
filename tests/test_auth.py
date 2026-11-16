@@ -20,6 +20,8 @@ PUBLISHABLE_KEY = "pk_test_" + base64.b64encode(f"{FRONTEND_API}$".encode()).dec
 ADMIN_ENDPOINTS = [
     ("get", "/health", None),
     ("get", "/sources", None),
+    ("get", "/library", None),
+    ("post", "/library/documents", {"source_id": "pilot.txt", "metadata": {}, "revision": "test"}),
     ("post", "/ingest", {}),
     ("get", "/ingest/status", None),
     ("get", "/eval/questions", None),

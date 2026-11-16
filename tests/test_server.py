@@ -46,6 +46,80 @@ def test_patient_and_developer_views_are_separate(tmp_path) -> None:
     assert client.get("/static/dev.js").status_code == 200
     assert client.get("/static/dev.css").status_code == 200
     assert client.get("/static/icons.svg").status_code == 200
+    assert client.get("/static/evidence.js").status_code == 200
+    assert client.get("/static/evidence.css").status_code == 200
+
+
+def test_original_pdf_opens_inline_from_cited_chunk_and_disappears_when_deleted(tmp_path):
+    import fitz
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    pdf = corpus / "education.pdf"
+    with fitz.open() as document:
+        page = document.new_page()
+        page.insert_text((72, 72), "Stroke recovery education uses plain language and written reminders.")
+        document.save(pdf)
+    settings = Settings(root_dir=tmp_path, corpus_dir=corpus, index_path=tmp_path / "index.json", embedding_backend="hash", auth_disabled=True)
+    client = TestClient(create_app(settings))
+    assert client.post("/ingest", json={}).status_code == 200
+    answer = client.post("/ask", json={"question": "What supports stroke recovery education?"}).json()
+    citation = answer["citations"][0]
+    assert citation["page"] == 1
+    assert citation["text"]
+    assert "source_path" not in citation
+    response = client.get(citation["document_url"])
+    assert response.status_code == 200
+    assert response.content == pdf.read_bytes()
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("inline;")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    pdf.unlink()
+    assert client.get(citation["document_url"]).status_code == 404
+    assert client.get("/evidence/nonexistent/document").status_code == 404
+
+
+def test_pdf_route_never_serves_an_indexed_path_outside_corpus(tmp_path):
+    from medical_rag.embeddings import HashingEmbeddingModel
+    from medical_rag.types import Chunk
+    from medical_rag.vector_store import VectorStore
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    outside = tmp_path / "private.pdf"
+    outside.write_bytes(b"%PDF-1.7\nprivate")
+    settings = Settings(root_dir=tmp_path, corpus_dir=corpus, index_path=tmp_path / "index.json", embedding_backend="hash")
+    VectorStore.build(settings.index_path, [Chunk("unsafe", "Stroke.", {"source_path": str(outside)})], HashingEmbeddingModel()).save()
+    client = TestClient(create_app(settings))
+    response = client.get("/evidence/unsafe/document")
+    assert response.status_code == 404
+    assert "private" not in response.text
+
+
+def test_library_api_curates_filters_and_rejects_stale_editor_revisions(tmp_path):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    (corpus / "pilot.txt").write_text("Education pilot used written reminders for caregivers.")
+    settings = Settings(root_dir=tmp_path, corpus_dir=corpus, index_path=tmp_path / "index.json", embedding_backend="hash", source_catalog_path=tmp_path / "catalog.json", auth_disabled=True)
+    client = TestClient(create_app(settings))
+    assert client.post("/ingest", json={}).status_code == 200
+    library = client.get("/library").json()
+    assert library["documents"][0]["metadata"]["status"] == "unreviewed"
+    payload = {"source_id": "pilot.txt", "revision": library["revision"], "metadata": {"document_type": "guideline", "status": "current", "populations": ["Adults"], "topics": ["Education"], "jurisdiction": "Canada", "publication_date": "2025-02-01", "document_version": "2"}}
+    assert client.post("/library/documents", json=payload).status_code == 200
+    assert client.post("/library/documents", json=payload).status_code == 409
+    updated = client.get("/library").json()
+    assert updated["facets"]["populations"] == ["adults"]
+    response = client.post("/ask", json={"question": "What did the education pilot use?", "library_filters": {"document_types": ["guideline"], "populations": ["adults"]}})
+    assert response.status_code == 200
+    assert response.json()["citations"][0]["document_version"] == "2"
+    empty = client.post("/ask", json={"question": "Education pilot", "library_filters": {"populations": ["children"]}}).json()
+    assert empty["citations"] == []
+    assert client.post("/ask", json={"question": "Education", "library_filters": {"include_inactive": True}}).status_code == 400
+    invalid = {**payload, "revision": updated["revision"], "metadata": {"status": "withdrawn"}}
+    assert client.post("/library/documents", json=invalid).status_code == 422
+    unknown = {**payload, "revision": updated["revision"], "source_id": "not-indexed.pdf"}
+    assert client.post("/library/documents", json=unknown).status_code == 404
 
 
 def test_patient_status_checks_index_without_provider_call(tmp_path, monkeypatch) -> None:

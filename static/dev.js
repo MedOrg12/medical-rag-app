@@ -6,6 +6,7 @@ const state = {
   sourceLoading: false, questions: null, selected: new Set(), questionLoading: false,
   query: null, queryRequest: null, queryTimer: null, eval: null, evalBusy: false,
   ingestBusy: false, ingestTimer: null, ingestChecking: false,
+  libraryRevision: null, editorSource: null, editorRevision: null, curationSaving: false,
 };
 const pageSize = 50;
 const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
@@ -114,6 +115,8 @@ function queryControls() {
   $("#top-k").disabled = busy;
   $("#example-question").disabled = busy;
   document.querySelectorAll("[data-mode]").forEach((button) => { button.disabled = busy; });
+  document.querySelectorAll(".library-filters input, .library-filters select").forEach((control) => {control.disabled = busy;});
+  $("#scope-inactive").disabled = busy || state.answerMode !== "clinician";
 }
 
 function clearQuery() {
@@ -123,6 +126,8 @@ function clearQuery() {
   state.query = null;
   $("#question").value = "";
   $("#example-question").value = "";
+  document.querySelectorAll(".library-filters select").forEach((control) => {control.value = "";});
+  $("#scope-reviewed").checked = $("#scope-inactive").checked = false;
   $("#query-result").hidden = true;
   $("#query-empty").hidden = false;
   $("#query-status").textContent = "No query run yet";
@@ -135,6 +140,14 @@ async function runQuery(event) {
   event.preventDefault();
   if (state.queryRequest || !$("#ask-form").reportValidity()) return;
   const inputs = { question: $("#question").value.trim(), answer_mode: state.answerMode, top_k: Number($("#top-k").value) };
+  inputs.library_filters = {
+    document_types: $("#scope-type").value ? [$("#scope-type").value] : [],
+    populations: $("#scope-population").value ? [$("#scope-population").value] : [],
+    topics: $("#scope-topic").value ? [$("#scope-topic").value] : [],
+    jurisdiction: $("#scope-jurisdiction").value || null,
+    reviewed_only: $("#scope-reviewed").checked,
+    include_inactive: state.answerMode === "clinician" && $("#scope-inactive").checked,
+  };
   if (!inputs.question) return;
   const controller = new AbortController();
   state.queryRequest = controller;
@@ -168,7 +181,7 @@ async function runQuery(event) {
 }
 
 function evidenceHtml(citations, prefix) {
-  return citations.map((c) => `<article class="evidence-item" id="${prefix}-${Number(c.id)}" tabindex="-1"><h3>[${esc(c.id)}] ${esc(c.source || "Unknown source")}</h3><div class="evidence-metrics"><span>${c.page != null ? `Page ${esc(c.page)}` : "Page unknown"}</span><span>Score ${esc(c.score ?? "-")}</span></div><p>${esc(c.excerpt)}</p></article>`).join("") || '<p class="muted">No evidence returned.</p>';
+  return EvidenceUI.sources(citations, prefix, true) || '<p class="muted">No sources cited in this answer.</p>';
 }
 
 function renderQuery() {
@@ -181,9 +194,22 @@ function renderQuery() {
     const stages = [["Index load", "index_load_seconds"], ["Retrieval", "retrieval_seconds"], ["Reranking", "reranking_seconds"], ["Generation", "generation_seconds"]];
     $("#query-metadata").innerHTML += `<span class="run-question muted">${stages.map(([label, key]) => `${label} ${seconds(payload.timings[key])}`).join(" · ")}</span>`;
   }
-  $("#answer").innerHTML = esc(answer).replace(/\[(\d+)\]/g, (match, id) => citations.some((c) => String(c.id) === id) ? `<button type="button" class="citation" data-evidence="query-evidence-${id}" title="Inspect source ${id}">[${id}]</button>` : match);
-  $("#evidence-count").textContent = `${citations.length} passages`;
+  $("#answer").innerHTML = EvidenceUI.answer(answer, citations, "query-evidence");
+  $("#query-conflicts").innerHTML = EvidenceUI.conflicts(payload.evidence_conflicts || [], "query-evidence");
+  if (payload.library_scope) {
+    const scope = payload.library_scope;
+    const labels = [...(scope.document_types || []).map((type) => type.replaceAll("_", " ")), ...(scope.populations || []), ...(scope.topics || []), scope.jurisdiction].filter(Boolean);
+    $("#query-metadata").innerHTML += `<span class="run-question">${scope.include_inactive ? "Historical sources included" : "Superseded and withdrawn sources excluded"}${scope.reviewed_only ? " · Reviewed metadata only" : ""}${labels.length ? ` · ${labels.map(esc).join(" · ")}` : ""}</span>`;
+  }
+  $("#evidence-count").textContent = `${citations.length} cited`;
+  $("#evidence-warnings").innerHTML = EvidenceUI.warnings(payload.citation_validation)
+    + '<p class="evidence-review-note">Claim support requires review against the original sources.</p>';
   $("#evidence-list").innerHTML = evidenceHtml(citations, "query-evidence");
+  const otherEvidence = payload.retrieved_evidence || [];
+  $("#other-evidence").hidden = !otherEvidence.length;
+  $("#other-evidence").open = false;
+  $("#other-evidence-count").textContent = `(${otherEvidence.length})`;
+  $("#other-evidence-list").innerHTML = evidenceHtml(otherEvidence, "query-evidence");
   $("#query-json").textContent = JSON.stringify(state.query, null, 2);
   $("#query-result").hidden = false;
 }
@@ -193,12 +219,16 @@ async function loadSources() {
   state.sourceLoading = true;
   notice("#source-error", "");
   try {
-    state.sources = await request("/sources");
+    const library = await request("/library");
+    state.sources = library.documents;
+    state.libraryRevision = library.revision;
+    fillScopeOptions(library.facets);
     $("#source-count").textContent = number(state.sources.length);
     $("#chunk-count").textContent = number(state.sources.reduce((sum, source) => sum + Number(source.chunks || 0), 0));
     $("#page-count").textContent = state.sources.every((source) => Array.isArray(source.pages))
       ? number(state.sources.reduce((sum, source) => sum + source.pages.length, 0))
       : "-";
+    $("#curation-summary").textContent = `${number(state.sources.filter((source) => source.metadata.status === "unreviewed").length)} unreviewed`;
   } catch (error) {
     state.sources = [];
     ["#source-count", "#chunk-count", "#page-count"].forEach((selector) => { $(selector).textContent = "-"; });
@@ -211,14 +241,106 @@ async function loadSources() {
 
 function renderSources() {
   const query = $("#source-search").value.trim().toLowerCase();
-  const filtered = (state.sources || []).filter((source) => `${source.source_id} ${source.title}`.toLowerCase().includes(query));
+  const filtered = (state.sources || []).filter((source) => {
+    const m = source.metadata || {};
+    return `${source.source_id} ${source.title} ${(m.populations || []).join(" ")} ${(m.topics || []).join(" ")} ${m.jurisdiction || ""}`.toLowerCase().includes(query)
+      && (!$("#source-type-filter").value || m.document_type === $("#source-type-filter").value)
+      && (!$("#source-status-filter").value || m.status === $("#source-status-filter").value);
+  });
   state.sourcePage = Math.min(state.sourcePage, Math.max(0, Math.ceil(filtered.length / pageSize) - 1));
   const start = state.sourcePage * pageSize;
   const slice = filtered.slice(start, start + pageSize);
-  $("#sources").innerHTML = slice.map((source) => `<tr><td><strong>${esc(source.title || source.source_id)}</strong><span class="source-path">${esc(source.source_id)}</span></td><td>${Array.isArray(source.pages) ? number(source.pages.length) : "-"}</td><td>${number(source.chunks)}</td></tr>`).join("") || `<tr><td colspan="3" class="table-empty">${query ? "No matching documents" : "No indexed documents"}</td></tr>`;
+  $("#sources").innerHTML = slice.map((source) => {
+    const m = source.metadata || {};
+    const tone = m.status === "current" ? "ok" : m.status === "withdrawn" ? "error" : "warning";
+    return `<tr><td><strong>${esc(source.title || source.source_id)}</strong><span class="source-path">${esc(source.source_id)}</span>${m.publication_date || m.publication_year ? `<span class="source-path">${esc(m.publication_date || m.publication_year)}${m.document_version ? ` · ${esc(m.document_version)}` : ""}</span>` : ""}</td><td>${esc((m.document_type || "unclassified").replaceAll("_", " "))}<span class="source-path">${esc((m.populations || []).join(", ") || "Population not recorded")}</span></td><td><span class="badge ${tone}">${esc(m.status || "unreviewed")}</span></td><td>${Array.isArray(source.pages) ? number(source.pages.length) : "-"} / ${number(source.chunks)}</td><td><button class="icon-button" type="button" data-curate="${esc(source.source_id)}" title="Edit document metadata" aria-label="Edit metadata for ${esc(source.source_id)}">${icon("settings-2")}</button></td></tr>`;
+  }).join("") || '<tr><td colspan="5" class="table-empty">No matching documents</td></tr>';
   $("#source-range").textContent = filtered.length ? `${number(start + 1)}-${number(Math.min(start + pageSize, filtered.length))} of ${number(filtered.length)} documents` : "0 documents";
   $("#source-prev").disabled = state.sourcePage === 0;
   $("#source-next").disabled = start + pageSize >= filtered.length;
+}
+
+function fillScopeOptions(facets = {}) {
+  for (const [selector, values, label] of [["#scope-population", facets.populations || [], "All populations"], ["#scope-topic", facets.topics || [], "All topics"], ["#scope-jurisdiction", facets.jurisdictions || [], "All jurisdictions"]]) {
+    const select = $(selector);
+    const previous = select.value;
+    const options = [...new Set([...values, ...(previous ? [previous] : [])])].sort();
+    select.innerHTML = `<option value="">${label}</option>` + options.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join("");
+    select.value = previous;
+  }
+  $("#jurisdiction-options").innerHTML = (facets.jurisdictions || []).map((value) => `<option value="${esc(value)}"></option>`).join("");
+}
+
+function counterpartOptions(selected = "") {
+  return '<option value="">Choose an indexed document</option>' + (state.sources || []).filter((source) => source.source_id !== state.editorSource).map((source) => `<option value="${esc(source.source_id)}"${source.source_id === selected ? " selected" : ""}>${esc(source.title || source.source_id)} (${esc(source.source_id)})</option>`).join("");
+}
+
+function addConflict(note = {}) {
+  const row = document.createElement("fieldset");
+  row.className = "conflict-editor";
+  row.innerHTML = `<legend class="sr-only">Curator-recorded disagreement</legend><div class="section-heading compact"><span class="muted">Curator-recorded disagreement</span><button class="icon-button remove-conflict" type="button" title="Remove disagreement" aria-label="Remove disagreement">${icon("x")}</button></div><div class="form-grid">
+    <label>Other document<select data-conflict="with_source" required>${counterpartOptions(note.with_source)}</select></label>
+    <label>Topic<input data-conflict="topic" maxlength="200" value="${esc(note.topic || "")}" required /></label>
+    <label>This document's position<textarea data-conflict="source_position" rows="2" maxlength="2000" required>${esc(note.source_position || "")}</textarea></label>
+    <label>Other document's position<textarea data-conflict="other_position" rows="2" maxlength="2000" required>${esc(note.other_position || "")}</textarea></label>
+    <label>This document's PDF page<input data-conflict="source_page" type="number" min="1" value="${esc(note.source_page || "")}" /></label>
+    <label>Other document's PDF page<input data-conflict="other_page" type="number" min="1" value="${esc(note.other_page || "")}" /></label>
+    <label class="span-all">Population, setting, or evidence context<textarea data-conflict="context" rows="2" maxlength="2000" required>${esc(note.context || "")}</textarea></label>
+    </div>`;
+  $("#curation-conflicts").append(row);
+}
+
+function openCuration(sourceId) {
+  const source = (state.sources || []).find((item) => item.source_id === sourceId);
+  if (!source) return;
+  state.editorSource = sourceId;
+  state.editorRevision = state.libraryRevision;
+  const m = source.metadata || {};
+  $("#curation-source").textContent = sourceId;
+  const fields = { title: "title", publisher: "publisher", type: "document_type", date: "publication_date", year: "publication_year", version: "document_version", jurisdiction: "jurisdiction", status: "status", reviewer: "reviewed_by", notes: "review_notes" };
+  for (const [id, key] of Object.entries(fields)) $("#curate-" + id).value = m[key] ?? (id === "title" ? source.title || "" : id === "status" ? "unreviewed" : id === "type" ? "unclassified" : "");
+  $("#curate-populations").value = (m.populations || []).join(", ");
+  $("#curate-topics").value = (m.topics || []).join(", ");
+  $("#curate-replacement").innerHTML = '<option value="">Replacement not recorded</option>' + counterpartOptions(m.superseded_by).replace('<option value="">Choose an indexed document</option>', "");
+  $("#curate-replacement").value = m.superseded_by || "";
+  $("#curation-conflicts").replaceChildren();
+  (m.conflicts || []).forEach(addConflict);
+  notice("#curation-error", "");
+  $("#reload-curation").hidden = true;
+  updateCurationStatus();
+  if (!$("#curation-dialog").open) $("#curation-dialog").showModal();
+}
+
+function updateCurationStatus() {
+  const status = $("#curate-status").value;
+  $("#replacement-field").hidden = status !== "superseded";
+  $("#curate-notes").required = ["superseded", "withdrawn"].includes(status);
+}
+
+async function saveCuration(event) {
+  event.preventDefault();
+  if (state.curationSaving || !$("#curation-form").reportValidity()) return;
+  state.curationSaving = true;
+  $("#save-curation").disabled = true;
+  $("#save-curation").textContent = "Saving...";
+  notice("#curation-error", "");
+  const text = (id) => $("#curate-" + id).value.trim() || null;
+  const tags = (id) => (text(id) || "").split(",").map((value) => value.trim()).filter(Boolean);
+  const conflicts = [...document.querySelectorAll(".conflict-editor")].map((row) => Object.fromEntries([...row.querySelectorAll("[data-conflict]")].map((field) => [field.dataset.conflict, field.type === "number" ? (field.value ? Number(field.value) : null) : field.value.trim()])));
+  const metadata = {title: text("title"), publisher: text("publisher"), document_type: text("type"), publication_date: text("date"), publication_year: text("year") ? Number(text("year")) : null, document_version: text("version"), jurisdiction: text("jurisdiction"), populations: tags("populations"), topics: tags("topics"), status: text("status"), reviewed_by: text("reviewer"), review_notes: text("notes"), superseded_by: text("status") === "superseded" ? text("replacement") : null, conflicts};
+  try {
+    await request("/library/documents", {source_id: state.editorSource, revision: state.editorRevision, metadata});
+    $("#curation-dialog").close();
+    await loadSources();
+    announce("Document metadata saved");
+  } catch (error) {
+    notice("#curation-error", error.message, "error");
+    $("#reload-curation").hidden = error.status !== 409;
+  } finally {
+    state.curationSaving = false;
+    $("#save-curation").disabled = false;
+    $("#save-curation").textContent = "Save metadata";
+  }
 }
 
 function ingestControls() {
@@ -382,16 +504,30 @@ $("#stop-query").addEventListener("click", () => state.queryRequest?.abort());
 $("#clear-query").addEventListener("click", clearQuery);
 document.querySelectorAll("[data-mode]").forEach((button) => button.addEventListener("click", () => {
   state.answerMode = button.dataset.mode;
+  if (state.answerMode !== "clinician") $("#scope-inactive").checked = false;
+  queryControls();
   document.querySelectorAll("[data-mode]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
 }));
 $("#example-question").addEventListener("change", () => { if ($("#example-question").value) { $("#question").value = $("#example-question").value; $("#question").focus(); queryControls(); } });
-$("#answer").addEventListener("click", (event) => { const button = event.target.closest("[data-evidence]"); if (button) document.getElementById(button.dataset.evidence)?.focus(); });
+$("#answer").addEventListener("click", (event) => { const button = event.target.closest("[data-source]"); if (button) { const source = document.getElementById(button.dataset.source); source?.focus(); source?.scrollIntoView({ behavior: "smooth", block: "nearest" }); } });
+$("#query-conflicts").addEventListener("click", (event) => { const button = event.target.closest("[data-source]"); if (button) { const source = document.getElementById(button.dataset.source); if (source?.closest("details")) source.closest("details").open = true; source?.focus(); source?.scrollIntoView({ behavior: "smooth", block: "nearest" }); } });
 $("#copy-answer").addEventListener("click", async () => { try { await navigator.clipboard.writeText(state.query.response.answer); announce("Answer copied"); } catch { announce("Could not copy answer"); } });
 $("#download-query").addEventListener("click", () => download(state.query, "rag-query.json"));
 $("#open-ingest").addEventListener("click", () => showIngestPanel($("#ingest-panel").hidden));
 $("#close-ingest").addEventListener("click", () => showIngestPanel(false));
 $("#ingest-form").addEventListener("submit", startIngestion);
 $("#source-search").addEventListener("input", () => { state.sourcePage = 0; renderSources(); });
+document.querySelector(".library-filters").addEventListener("toggle", (event) => {if (event.target.open && state.sources === null) loadSources();});
+["#source-type-filter", "#source-status-filter"].forEach((selector) => $(selector).addEventListener("change", () => {state.sourcePage = 0; renderSources();}));
+$("#sources").addEventListener("click", (event) => { const button = event.target.closest("[data-curate]"); if (button) openCuration(button.dataset.curate); });
+$("#curation-form").addEventListener("submit", saveCuration);
+$("#curate-status").addEventListener("change", updateCurationStatus);
+$("#curate-date").addEventListener("change", () => { if ($("#curate-date").value) $("#curate-year").value = $("#curate-date").value.slice(0, 4); });
+$("#add-conflict").addEventListener("click", () => addConflict());
+$("#curation-conflicts").addEventListener("click", (event) => { const button = event.target.closest(".remove-conflict"); if (button) button.closest("fieldset").remove(); });
+["#close-curation", "#cancel-curation"].forEach((selector) => $(selector).addEventListener("click", () => { if (!state.curationSaving) $("#curation-dialog").close(); }));
+$("#curation-dialog").addEventListener("cancel", (event) => { if (state.curationSaving) event.preventDefault(); });
+$("#reload-curation").addEventListener("click", async () => { await loadSources(); openCuration(state.editorSource); });
 $("#source-prev").addEventListener("click", () => { state.sourcePage--; renderSources(); });
 $("#source-next").addEventListener("click", () => { state.sourcePage++; renderSources(); });
 $("#eval-question-list").addEventListener("change", (event) => { const id = event.target.dataset.questionId; if (id) { if (event.target.checked) state.selected.add(id); else state.selected.delete(id); evaluationControls(); } });

@@ -128,6 +128,7 @@ class Settings:
     clerk_jwt_key: str | None = None
     clerk_authorized_parties: tuple[str, ...] = ()
     auth_disabled: bool = False
+    source_catalog_path: Path | None = None
 
     @classmethod
     def from_env(cls, root_dir: Path | None = None) -> "Settings":
@@ -224,6 +225,7 @@ class Settings:
             ),
             auth_disabled=os.getenv("RAG_AUTH_DISABLED", "false").lower()
             in {"1", "true", "yes", "on"},
+            source_catalog_path=_resolve_path(root, os.getenv("RAG_SOURCE_CATALOG_PATH", "source_catalog.json")),
         )
 
     def with_paths(

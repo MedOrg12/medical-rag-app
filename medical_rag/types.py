@@ -37,6 +37,22 @@ class Citation:
     chunk_id: str
     score: float
     excerpt: str
+    title: str | None = None
+    publisher: str | None = None
+    publication_year: int | None = None
+    section: str | None = None
+    page_end: int | None = None
+    text: str = ""
+    document_url: str | None = None
+    document_type: str = "unclassified"
+    status: str = "unreviewed"
+    populations: list[str] = field(default_factory=list)
+    topics: list[str] = field(default_factory=list)
+    jurisdiction: str | None = None
+    publication_date: str | None = None
+    document_version: str | None = None
+    superseded_by: str | None = None
+    review_notes: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -83,6 +99,10 @@ class RagAnswer:
     retrieval_mode: str = "vector"
     fallback_embedding: bool = False
     timings: dict[str, float] = field(default_factory=dict)
+    retrieved_evidence: list[Citation] = field(default_factory=list)
+    citation_validation: dict[str, Any] = field(default_factory=dict)
+    library_scope: dict[str, Any] = field(default_factory=dict)
+    evidence_conflicts: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

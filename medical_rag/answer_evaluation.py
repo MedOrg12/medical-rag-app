@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from medical_rag.config import Settings
+from medical_rag.evidence import citation_ids
 from medical_rag.llm import Generator, make_generator
 from medical_rag.logging_config import describe_exception
 from medical_rag.types import Chunk, SearchResult
@@ -38,11 +39,11 @@ def case_passages(case: dict[str, Any]) -> list[SearchResult]:
     ]
 
 
-def check_answer(case: dict[str, Any], answer: str) -> list[str]:
+def check_answer(case: dict[str, Any], answer: str, answer_mode: str = "patient") -> list[str]:
     """Mechanical regression checks only; semantic support and coherence need review."""
     issues = []
     normalized = " ".join(answer.casefold().replace("\u2019", "'").split())
-    citations = {int(value) for value in re.findall(r"\[(\d+)\]", answer)}
+    citations = citation_ids(answer)
     valid_ids = set(range(1, len(case["passages"]) + 1))
     if not answer.strip():
         issues.append("Empty answer")
@@ -60,7 +61,31 @@ def check_answer(case: dict[str, Any], answer: str) -> list[str]:
         issues.append("Missing evidence limitation")
     if any(re.search(pattern, answer, re.IGNORECASE) for pattern in case.get("forbidden_patterns", [])):
         issues.append("Answer contains a prohibited unsupported detail")
+    if answer_mode == "clinician":
+        headings = ["## Bottom Line", "## Supporting Evidence", "## Applicability and Limitations"]
+        positions = [answer.find(heading) for heading in headings]
+        if any(position < 0 for position in positions) or positions != sorted(positions):
+            issues.append("Missing or out-of-order clinician answer sections")
     return issues
+
+
+def claim_review(answer: str, passages: list[str]) -> list[dict[str, Any]]:
+    """Prepare a human-review worksheet; citation presence is not semantic entailment."""
+    rows = []
+    for line in answer.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        for statement in re.split(r"(?<=[.!?])\s+(?!\[)", line):
+            ids = sorted(citation_ids(statement))
+            rows.append({
+                "statement": statement,
+                "citation_ids": ids,
+                "passages": [{"id": i, "text": passages[i - 1]} for i in ids if 1 <= i <= len(passages)],
+                "verdict": "not_reviewed",
+                "review_options": ["supported", "partially_supported", "unsupported", "contradicted", "not_a_sourced_claim"],
+            })
+    return rows
 
 
 def evaluate_answers(
@@ -72,7 +97,7 @@ def evaluate_answers(
     for case in cases:
         try:
             answer = generator.generate(case["question"], case_passages(case), answer_mode=answer_mode)
-            issues = check_answer(case, answer)
+            issues = check_answer(case, answer, answer_mode)
             error = None
         except (RuntimeError, ValueError) as exc:
             logger.warning(
@@ -91,6 +116,7 @@ def evaluate_answers(
             "issues": issues,
             "error": error,
             "review_criteria": case["review_criteria"],
+            "claim_review": claim_review(answer, case["passages"]),
         })
     return {
         "model": generator.model_name,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from medical_rag.evaluation import EvalQuestion, evaluate_rag
 from medical_rag.types import Citation, RagAnswer
 
@@ -138,3 +140,29 @@ def test_evaluate_rag_records_question_errors() -> None:
     assert result.summary.error_questions == 1
     assert result.results[0].status == "error"
     assert result.results[0].error == "index missing"
+
+
+def test_retrieval_hit_does_not_make_an_uncited_answer_pass():
+    class UncitedRag(FakeRag):
+        def ask(self, question, **kwargs):
+            response = super().ask(question, **kwargs)
+            return replace(response, citations=[], retrieved_evidence=response.citations)
+
+    question = EvalQuestion("dysphagia", "What is dysphagia?", ["dysphagia"], ["swallowing", "texture"])
+    result = evaluate_rag(UncitedRag(), questions=[question]).results[0]
+    assert result.retrieval_hit is True
+    assert result.citation_term_coverage == 0
+    assert result.status == "fail"
+    assert result.refused is False
+    assert result.retrieved_evidence and not result.citations
+
+
+def test_uncited_out_of_scope_answer_is_not_automatically_a_refusal():
+    class UngroundedRag(FakeRag):
+        def ask(self, question, **kwargs):
+            return replace(super().ask(question, **kwargs), answer="Paris is the capital of France.")
+
+    question = EvalQuestion("negative", "What is the capital of France?", [], [], should_refuse=True)
+    result = evaluate_rag(UngroundedRag(), questions=[question]).results[0]
+    assert result.status == "fail"
+    assert result.refused is False

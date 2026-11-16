@@ -47,7 +47,7 @@ class BM25Index:
         idx._avgdl = total_tokens / idx._n if idx._n else 0.0
         return idx
 
-    def search(self, query: str, top_k: int) -> list[tuple[str, float]]:
+    def search(self, query: str, top_k: int, allowed_ids: set[str] | None = None) -> list[tuple[str, float]]:
         if self._n == 0:
             return []
         terms = [
@@ -60,6 +60,8 @@ class BM25Index:
 
         def scored_documents():
             for chunk_id, tf, dl in zip(self._chunk_ids, self._tf, self._lengths, strict=False):
+                if allowed_ids is not None and chunk_id not in allowed_ids:
+                    continue
                 score = 0.0
                 normalization = self.k1 * (1 - self.b + self.b * dl / max(self._avgdl, 1))
                 for term, idf in terms:

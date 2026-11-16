@@ -1,0 +1,36 @@
+.source-groups { flex: 1; min-width: 0; }
+.evidence-item { min-width: 0; padding: 16px 0; border-bottom: 1px solid var(--line); scroll-margin-top: 24px; }
+.evidence-item:focus { outline: 2px solid var(--accent); outline-offset: 4px; }
+.evidence-item h3 { margin: 0 0 6px; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.evidence-item .source-page, .source-filename, .source-section { margin: 4px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.source-document { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; color: var(--accent); font-size: 13px; text-decoration: underline; overflow-wrap: anywhere; }
+.source-document svg { width: 15px; height: 15px; }
+.source-unavailable, .evidence-review-note { color: var(--muted); font-size: 12px; margin: 8px 0; }
+.full-passage { margin-top: 10px; font-size: 13px; }
+.full-passage summary, .other-evidence > summary { cursor: pointer; min-height: 36px; padding: 8px 0; color: var(--accent); }
+.full-passage blockquote { margin: 8px 0 14px; padding: 4px 14px; border-left: 2px solid var(--line); font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.evidence-warning { border-left: 3px solid #b98437; padding: 8px 12px; margin: 12px 0; font-size: 13px; line-height: 1.6; color: var(--ink); background: #fff9ef; overflow-wrap: anywhere; }
+.citation-invalid { color: #8b3934; text-decoration: underline dotted; }
+.other-evidence { border-top: 1px solid var(--line); margin-top: 20px; font-size: 13px; }
+.answer { white-space: normal; }
+.answer h2 { margin: 22px 0 10px; font-size: 16px; line-height: 1.5; }
+.answer h2:first-child { margin-top: 0; }
+.answer p + p { margin-top: 14px; }
+.answer ul, .answer ol { padding-left: 22px; }
+.answer .citation-link { color: var(--accent); }
+.answer-tools { align-items: flex-start; }
+.source-curation { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.evidence-tag { padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; color: var(--muted); }
+.status-current { color: #246647; border-color: #d0e6d8; background: #edf6f0; }
+.status-unreviewed, .status-superseded { color: #775315; border-color: #eedcb6; background: #fff8e9; }
+.status-withdrawn { color: #ac332f; border-color: #edceca; background: #fdefee; }
+.source-conflicts { margin: 20px 0; padding: 16px 0; border-block: 1px solid var(--line); overflow-wrap: anywhere; }
+.source-conflicts h2 { font-size: 16px; margin: 0 0 16px; }
+.source-conflicts .citation-link { min-height: 28px; padding: 2px 5px; font-size: 12px; color: var(--accent); background: #edf5f1; }
+.source-conflict + .source-conflict { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 16px; }
+.source-conflict h3 { font-size: 14px; margin: 0 0 8px; }
+.conflict-positions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: 12px; }
+.conflict-positions h4 { margin: 0 0 6px; font-size: 13px; }
+.conflict-positions p, .conflict-context { font-size: 13px; line-height: 1.7; }
+.conflict-context { margin-top: 14px; }
+@media (max-width: 600px) { .conflict-positions { grid-template-columns: minmax(0, 1fr); gap: 16px; } }

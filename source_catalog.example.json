@@ -1,0 +1,15 @@
+{
+  "example_guideline.pdf": {
+    "title": "Example Guideline (replace with the verified document title)",
+    "publisher": "Example Publisher (replace with the verified publisher)",
+    "publication_year": 2025,
+    "document_type": "guideline",
+    "populations": ["adults"],
+    "topics": ["rehabilitation"],
+    "jurisdiction": "Example jurisdiction (replace with verified jurisdiction)",
+    "document_version": "Example version (replace with verified version)",
+    "status": "unreviewed",
+    "review_notes": "Illustrative metadata only. Replace source IDs and facts before use.",
+    "conflicts": []
+  }
+}

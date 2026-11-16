@@ -136,7 +136,36 @@ def test_pipeline_accepts_clinician_answer_mode(tmp_path) -> None:
     response = rag.ask("What should I eat after a stroke?", top_k=3, answer_mode="clinician")
 
     assert response.answer_mode == "clinician"
-    assert "aspiration risk" in response.answer
+    assert "## Supporting Evidence" in response.answer
+    assert "nasogastric" in response.answer
+    assert "no clinical synthesis was generated" in response.answer
+
+
+def test_pipeline_preserves_ids_and_separates_uncited_results(tmp_path):
+    from types import SimpleNamespace
+
+    from medical_rag.llm import Generator
+    from medical_rag.types import Chunk, SearchResult
+
+    class FixedGenerator(Generator):
+        model_name = "test"
+
+        def generate(self, question, results, answer_mode="patient"):
+            return "The second source discusses stroke recovery [2]."
+
+    results = [SearchResult(Chunk(str(i), "Stroke recovery evidence.", {"source_id": f"{i}.txt"}), 0.8, i) for i in (1, 2)]
+    settings = Settings(root_dir=tmp_path, corpus_dir=tmp_path, index_path=tmp_path / "index", embedding_backend="hash", reranker_backend="none")
+    rag = StrokeRAG(settings, generator=FixedGenerator())
+    rag._store = SimpleNamespace(search=lambda **kwargs: results, retrieval_mode="vector")
+
+    response = rag.ask("What does stroke recovery involve?")
+
+    assert [c.id for c in response.citations] == [2]
+    assert [c.id for c in response.retrieved_evidence] == [1]
+    assert response.citations[0].text == results[1].chunk.text
+    assert response.citation_validation["status"] == "ids_valid"
+    assert response.citation_validation["claim_support_verified"] is False
+    assert response.to_dict()["retrieved_evidence"][0]["id"] == 1
 
 
 def test_pipeline_rejects_unknown_answer_mode(tmp_path) -> None:

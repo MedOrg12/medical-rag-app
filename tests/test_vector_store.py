@@ -64,6 +64,60 @@ def test_vector_store_round_trips_and_searches(tmp_path) -> None:
 
     assert results[0].chunk.id == "stroke"
     assert loaded.source_summaries()[0]["chunks"] == 1
+    assert loaded.get_chunk("stroke") == chunks[0]
+    assert loaded.get_chunk("missing") is None
+
+
+def test_qdrant_resolves_original_chunk_without_vectors(monkeypatch, tmp_path):
+    _use_fake_qdrant(monkeypatch)
+    settings = _qdrant_settings(tmp_path)
+    chunk = Chunk("original-id", "Stroke evidence.", {"source_id": "guide.pdf", "page": 3})
+    store, _ = _ingest(settings, [chunk])
+    assert store.get_chunk("original-id") == chunk
+    assert store.get_chunk("missing") is None
+    calls = [kwargs for name, kwargs in _calls() if name == "retrieve"]
+    assert calls[-1]["with_vectors"] is False
+
+
+def test_qdrant_curation_scope_is_sent_as_indexed_source_filter():
+    pytest.importorskip("qdrant_client")
+    from medical_rag.vector_store import _qdrant_filter
+
+    scope = _qdrant_filter({"source_id": {"$in": ["guideline.pdf"], "$nin": ["old.pdf"]}}, "model")
+    assert scope.must[1].key == "metadata.source_id"
+    assert scope.must[1].match.any == ["guideline.pdf"]
+    assert scope.must_not[0].match.any == ["old.pdf"]
+
+
+def test_bm25_filters_before_top_k_not_after(tmp_path):
+    model = HashingEmbeddingModel(dimensions=8)
+    chunks = [Chunk(f"old-{i}", "Education pilot recovery reminders " * 8, {"source_id": "old.pdf"}) for i in range(60)]
+    chunks.append(Chunk("allowed", "Education reminders.", {"source_id": "allowed.pdf"}))
+    store = VectorStore.build(tmp_path / "index.json", chunks, model)
+    assert store._bm25.search("Education reminders", 1, allowed_ids={"allowed"})[0][0] == "allowed"
+    assert [r.chunk.id for r in store.search("Education reminders", model, 1, filters={"source_id": {"$in": ["allowed.pdf"]}})] == ["allowed"]
+
+
+def test_qdrant_curation_filters_execute_against_in_memory_collection(tmp_path):
+    qdrant = pytest.importorskip("qdrant_client")
+    from qdrant_client import models
+
+    from medical_rag.vector_store import _point_id
+
+    settings = _qdrant_settings(tmp_path)
+    model = HashingEmbeddingModel(dimensions=8)
+    store = QdrantVectorStore(settings)
+    store._client = qdrant.QdrantClient(":memory:")
+    try:
+        store.client.create_collection(settings.qdrant_collection, vectors_config={"dense": models.VectorParams(size=8, distance=models.Distance.COSINE)})
+        points = [models.PointStruct(id=_point_id(source), vector={"dense": model.embed_query("Education reminders")}, payload={"chunk_id": source, "text": "Education reminders", "embedding_model": model.name, "metadata": {"source_id": source}}) for source in ("current.pdf", "withdrawn.pdf")]
+        store.client.upsert(settings.qdrant_collection, points)
+        included = store.search("Education reminders", model, 5, filters={"source_id": {"$in": ["current.pdf"]}})
+        excluded = store.search("Education reminders", model, 5, filters={"source_id": {"$nin": ["withdrawn.pdf"]}})
+        assert [result.chunk.id for result in included] == ["current.pdf"]
+        assert [result.chunk.id for result in excluded] == ["current.pdf"]
+    finally:
+        store.client.close()
 
 
 class _FakeQdrantClient:

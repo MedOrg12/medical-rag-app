@@ -1,4 +1,23 @@
 :root { color-scheme: light; --ink: #252c2d; --muted: #697174; --line: #dfe4e4; --soft: #f5f7f7; --accent: #176e62; --warn: #916218; --bad: #ac332f; }
+.library-filters { padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.library-filters summary { color: var(--muted); padding: 4px 0; }
+.library-filters .form-grid { margin-top: 14px; }
+.library-toolbar { display: flex; flex-wrap: wrap; gap: 14px; align-items: end; margin: 16px 0; }
+.library-toolbar select { min-width: 140px; }
+.library-toolbar .muted { margin-left: auto; align-self: center; }
+.curation-dialog { width: min(860px, calc(100% - 32px)); max-height: calc(100svh - 32px); padding: 24px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: white; }
+.curation-dialog::backdrop { background: #172b2870; }
+.curation-dialog .section-heading:first-child { margin-top: 0; }
+.curation-dialog .section-heading > div { min-width: 0; }
+#curation-source { overflow-wrap: anywhere; margin-top: 5px; }
+.curation-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.curation-dialog input, .curation-dialog select { width: 100%; min-width: 0; }
+.curation-dialog .span-all { grid-column: 1 / -1; }
+.curation-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
+.conflict-editor { padding: 18px 0; border-top: 1px solid var(--line); }
+.conflict-editor .section-heading { margin-top: 0; }
+.conflict-editor legend { font-size: 12px; color: var(--muted); }
+@media (max-width: 600px) { .curation-dialog { padding: 18px; } .curation-fields, .conflict-editor .form-grid { grid-template-columns: minmax(0, 1fr); } .library-toolbar .muted { margin-left: 0; } }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; background: #fff; color: var(--ink); font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 0; }
@@ -106,8 +125,12 @@ pre { overflow: auto; max-height: 400px; padding: 16px; background: var(--soft);
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 550; background: var(--soft); }
 th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
-.source-table { table-layout: fixed; }
-.source-table th:not(:first-child), .source-table td:not(:first-child) { width: 78px; text-align: right; }
+.source-table { table-layout: fixed; min-width: 760px; }
+.source-table th, .source-table td { overflow-wrap: anywhere; }
+.source-table th:nth-child(2), .source-table td:nth-child(2) { width: 175px; }
+.source-table th:nth-child(3), .source-table td:nth-child(3) { width: 115px; }
+.source-table th:nth-child(4), .source-table td:nth-child(4) { width: 95px; text-align: right; }
+.source-table th:last-child, .source-table td:last-child { width: 65px; }
 td strong { font-weight: 550; overflow-wrap: anywhere; }
 .source-path { display: block; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; margin-top: 4px; }
 .table-empty { text-align: center; color: var(--muted); padding: 36px 16px !important; }
@@ -163,7 +186,7 @@ footer { display: flex; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--
   .page-heading { align-items: flex-start; gap: 12px; } .page-heading button { font-size: 12px; padding-inline: 10px; }
   main { padding: 24px 16px; } .query-settings, .query-actions { padding: 12px; }
   .query-actions .toolbar { width: 100%; justify-content: flex-end; } .example-label { width: 100%; } .example-label select { flex: 1; width: 0; min-width: 0; }
-  .search-label, .search-label input { width: 100%; } .source-table th:not(:first-child), .source-table td:not(:first-child) { width: 58px; padding-inline: 8px; }
+  .search-label, .search-label input { width: 100%; }
   .stats-strip > div { padding: 12px; } .stats-strip strong { font-size: 20px; } .stats-strip span { font-size: 11px; }
   .ingest-panel { padding: 16px; } .form-grid { grid-template-columns: 1fr; } .eval-settings { gap: 16px; }
   #eval-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } #eval-summary > div { border: 0; padding: 12px 0; }

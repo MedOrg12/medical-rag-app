@@ -26,6 +26,7 @@ _REFUSAL_PHRASES = [
     "no evidence",
     "cannot find",
     "could not find",
+    "couldn't find supporting",
     "don't have information",
     "do not have information",
     "not enough indexed evidence",
@@ -72,6 +73,8 @@ class EvalQuestionResult:
     answer: str | None = None
     citations: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
+    retrieved_evidence: list[dict[str, Any]] = field(default_factory=list)
+    citation_validation: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -191,8 +194,9 @@ def evaluate_question(
     latency = round(time.perf_counter() - started, 4)
     answer = response.answer
     citations = response.citations
-    refused = _looks_like_refusal(answer, citations)
-    source_hints_found = _terms_found(item.expected_source_hints, _citation_blob(citations))
+    refused = _looks_like_refusal(answer)
+    retrieved = citations + response.retrieved_evidence
+    source_hints_found = _terms_found(item.expected_source_hints, _citation_blob(retrieved))
     answer_terms_found = _terms_found(item.expected_answer_terms, answer)
     citation_terms_found = _terms_found(item.expected_answer_terms, _citation_blob(citations))
     answer_terms_missing = [
@@ -202,7 +206,7 @@ def evaluate_question(
     citation_term_coverage = _coverage(citation_terms_found, item.expected_answer_terms)
     answer_term_coverage = _coverage(answer_terms_found, item.expected_answer_terms)
     retrieval_hit = bool(source_hints_found) or (
-        citation_term_coverage >= DEFAULT_CITATION_TERM_THRESHOLD
+        _coverage(_terms_found(item.expected_answer_terms, _citation_blob(retrieved)), item.expected_answer_terms) >= DEFAULT_CITATION_TERM_THRESHOLD
     )
     status = _question_status(
         should_refuse=item.should_refuse,
@@ -211,6 +215,8 @@ def evaluate_question(
         citation_term_coverage=citation_term_coverage,
         answer_term_coverage=answer_term_coverage,
     )
+    if not item.should_refuse and (not citations or response.citation_validation.get("status") == "needs_review"):
+        status = "fail"
 
     return EvalQuestionResult(
         question_id=item.id,
@@ -228,6 +234,8 @@ def evaluate_question(
         answer_snippet=_snippet(answer),
         answer=answer if include_answer else None,
         citations=[_citation_to_eval_dict(citation) for citation in citations],
+        retrieved_evidence=[_citation_to_eval_dict(citation) for citation in response.retrieved_evidence],
+        citation_validation=response.citation_validation,
     )
 
 
@@ -286,9 +294,7 @@ def _question_status(
     return "pass" if answer_term_coverage >= DEFAULT_ANSWER_TERM_THRESHOLD else "fail"
 
 
-def _looks_like_refusal(answer: str, citations: list[Citation]) -> bool:
-    if not citations:
-        return True
+def _looks_like_refusal(answer: str) -> bool:
     normalized = answer.lower()
     return any(phrase in normalized for phrase in _REFUSAL_PHRASES)
 
@@ -312,13 +318,7 @@ def _coverage(found_terms: list[str], expected_terms: list[str]) -> float:
 
 
 def _citation_to_eval_dict(citation: Citation) -> dict[str, Any]:
-    return {
-        "id": citation.id,
-        "source": citation.source,
-        "page": citation.page,
-        "score": citation.score,
-        "excerpt": citation.excerpt,
-    }
+    return citation.to_dict()
 
 
 def _snippet(answer: str, limit: int = 240) -> str:

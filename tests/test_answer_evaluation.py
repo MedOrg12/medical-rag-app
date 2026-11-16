@@ -4,7 +4,13 @@ import json
 
 import pytest
 
-from medical_rag.answer_evaluation import check_answer, evaluate_answers, load_answer_cases, main
+from medical_rag.answer_evaluation import (
+    check_answer,
+    claim_review,
+    evaluate_answers,
+    load_answer_cases,
+    main,
+)
 from medical_rag.llm import Generator
 
 
@@ -80,7 +86,7 @@ def test_eval_supplies_fixed_passages_once_and_preserves_review_rubric(cases):
 
         def generate(self, question, results, answer_mode="patient"):
             self.calls.append((question, results, answer_mode))
-            return "The pilot tracked opened reminders [1]. Hospital admissions were not measured."
+            return "## Bottom Line\nThe pilot tracked opened reminders [1].\n\n## Supporting Evidence\nHospital admissions were not measured [1].\n\n## Applicability and Limitations\nNo measured outcome."
 
     generator = RecordingGenerator()
     report = evaluate_answers(generator, [cases["partial_outcome"]], "clinician")
@@ -92,6 +98,19 @@ def test_eval_supplies_fixed_passages_once_and_preserves_review_rubric(cases):
     assert generator.calls[0][1][0].chunk.text == cases["partial_outcome"]["passages"][0]
     assert generator.calls[0][2] == "clinician"
     assert report["results"][0]["review_criteria"] == cases["partial_outcome"]["review_criteria"]
+    assert report["results"][0]["claim_review"][0]["verdict"] == "not_reviewed"
+
+
+def test_claim_review_pairs_statements_with_actual_passages_and_never_certifies_support():
+    rows = claim_review("## Bottom Line\nA sourced statement [2]. An unsupported conclusion [99].", ["First passage.", "Second passage."])
+    assert rows[0]["passages"] == [{"id": 2, "text": "Second passage."}]
+    assert rows[1]["citation_ids"] == [99] and rows[1]["passages"] == []
+    assert all(row["verdict"] == "not_reviewed" for row in rows)
+
+
+def test_clinician_evaluation_checks_section_structure(cases):
+    issues = check_answer(cases["partial_outcome"], "Opened reminders [1]. Admissions were not measured.", "clinician")
+    assert "Missing or out-of-order clinician answer sections" in issues
 
 
 def test_eval_records_provider_failure(cases):

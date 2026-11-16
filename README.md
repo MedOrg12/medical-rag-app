@@ -40,7 +40,7 @@ Sign-in uses [Clerk](https://clerk.com). Access is split two ways:
 | Area | Who can use it |
 | --- | --- |
 | Patient view (`/`), `/status`, `/ready`, `POST /ask` | Everyone |
-| Developer workbench (`/dev`) and its API: `/health`, `/sources`, `/ingest`, `/ingest/status`, `/eval/questions`, `/eval/run` | Signed-in users whose Clerk **public metadata** contains `{"admin": true}` |
+| Developer workbench (`/dev`) and its API: `/health`, `/sources`, `/library`, `/library/documents`, `/ingest`, `/ingest/status`, `/eval/questions`, `/eval/run` | Signed-in users whose Clerk **public metadata** contains `{"admin": true}` |
 
 Set the keys from the Clerk dashboard (API keys page) in `.env` at the repository root. `python app.py` and Docker Compose both read it:
 
@@ -312,6 +312,7 @@ export RAG_ANSWER_MODE=clinician
 Environment variables:
 
 - `RAG_CORPUS_DIR`: default `pdfs`
+- `RAG_SOURCE_CATALOG_PATH`: optional curated bibliography JSON, default `source_catalog.json`
 - `RAG_INDEX_PATH`: default `.rag/index.json`
 - `RAG_CHUNK_SIZE_CHARS`: default `1400`
 - `RAG_CHUNK_OVERLAP_CHARS`: default `220`
@@ -435,6 +436,109 @@ retrieval request, or conversation memory. Extractive mode and API-error fallbac
 excerpts rather than synthesized answers. No-evidence responses are concise and do not instruct
 patients to rebuild an index.
 
+Clinician mode requests three sections: **Bottom Line**, **Supporting Evidence**, and
+**Applicability and Limitations**. Recommendations, study findings, and synthesis should be
+distinguished, with citations next to sourced claims. The UI renders these headings and lists
+in the developer Playground's Clinician mode. Extractive clinician answers use the same sections
+but explicitly state that no clinical synthesis was generated. Patient answers remain concise.
+
+### Verifiable Sources
+
+`/ask` now returns only passages actually referenced in the answer under `citations`. Other
+retrieved passages are under `retrieved_evidence`. Original citation numbers are preserved:
+an answer citing only `[3]` has citation ID 3, not a renumbered ID 1. API consumers that previously
+used `citations` as the complete retrieval result must combine the two arrays and sort by `id`.
+
+Both views separate cited sources from uncited results. Evidence includes the document title,
+publisher and publication year when recorded, section, PDF page range, a short excerpt, and the
+full indexed passage. Expand the passage to inspect its complete retrieved text. PDF links open
+the original document at the first cited PDF page; these numbers may differ from printed page labels.
+PDF-page highlighting is not implemented. The full indexed passage may contain parsing artifacts.
+
+The original-file endpoint is `GET /evidence/{chunk_id}/document`. It resolves the chunk through
+the JSON or Qdrant index, never accepts a filesystem path, and only serves PDFs inside
+`RAG_CORPUS_DIR`. Symlinks outside that root are rejected. The API host must have the original
+files at their indexed paths. Otherwise the UI marks the original PDF unavailable. For the
+external library, run with `RAG_CORPUS_DIR=/Users/devshah/Downloads/pdfs` if that is where the
+indexed originals still reside. No re-ingestion is needed for these presentation changes.
+
+Publication dates and publishers are not guessed from filenames or PDF creation dates. To supply
+verified metadata for an existing index, create `source_catalog.json` using the structure in
+`source_catalog.example.json`. Keys must match indexed `source_id` values exactly. Supported fields
+include `title`, `publisher`, and integer `publication_year`, plus the curation fields below. The optional catalog reloads on changes
+without re-embedding. Unknown bibliography fields remain explicitly unrecorded in the UI.
+
+`citation_validation` reports invalid IDs and answers that do not cite any retrieved passage.
+These checks do **not** verify that the cited passage entails the clinical claim. Warnings are
+visible in both views; an `ids_valid` result must not be interpreted as clinical validation.
+
+### Library Curation
+
+Open `/dev#documents` and use a document's metadata action to edit its classification and
+applicability. The editor records:
+
+- Document type: guideline, systematic review, trial, observational study, patient education,
+  local protocol, other, or unclassified.
+- Population and topic tags, jurisdiction, publication date (ISO `YYYY-MM-DD`), publication
+  year when only the year is known, and document version.
+- Status: unreviewed, current, superseded, or withdrawn; reviewer name and review notes.
+- Replacement source for a superseded document, and curator-recorded disagreement notes.
+
+Existing PDFs are **not** automatically classified or clinically reviewed. Missing information
+stays unrecorded; uncurated metadata is labelled unreviewed. A curator's `current` status is not
+an automated assessment of evidence quality or clinical correctness. Full dates and years must
+agree. Superseded/withdrawn documents require a reason. Replacement links must refer to another
+indexed source and cannot form cycles.
+
+Changes are saved in `RAG_SOURCE_CATALOG_PATH` and take effect on the next query without index
+rebuilding or embedding calls. `GET /library` returns document metadata, population/topic/
+jurisdiction facets, and a catalog revision. `POST /library/documents` accepts `source_id`, a
+complete `metadata` object, and that `revision`. A stale editor receives HTTP 409 rather than
+overwriting another editor's changes. Writes use a cross-process lock and atomic file replacement.
+The old three-field bibliography catalog remains supported. Large libraries can also maintain
+the same validated JSON format directly; preserve exact indexed source IDs.
+
+The Playground's **Library Scope** controls use `library_filters` on `/ask`, for example:
+
+```json
+{
+  "question": "What does the literature say about caregiver education?",
+  "answer_mode": "clinician",
+  "library_filters": {
+    "document_types": ["guideline", "local_protocol"],
+    "populations": ["adults"],
+    "topics": ["education"],
+    "jurisdiction": "Canada",
+    "reviewed_only": true,
+    "include_inactive": false
+  }
+}
+```
+
+Values within a list are OR'ed; different fields are AND'ed. Tags are case-normalized, and
+jurisdiction matches exactly ignoring case. Unrecorded metadata does not match a restriction.
+An empty scope returns no evidence, not unrestricted results. These constraints apply before
+candidate selection in JSON vector/BM25 and Qdrant searches. Use `library_filters` for curated
+fields; the older `filters` parameter still refers to raw indexed metadata.
+
+Superseded and withdrawn documents are excluded by default, including when requested by a raw
+source-ID filter. `include_inactive=true` is only allowed with clinician mode, for historical
+comparison; the evidence UI explicitly labels inactive sources and displays their status reason.
+Unreviewed documents remain searchable unless `reviewed_only=true` is selected.
+
+Disagreement records contain another indexed source, topic, each source's position, context
+(such as different populations/settings), and optional PDF page references. Comparisons are
+visible when either document is retrieved, including whether both texts were actually retrieved.
+They are labelled curator-recorded and are not presented as independently verified findings.
+The generator is instructed to cite differing retrieved positions separately, retain their
+qualifications, and avoid inventing a resolution or claiming to have read a missing counterpart.
+This is not automatic corpus-wide conflict detection; unrecorded conflicts still need review.
+
+Metadata editing is an operator feature in the existing trusted developer workbench. The repository
+does not add authentication for this endpoint; do not expose the workbench/edit API to untrusted users.
+
+### Reviewing Answer Quality
+
 To evaluate generation separately from retrieval, run the controlled cases from the same shell
 that has your API or Ollama generation settings configured:
 
@@ -455,6 +559,16 @@ correctness. Review every answer against its supplied passages and the included 
 An evidence-gap statement can legitimately cite a passage; the checks cannot establish whether
 the cited passage actually supports the claim. Prompt adherence also varies by model, so a
 passing report is not a substitute for reviewing the answers.
+Clinician-mode evaluation also checks section presence and ordering. JSON reports include
+`claim_review`: a statement-by-statement worksheet paired with the exact passages referenced.
+Each verdict starts as `not_reviewed`; a reviewer can mark it supported, partially supported,
+unsupported, contradicted, or not a sourced claim. No model judge or automatic clinical approval
+is implied. The corpus evaluation dashboard keeps retrieval metrics separate from cited-source
+coverage, so an uncited but relevant passage still counts as retrieved evidence.
+In-scope answers without cited evidence or with citation-ID warnings fail the corpus evaluation;
+an uncited confident answer is not automatically counted as a refusal.
+
+Run the shared evidence renderer's regression tests with `node --test tests/test_evidence_ui.cjs`.
 
 ## Medical Safety
 

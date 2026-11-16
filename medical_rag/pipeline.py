@@ -3,13 +3,21 @@ from __future__ import annotations
 import itertools
 import time
 from collections.abc import Iterator
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from medical_rag.chunking import chunk_pages
 from medical_rag.config import Settings
+from medical_rag.curation import (
+    DocumentMetadata,
+    LibraryFilters,
+    SourceCatalog,
+    retrieval_scope,
+    source_disagreements,
+)
 from medical_rag.documents import load_documents
 from medical_rag.embeddings import EmbeddingModel, make_embedding_model
+from medical_rag.evidence import document_path, make_citation, partition_evidence
 from medical_rag.ingestion import (
     ChunkedDocument,
     IngestionOptions,
@@ -20,7 +28,7 @@ from medical_rag.ingestion import (
 from medical_rag.llm import SAFETY_NOTICE, Generator, make_generator
 from medical_rag.relevance import expand_query_for_retrieval, filter_results_for_question
 from medical_rag.reranker import Reranker, make_reranker
-from medical_rag.types import Chunk, Citation, IngestionReport, RagAnswer, SearchResult
+from medical_rag.types import Chunk, IngestionReport, RagAnswer
 from medical_rag.vector_store import (
     IngestStats,
     VectorStoreBackend,
@@ -46,6 +54,7 @@ class StrokeRAG:
         self.generator = generator or make_generator(self.settings)
         self._reranker: Reranker = make_reranker(self.settings)
         self._store: VectorStoreBackend | None = None
+        self._catalog = SourceCatalog(self.settings.source_catalog_path or self.settings.root_dir / "source_catalog.json")
 
     def ingest(
         self,
@@ -276,6 +285,7 @@ class StrokeRAG:
         top_k: int | None = None,
         filters: dict[str, str] | None = None,
         answer_mode: str | None = None,
+        library_filters: LibraryFilters | dict | None = None,
     ) -> RagAnswer:
         started = time.perf_counter()
         timings: dict[str, float] = {}
@@ -283,6 +293,11 @@ class StrokeRAG:
         if not question:
             raise ValueError("Question cannot be empty")
         mode = _normalize_answer_mode(answer_mode or self.settings.answer_mode)
+        scope = LibraryFilters.model_validate(library_filters or {})
+        if scope.include_inactive and mode != "clinician":
+            raise ValueError("Historical superseded/withdrawn sources are only available in clinician mode.")
+        catalog, catalog_revision = self._catalog.snapshot()
+        effective_filters = retrieval_scope(catalog, scope, filters)
 
         store = self._load_store()
         timings["index_load_seconds"] = round(time.perf_counter() - started, 4)
@@ -292,23 +307,31 @@ class StrokeRAG:
 
         candidate_limit = min(max(limit * 4, limit), 50)
         retrieval_started = time.perf_counter()
-        results = store.search(
+        empty_scope = isinstance(effective_filters.get("source_id"), dict) and effective_filters["source_id"].get("$in") == []
+        results = [] if empty_scope else store.search(
             query=expand_query_for_retrieval(question),
             embedding_model=self.embedding_model,
             top_k=candidate_limit,
-            filters=filters,
+            filters=effective_filters or None,
         )
         timings["retrieval_seconds"] = round(time.perf_counter() - retrieval_started, 4)
         rerank_started = time.perf_counter()
         results = filter_results_for_question(question, results)
         results = [r for r in results if r.score >= self.settings.min_relevance_score]
         results = self._reranker.rerank(question, results)[:limit]
+        results = [self._catalog.enrich(result, catalog) for result in results]
+        disagreements = source_disagreements(results, catalog)
+        # Curator annotations travel with the affected passage, never as system instructions.
+        if disagreements:
+            results = [replace(result, chunk=replace(result.chunk, metadata={**result.chunk.metadata,
+                "curated_conflicts": [item for item in disagreements if result.chunk.metadata.get("source_id") in (item["source_id"], item["with_source"])]})) for result in results]
         timings["reranking_seconds"] = round(time.perf_counter() - rerank_started, 4)
 
         generation_started = time.perf_counter()
         answer = self.generator.generate(question, results, answer_mode=mode)
         timings["generation_seconds"] = round(time.perf_counter() - generation_started, 4)
-        citations = [_citation(result, citation_id) for citation_id, result in enumerate(results, 1)]
+        evidence = [make_citation(result, citation_id, self.settings.corpus_dir) for citation_id, result in enumerate(results, 1)]
+        citations, retrieved_evidence, citation_validation = partition_evidence(answer, evidence)
 
         timings["total_seconds"] = round(time.perf_counter() - started, 4)
 
@@ -323,7 +346,40 @@ class StrokeRAG:
             retrieval_mode=store.retrieval_mode,
             fallback_embedding=self._fallback_embedding,
             timings=timings,
+            retrieved_evidence=retrieved_evidence,
+            citation_validation=citation_validation,
+            library_scope={**scope.model_dump(), "catalog_revision": catalog_revision, "inactive_excluded": not scope.include_inactive,
+                "unreviewed_sources_retrieved": len({result.chunk.metadata.get("source_id") for result in results if result.chunk.metadata.get("status", "unreviewed") == "unreviewed"})},
+            evidence_conflicts=disagreements,
         )
+
+    def library(self) -> dict:
+        entries, revision = self._catalog.snapshot()
+        documents = []
+        for source in self.sources():
+            source_id = str(source["source_id"])
+            metadata = entries.get(source_id, DocumentMetadata())
+            documents.append({
+                "source_id": source_id, "title": metadata.title or source.get("title", source_id),
+                "chunks": source["chunks"], "pages": source.get("pages"),
+                "metadata": metadata.model_dump(mode="json"),
+            })
+        return {"documents": documents, "revision": revision, "facets": {
+            "populations": sorted({tag for doc in documents for tag in doc["metadata"]["populations"]}),
+            "topics": sorted({tag for doc in documents for tag in doc["metadata"]["topics"]}),
+            "jurisdictions": sorted({doc["metadata"]["jurisdiction"] for doc in documents if doc["metadata"]["jurisdiction"]}),
+        }}
+
+    def curate_source(self, source_id: str, metadata: DocumentMetadata, revision: str) -> dict:
+        known = {str(source["source_id"]) for source in self.sources()}
+        return self._catalog.save(source_id, metadata, revision, known)
+
+    def source_document(self, chunk_id: str) -> Path:
+        chunk = self._load_store().get_chunk(chunk_id)
+        path = document_path(chunk, self.settings.corpus_dir) if chunk else None
+        if path is None:
+            raise FileNotFoundError("Original PDF unavailable in the configured corpus.")
+        return path
 
     def sources(self) -> list[dict[str, object]]:
         return self._load_store().source_summaries()
@@ -355,25 +411,6 @@ def _vector_store_stats(stats: IngestStats) -> dict[str, float | int]:
         key: round(value, 4) if isinstance(value, float) else value
         for key, value in asdict(stats).items()
     }
-
-
-def _citation(result: SearchResult, citation_id: int) -> Citation:
-    metadata = result.chunk.metadata
-    return Citation(
-        id=citation_id,
-        source=str(metadata.get("source_id", "unknown")),
-        page=metadata.get("page"),
-        chunk_id=result.chunk.id,
-        score=round(result.score, 6),
-        excerpt=_excerpt(result.chunk.text, 320),
-    )
-
-
-def _excerpt(text: str, max_chars: int) -> str:
-    cleaned = " ".join(text.split())
-    if len(cleaned) <= max_chars:
-        return cleaned
-    return cleaned[: max_chars - 1].rsplit(" ", 1)[0] + "..."
 
 
 def _normalize_answer_mode(answer_mode: str) -> str:

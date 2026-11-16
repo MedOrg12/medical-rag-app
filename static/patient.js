@@ -31,12 +31,6 @@ function icon(name, className = "") {
   return `<svg class="${className}" aria-hidden="true"><use href="/static/icons.svg#${name}"></use></svg>`;
 }
 
-function escapeHtml(text) {
-  return String(text ?? "").replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[char]);
-}
-
 function updateControls() {
   const busy = Boolean(activeRequest);
   ui.send.hidden = busy;
@@ -128,59 +122,6 @@ async function checkAvailability() {
   }
 }
 
-// Escape all supplied text before adding the small set of supported formatting tags.
-function inlineText(text, citations, answerId) {
-  return escapeHtml(text)
-    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\[(\d+)\]([.,;:]?)/g, (match, id, punctuation) => {
-      if (!citations.some((citation) => String(citation.id) === id)) return match;
-      return `<span class="citation-reference"><button type="button" class="citation-link" data-source="${answerId}-source-${id}" aria-label="Read source ${id}" title="Read source ${id}">[${id}]</button>${punctuation}</span>`;
-    });
-}
-
-function answerHtml(text, citations, answerId) {
-  const blocks = [];
-  let paragraph = [];
-  let list = [];
-  let listType = "";
-  let listStart = 1;
-  const inline = (value) => inlineText(value, citations, answerId);
-  const flushParagraph = () => {
-    if (paragraph.length) blocks.push(`<p>${inline(paragraph.join(" "))}</p>`);
-    paragraph = [];
-  };
-  const flushList = () => {
-    if (list.length) {
-      blocks.push(`<${listType}${listType === "ol" ? ` start="${listStart}"` : ""}>${list.map((item) => `<li>${inline(item)}</li>`).join("")}</${listType}>`);
-    }
-    list = [];
-    listType = "";
-  };
-  for (const line of String(text).split("\n")) {
-    const trimmed = line.trim();
-    const heading = trimmed.match(/^#{1,6}\s+(.+)$/);
-    const item = trimmed.match(/^(?:[-*]\s+|(\d+)\.\s+)(.+)$/);
-    if (!trimmed || heading) {
-      flushParagraph();
-      flushList();
-      if (heading) blocks.push(`<h2>${inline(heading[1])}</h2>`);
-    } else if (item) {
-      flushParagraph();
-      const type = item[1] ? "ol" : "ul";
-      if (listType !== type) flushList();
-      if (!list.length) listStart = Number(item[1] || 1);
-      listType = type;
-      list.push(item[2]);
-    } else {
-      flushList();
-      paragraph.push(trimmed);
-    }
-  }
-  flushParagraph();
-  flushList();
-  return blocks.join("");
-}
-
 function appendQuestion(question) {
   const user = document.createElement("p");
   user.className = "question-message";
@@ -214,6 +155,7 @@ function createAnswer() {
 
 function renderAnswer(article, payload) {
   const citations = (payload.citations || []).filter((citation) => Number.isInteger(citation.id) && citation.id > 0);
+  const otherEvidence = payload.retrieved_evidence || [];
   const rawAnswer = String(payload.answer || "");
   // Added by the backend when the language model was unreachable.
   const fallback = rawAnswer.includes("Generation backend was unavailable, so this answer uses extractive retrieval.");
@@ -224,7 +166,9 @@ function renderAnswer(article, payload) {
   if (payload.safety_notice && answer.endsWith(payload.safety_notice)) {
     answer = answer.slice(0, -payload.safety_notice.length).trim();
   }
-  article.querySelector(".answer-body").innerHTML = answerHtml(answer || "No answer was returned. Please try asking again.", citations, article.id);
+  article.querySelector(".answer-body").innerHTML = EvidenceUI.answer(answer || "No answer was returned. Please try asking again.", citations, `${article.id}-source`)
+    + EvidenceUI.warnings(payload.citation_validation)
+    + EvidenceUI.conflicts(payload.evidence_conflicts || [], `${article.id}-source`);
 
   if (fallback || payload.generation_model === "extractive") {
     const note = document.createElement("p");
@@ -236,38 +180,26 @@ function renderAnswer(article, payload) {
   } else if (!citations.length) {
     const note = document.createElement("p");
     note.className = "answer-note";
-    note.textContent = "No supporting source was found in the study library.";
+    note.textContent = otherEvidence.length ? "This answer has no cited sources. Related passages are listed separately." : "No supporting source was found in the study library.";
     article.append(note);
   }
 
   const tools = document.createElement("div");
   tools.className = "answer-tools";
-  if (citations.length) {
+  const groups = document.createElement("div");
+  groups.className = "source-groups";
+  for (const [items, label] of [[citations, "Sources cited in answer"], [otherEvidence, "Other retrieved passages"]]) {
+    if (!items.length) continue;
     const details = document.createElement("details");
     details.className = "sources";
-    details.innerHTML = `<summary>${icon("file-text")}<span>View ${citations.length} source${citations.length === 1 ? "" : "s"}</span>${icon("chevron-down", "chevron")}</summary>`;
-    const list = document.createElement("ol");
+    details.innerHTML = `<summary>${icon("file-text")}<span>${label} (${items.length})</span>${icon("chevron-down", "chevron")}</summary>`;
+    const list = document.createElement("div");
     list.className = "source-list";
-    for (const citation of citations) {
-      const item = document.createElement("li");
-      item.id = `${article.id}-source-${citation.id}`;
-      item.tabIndex = -1;
-      const title = document.createElement("p");
-      title.className = "source-title";
-      title.textContent = `[${citation.id}] ${String(citation.source || "Stroke literature").replace(/\.pdf$/i, "").replace(/_/g, " ")}`;
-      const page = document.createElement("span");
-      page.className = "source-page";
-      page.textContent = citation.page != null ? `Page ${citation.page}` : "Page not available";
-      const excerpt = document.createElement("p");
-      excerpt.className = "source-excerpt";
-      excerpt.textContent = citation.excerpt || "";
-      item.append(title, page, excerpt);
-      list.append(item);
-    }
+    list.innerHTML = EvidenceUI.sources(items, `${article.id}-source`);
     details.append(list);
-    tools.append(details);
+    groups.append(details);
   }
-
+  tools.append(groups);
   const copy = document.createElement("button");
   copy.type = "button";
   copy.className = "icon-button copy-button";
@@ -276,7 +208,7 @@ function renderAnswer(article, payload) {
   copy.innerHTML = icon("copy");
   copy.addEventListener("click", async () => {
     try {
-      const sources = citations.map((citation) => `[${citation.id}] ${citation.source}${citation.page != null ? `, page ${citation.page}` : ""}`).join("\n");
+      const sources = citations.map((citation) => `[${citation.id}] ${citation.title || citation.source}; ${citation.publisher || "publisher not recorded"}; ${citation.publication_year || "year not recorded"}${citation.page != null ? `; PDF page ${citation.page}` : ""}`).join("\n");
       await navigator.clipboard.writeText([answer, sources, payload.safety_notice].filter(Boolean).join("\n\n"));
       ui.status.textContent = "Answer copied";
     } catch {
@@ -438,7 +370,11 @@ ui.messages.addEventListener("click", (event) => {
   if (!button) return;
   const source = document.getElementById(button.dataset.source);
   if (!source) return;
-  source.closest("details").open = true;
+  let details = source.closest("details");
+  while (details) {
+    details.open = true;
+    details = details.parentElement.closest("details");
+  }
   source.focus({ preventScroll: true });
   source.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
