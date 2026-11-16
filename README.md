@@ -379,7 +379,13 @@ The default page at `/` is a patient and caregiver question-and-answer view. It 
 plain-language patient mode and the server's configured retrieval defaults, with no
 model settings, ingestion controls, or evaluation panels. Answers support readable
 paragraphs/lists, inline citations, expandable sources per answer, copying, and retrying.
-Questions stay in the current page only; the UI does not persist them in browser storage.
+The collapsible sidebar keeps separate conversations in browser local storage. Use **New chat**
+to start a conversation while keeping earlier chats, search questions and answers, reopen a
+chat, or delete it. Chats are grouped by their most recent activity. The sidebar becomes a
+drawer on smaller screens. Existing single-thread browser history migrates automatically.
+History stays in this browser and is not synced to an account; clearing site data removes it.
+If storage is full or blocked, the app displays a notice and keeps changes for the current
+page session only.
 Each question is answered independently; previous messages are not sent to the model.
 
 Open `/dev` for the developer workbench, including corpus ingestion, source search,
@@ -569,6 +575,19 @@ In-scope answers without cited evidence or with citation-ID warnings fail the co
 an uncited confident answer is not automatically counted as a refusal.
 
 Run the shared evidence renderer's regression tests with `node --test tests/test_evidence_ui.cjs`.
+The conversation sidebar also has optional browser regression tests. With the app running,
+install Playwright in a temporary directory and run:
+
+```bash
+npm install --prefix /tmp/medical-rag-browser-check playwright
+RUN_BROWSER_TESTS=1 NODE_PATH=/tmp/medical-rag-browser-check/node_modules \
+  node --test tests/test_chat_history.cjs
+```
+
+On macOS the tests use installed Google Chrome. Elsewhere, install Playwright's Chromium
+(`playwright install chromium`) or set `CHROME_PATH` to a browser executable.
+Set `CHAT_TEST_URL` to test a server on a different port. Tests use isolated browser contexts
+and stub answer requests, leaving existing user history and model providers untouched.
 
 ## Medical Safety
 

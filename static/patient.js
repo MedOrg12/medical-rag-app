@@ -13,18 +13,18 @@ const ui = {
   checkStatus: document.querySelector("#check-status"),
 };
 
-const HISTORY_KEY = "stroke-companion:thread:v1";
+const LEGACY_HISTORY_KEY = "stroke-companion:thread:v1";
+const HISTORY_KEY = "stroke-companion:chats:v2";
+const ACTIVE_CHAT_KEY = "stroke-companion:active-chat:v2";
 const HISTORY_LIMIT = 50;
 
 let ready = false;
 let activeRequest = null;
 let answerSequence = 0;
-// Another tab changed the thread while this tab was busy; redraw once the request ends.
 let pendingSync = false;
-// Bumped on every reset so saves queued before it are dropped.
-let historyGeneration = 0;
-
-// Saved entries are { id, createdAt, question, payload }; payload stays null until an answer arrives.
+let activeChatId = null;
+let memoryChats = [];
+let storageAvailable = true;
 const articleEntries = new WeakMap();
 
 function icon(name, className = "") {
@@ -45,59 +45,214 @@ function resizeQuestion() {
   updateControls();
 }
 
-function loadThread() {
+function cleanEntries(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((entry) => entry && typeof entry.id === "string" && typeof entry.question === "string" && entry.question.trim())
+    .map((entry) => ({
+      id: entry.id,
+      createdAt: Number(entry.createdAt) || 0,
+      question: entry.question,
+      payload: entry.payload && typeof entry.payload === "object" ? entry.payload : null,
+    }))
+    .slice(-HISTORY_LIMIT);
+}
+
+function loadChats() {
+  if (!storageAvailable) return memoryChats;
   try {
     const stored = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
-    if (!Array.isArray(stored)) return [];
-    return stored
-      .filter((entry) => entry && typeof entry.id === "string" && typeof entry.question === "string" && entry.question.trim())
-      .map((entry) => ({
-        id: entry.id,
-        createdAt: Number(entry.createdAt) || 0,
-        question: entry.question,
-        payload: entry.payload && typeof entry.payload === "object" ? entry.payload : null,
-      }))
-      .slice(-HISTORY_LIMIT);
+    if (!Array.isArray(stored)) return memoryChats;
+    memoryChats = stored.filter((chat) => chat && typeof chat.id === "string")
+      .map((chat) => ({
+        id: chat.id,
+        createdAt: Number(chat.createdAt) || 0,
+        updatedAt: Number(chat.updatedAt) || 0,
+        entries: cleanEntries(chat.entries),
+      }));
   } catch {
-    return [];
+    // Keep the current session usable if storage is blocked or contains invalid JSON.
+  }
+  return memoryChats;
+}
+
+function writeChats(chats) {
+  memoryChats = chats;
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(chats));
+  } catch {
+    storageAvailable = false;
+    document.querySelector("#history-notice").textContent = "Browser storage is unavailable or full. New changes will be lost when you leave this page.";
   }
 }
 
-function writeThread(entries) {
-  while (true) {
-    try {
-      if (entries.length) localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
-      else localStorage.removeItem(HISTORY_KEY);
-      return;
-    } catch (error) {
-      // Drop the oldest exchanges when storage is full; give up if storage is unavailable.
-      if (error?.name !== "QuotaExceededError" || entries.length <= 1) return;
-      entries = entries.slice(1);
-    }
-  }
-}
-
-// Serialize read-modify-write cycles across tabs where the Web Locks API is available.
 function withHistoryLock(callback) {
-  if (navigator.locks?.request) navigator.locks.request(HISTORY_KEY, callback).catch(() => {});
-  else callback();
+  if (navigator.locks?.request) return navigator.locks.request(HISTORY_KEY, callback).catch(() => {
+    document.querySelector("#history-notice").textContent = "Could not save this change. Please try again.";
+  });
+  return Promise.resolve(callback());
 }
 
-// Merge into the stored thread so exchanges saved by other tabs are kept.
-function saveEntry(entry) {
-  const generation = historyGeneration;
-  const saved = { id: entry.id, createdAt: entry.createdAt, question: entry.question, payload: entry.payload };
+function selectChatId(id) {
+  activeChatId = id;
+  try { sessionStorage.setItem(ACTIVE_CHAT_KEY, id || ""); } catch { /* Session remains usable. */ }
+}
+
+function loadThread() {
+  return loadChats().find((chat) => chat.id === activeChatId)?.entries || [];
+}
+
+function chatTitle(chat) {
+  return chat.entries[0]?.question.replace(/\s+/g, " ").trim() || "New chat";
+}
+
+function saveEntry(entry, create = false) {
+  const chatId = activeChatId;
+  const saved = { ...entry };
   withHistoryLock(() => {
-    if (generation !== historyGeneration) return;
-    const entries = loadThread().filter((stored) => stored.id !== saved.id);
-    entries.push(saved);
-    entries.sort((a, b) => a.createdAt - b.createdAt);
-    writeThread(entries.slice(-HISTORY_LIMIT));
+    const chats = loadChats();
+    let chat = chats.find((item) => item.id === chatId);
+    // A late answer must never restore a conversation deleted in another tab.
+    if (!chat && !create) return;
+    if (!chat) {
+      chat = { id: chatId, createdAt: saved.createdAt, updatedAt: saved.createdAt, entries: [] };
+      chats.push(chat);
+    }
+    chat.entries = chat.entries.filter((item) => item.id !== saved.id);
+    chat.entries.push(saved);
+    chat.entries.sort((a, b) => a.createdAt - b.createdAt);
+    chat.entries = chat.entries.slice(-HISTORY_LIMIT);
+    chat.updatedAt = Date.now();
+    writeChats(chats);
+    renderSidebar();
   });
 }
 
 function newEntryId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function dateGroup(timestamp) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const lastWeek = new Date(today);
+  lastWeek.setDate(lastWeek.getDate() - 7);
+  if (timestamp >= today.getTime()) return "Today";
+  if (timestamp >= yesterday.getTime()) return "Yesterday";
+  if (timestamp >= lastWeek.getTime()) return "Previous 7 days";
+  return "Older chats";
+}
+
+function renderSidebar() {
+  const chats = [...loadChats()].filter((chat) => chat.entries.length).sort((a, b) => b.updatedAt - a.updatedAt);
+  const query = document.querySelector("#history-search").value.trim().toLocaleLowerCase();
+  const visible = chats.filter((chat) => !query || chat.entries.some((entry) =>
+    `${entry.question} ${String(entry.payload?.answer || "")}`.toLocaleLowerCase().includes(query)));
+  const history = document.querySelector("#chat-history");
+  history.replaceChildren();
+  document.querySelector("#conversation-title").textContent = chatTitle(chats.find((chat) => chat.id === activeChatId) || { entries: [] });
+  if (!visible.length) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent = query ? "No chats found. Try another search." : "Your conversations will appear here. Ask a question to get started.";
+    history.append(empty);
+    return;
+  }
+  let group;
+  let list;
+  for (const chat of visible) {
+    const label = dateGroup(chat.updatedAt);
+    if (label !== group) {
+      group = label;
+      const heading = document.createElement("h2");
+      heading.className = "history-group-title";
+      heading.textContent = label;
+      list = document.createElement("ul");
+      list.className = "history-list";
+      history.append(heading, list);
+    }
+    const row = document.createElement("li");
+    row.className = "history-row";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "history-chat";
+    open.dataset.chatId = chat.id;
+    open.textContent = chatTitle(chat);
+    open.title = chatTitle(chat);
+    if (chat.id === activeChatId) {
+      row.classList.add("active");
+      open.setAttribute("aria-current", "true");
+    }
+    open.addEventListener("click", () => switchChat(chat.id));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "history-delete icon-button";
+    remove.title = "Delete chat";
+    remove.setAttribute("aria-label", `Delete chat: ${chatTitle(chat)}`);
+    remove.innerHTML = icon("trash");
+    remove.addEventListener("click", () => deleteChat(chat.id));
+    row.append(open, remove);
+    list.append(row);
+  }
+}
+
+function stopCurrentRequest() {
+  activeRequest?.abort();
+  activeRequest = null;
+  pendingSync = false;
+}
+
+function switchChat(id) {
+  stopCurrentRequest();
+  selectChatId(id);
+  ui.question.value = "";
+  ui.status.textContent = ready ? "Ready for your question" : "Temporarily unavailable";
+  renderThread();
+  renderSidebar();
+  resizeQuestion();
+  if (mobileSidebar.matches) setSidebar(false);
+  ui.question.focus({ preventScroll: true });
+}
+
+function startFresh() {
+  switchChat(null);
+}
+
+function deleteChat(id) {
+  withHistoryLock(() => {
+    writeChats(loadChats().filter((chat) => chat.id !== id));
+    if (activeChatId === id) startFresh();
+    else renderSidebar();
+    document.querySelector("#history-notice").textContent = storageAvailable
+      ? "Chat deleted from this browser." : "Chat removed for this session. Browser storage is unavailable.";
+    document.querySelector("#new-session").focus();
+  });
+}
+
+async function initializeHistory() {
+  await withHistoryLock(() => {
+    const chats = loadChats();
+    try {
+      if (localStorage.getItem(HISTORY_KEY) === null) {
+        const entries = cleanEntries(JSON.parse(localStorage.getItem(LEGACY_HISTORY_KEY) || "[]"));
+        if (entries.length) {
+          const chat = { id: newEntryId(), createdAt: entries[0].createdAt, updatedAt: entries.at(-1).createdAt, entries };
+          chats.push(chat);
+          writeChats(chats);
+          if (storageAvailable) localStorage.removeItem(LEGACY_HISTORY_KEY);
+        }
+      }
+    } catch { /* Ignore malformed legacy history. */ }
+    let selected;
+    try { selected = sessionStorage.getItem(ACTIVE_CHAT_KEY); } catch { /* Use latest chat. */ }
+    const id = selected === "" ? null : chats.some((chat) => chat.id === selected)
+      ? selected : [...chats].sort((a, b) => b.updatedAt - a.updatedAt)[0]?.id || null;
+    selectChatId(id);
+    renderThread();
+    renderSidebar();
+  });
 }
 
 async function checkAvailability() {
@@ -221,6 +376,7 @@ function renderAnswer(article, payload) {
 
 async function ask(question, existingArticle = null) {
   if (activeRequest || !ready || !question.trim()) return;
+  if (!activeChatId) selectChatId(newEntryId());
   ui.welcome.hidden = true;
   ui.messages.hidden = false;
   if (!existingArticle) appendQuestion(question);
@@ -229,7 +385,7 @@ async function ask(question, existingArticle = null) {
   if (!entry) {
     entry = { id: newEntryId(), createdAt: Date.now(), question, payload: null };
     articleEntries.set(article, entry);
-    saveEntry(entry);
+    saveEntry(entry, true);
   }
   if (existingArticle) {
     if (ui.question.value.trim() === question) {
@@ -253,7 +409,7 @@ async function ask(question, existingArticle = null) {
     });
     if (!response.ok) throw new Error("Request failed");
     const payload = await response.json();
-    // The thread was reset while waiting ("Start fresh" or another tab); drop the result.
+    // The conversation changed or was deleted while waiting; drop the result.
     if (activeRequest !== controller) return;
     renderAnswer(article, payload);
     entry.payload = payload;
@@ -310,21 +466,6 @@ function queueRenderThread() {
   });
 }
 
-// When following another tab's reset, leave storage alone so exchanges saved since are kept.
-function startFresh(clearStorage = true) {
-  activeRequest?.abort();
-  activeRequest = null;
-  pendingSync = false;
-  historyGeneration++;
-  if (clearStorage) withHistoryLock(() => writeThread([]));
-  ui.messages.replaceChildren();
-  ui.messages.hidden = true;
-  ui.welcome.hidden = false;
-  ui.question.value = "";
-  ui.status.textContent = ready ? "Ready for your question" : "Temporarily unavailable";
-  resizeQuestion();
-}
-
 ui.form.addEventListener("submit", (event) => {
   event.preventDefault();
   const question = ui.question.value.trim();
@@ -348,13 +489,14 @@ document.querySelector("#new-session").addEventListener("click", () => {
   ui.question.focus();
 });
 
-// Follow changes made in other tabs; a reset there also stops this tab's pending answer.
+// Other tabs update the list without changing this tab's selected conversation.
 window.addEventListener("storage", (event) => {
-  // key is null when another tab called localStorage.clear().
   if (event.key !== HISTORY_KEY && event.key !== null) return;
-  if (event.key === null || event.newValue === null) startFresh(false);
+  const chats = loadChats();
+  if (activeChatId && !chats.some((chat) => chat.id === activeChatId)) startFresh();
   else if (activeRequest) pendingSync = true;
   else queueRenderThread();
+  renderSidebar();
 });
 
 document.querySelectorAll("[data-question]").forEach((button) => {
@@ -379,5 +521,51 @@ ui.messages.addEventListener("click", (event) => {
   source.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
 
-renderThread();
-checkAvailability();
+const mobileSidebar = window.matchMedia("(max-width: 800px)");
+const sidebar = document.querySelector("#chat-sidebar");
+const workspace = document.querySelector("#workspace");
+const sidebarToggle = document.querySelector("#toggle-sidebar");
+let sidebarOpen = !mobileSidebar.matches;
+
+function setSidebar(open) {
+  sidebarOpen = open;
+  document.body.classList.toggle("sidebar-open", open);
+  document.body.classList.toggle("sidebar-collapsed", !open);
+  sidebar.inert = !open;
+  workspace.inert = open && mobileSidebar.matches;
+  document.querySelector("#sidebar-backdrop").hidden = !(open && mobileSidebar.matches);
+  sidebarToggle.setAttribute("aria-expanded", String(open));
+  sidebarToggle.setAttribute("aria-label", open ? "Close sidebar" : "Open sidebar");
+  sidebarToggle.title = open ? "Close sidebar" : "Open sidebar";
+  if (open && mobileSidebar.matches) document.querySelector("#close-sidebar").focus();
+}
+
+sidebarToggle.addEventListener("click", () => setSidebar(!sidebarOpen));
+document.querySelector("#close-sidebar").addEventListener("click", () => {
+  setSidebar(false);
+  sidebarToggle.focus();
+});
+document.querySelector("#sidebar-backdrop").addEventListener("click", () => {
+  setSidebar(false);
+  sidebarToggle.focus();
+});
+document.querySelector("#history-search").addEventListener("input", renderSidebar);
+mobileSidebar.addEventListener("change", () => setSidebar(!mobileSidebar.matches));
+document.addEventListener("keydown", (event) => {
+  if (!sidebarOpen || !mobileSidebar.matches) return;
+  if (event.key === "Escape") {
+    setSidebar(false);
+    sidebarToggle.focus();
+  } else if (event.key === "Tab") {
+    const buttons = [...sidebar.querySelectorAll("a, button, input")];
+    const first = buttons[0];
+    const last = buttons.at(-1);
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault(); last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault(); first.focus();
+    }
+  }
+});
+setSidebar(sidebarOpen);
+initializeHistory().then(checkAvailability);
