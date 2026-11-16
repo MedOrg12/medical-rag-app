@@ -11,72 +11,96 @@
     <script src="/static/patient.js" defer></script>
   </head>
   <body>
-    <header class="topbar">
-      <a class="brand" href="/" aria-label="Stroke Companion home">
-        <svg class="brand-icon" aria-hidden="true"><use href="/static/icons.svg#heart-pulse"></use></svg>
-        <span>Stroke Companion</span>
-      </a>
-      <button id="new-session" class="quiet-button" type="button" aria-label="Start fresh" title="Start fresh">
-        <svg aria-hidden="true"><use href="/static/icons.svg#plus"></use></svg>
-        <span>Start fresh</span>
-      </button>
-    </header>
-
-    <main id="main">
-      <div id="availability" class="availability" hidden>
-        <p id="availability-message"></p>
-        <button id="check-status" class="quiet-button" type="button">
-          <svg aria-hidden="true"><use href="/static/icons.svg#rotate-ccw"></use></svg>
-          <span>Try again</span>
+    <aside id="chat-sidebar" class="chat-sidebar" aria-label="Chat history">
+      <div class="sidebar-heading">
+        <a class="brand" href="/" aria-label="Stroke Companion home">
+          <svg class="brand-icon" aria-hidden="true"><use href="/static/icons.svg#heart-pulse"></use></svg>
+          <span>Stroke Companion</span>
+        </a>
+        <button id="close-sidebar" class="icon-button sidebar-control" type="button" aria-label="Close sidebar" title="Close sidebar">
+          <svg aria-hidden="true"><use href="/static/icons.svg#panel-left"></use></svg>
         </button>
       </div>
+      <button id="new-session" class="new-chat-button" type="button">
+        <svg aria-hidden="true"><use href="/static/icons.svg#plus"></use></svg>
+        <span>New chat</span>
+      </button>
+      <label class="history-search" for="history-search">
+        <svg aria-hidden="true"><use href="/static/icons.svg#search"></use></svg>
+        <input id="history-search" type="search" placeholder="Search chats" autocomplete="off" aria-label="Search chats" />
+      </label>
+      <nav id="chat-history" class="chat-history" aria-label="Previous conversations"></nav>
+      <div class="sidebar-footer">
+        <span class="local-indicator" aria-hidden="true"></span>
+        <div><p>Saved on this browser</p><p id="history-notice" role="status">Your conversations stay on this device.</p></div>
+      </div>
+    </aside>
+    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+    <div id="workspace" class="workspace">
+      <header class="topbar">
+        <button id="toggle-sidebar" class="icon-button sidebar-control" type="button" aria-label="Open sidebar" aria-controls="chat-sidebar" aria-expanded="true" title="Open sidebar">
+          <svg aria-hidden="true"><use href="/static/icons.svg#panel-left"></use></svg>
+        </button>
+        <span id="conversation-title" class="conversation-title">New chat</span>
+        <span class="workspace-label">Stroke Companion</span>
+      </header>
 
-      <section id="welcome" class="welcome" aria-labelledby="welcome-title">
-        <p class="eyebrow">For patients and caregivers</p>
-        <h1 id="welcome-title">Your questions about stroke.</h1>
-        <p class="intro">What is on your mind today?</p>
-        <div class="suggestions" aria-label="Suggested questions">
-          <button type="button" data-question="What should I eat after a stroke?">
-            <span>Eating after a stroke</span>
-            <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
-          </button>
-          <button type="button" data-question="What is dysphagia after stroke?">
-            <span>Difficulty swallowing</span>
-            <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
-          </button>
-          <button type="button" data-question="What does rehabilitation after a stroke involve?">
-            <span>Recovery and rehabilitation</span>
-            <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
-          </button>
-          <button type="button" data-question="How can I reduce the risk of another stroke?">
-            <span>Preventing another stroke</span>
-            <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
+      <main id="main">
+        <div id="availability" class="availability" hidden>
+          <p id="availability-message"></p>
+          <button id="check-status" class="quiet-button" type="button">
+            <svg aria-hidden="true"><use href="/static/icons.svg#rotate-ccw"></use></svg>
+            <span>Try again</span>
           </button>
         </div>
-      </section>
 
-      <section id="messages" class="messages" aria-label="Questions and answers" tabindex="-1" hidden></section>
-
-      <div class="composer-area">
-        <form id="ask-form" class="composer">
-          <label for="question" class="sr-only">Your stroke question</label>
-          <textarea id="question" name="question" placeholder="Ask a question about stroke..." rows="2" maxlength="4000" required></textarea>
-          <div class="composer-bottom">
-            <span id="composer-status" class="composer-status" role="status">Checking availability...</span>
-            <button id="send" class="icon-button send" type="submit" aria-label="Send question" title="Send question" disabled>
-              <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up"></use></svg>
+        <section id="welcome" class="welcome" aria-labelledby="welcome-title">
+          <p class="eyebrow">For patients and caregivers</p>
+          <h1 id="welcome-title">Your questions about stroke.</h1>
+          <p class="intro">What is on your mind today?</p>
+          <div class="suggestions" aria-label="Suggested questions">
+            <button type="button" data-question="What should I eat after a stroke?">
+              <span>Eating after a stroke</span>
+              <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
             </button>
-            <button id="stop" class="icon-button send" type="button" aria-label="Stop waiting for this answer" title="Stop waiting" hidden>
-              <svg aria-hidden="true"><use href="/static/icons.svg#square"></use></svg>
+            <button type="button" data-question="What is dysphagia after stroke?">
+              <span>Difficulty swallowing</span>
+              <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
+            </button>
+            <button type="button" data-question="What does rehabilitation after a stroke involve?">
+              <span>Recovery and rehabilitation</span>
+              <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
+            </button>
+            <button type="button" data-question="How can I reduce the risk of another stroke?">
+              <span>Preventing another stroke</span>
+              <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up-right"></use></svg>
             </button>
           </div>
-        </form>
-        <p class="education-note">For education. Answers may be incomplete; discuss care decisions with your healthcare team.</p>
-      </div>
-    </main>
+        </section>
 
-    <footer class="footer">
-      <p>Possible stroke symptoms? Call emergency services immediately.</p>
-    </footer>
+        <section id="messages" class="messages" aria-label="Questions and answers" tabindex="-1" hidden></section>
+
+        <div class="composer-area">
+          <form id="ask-form" class="composer">
+            <label for="question" class="sr-only">Your stroke question</label>
+            <textarea id="question" name="question" placeholder="Ask a question about stroke..." rows="2" maxlength="4000" required></textarea>
+            <div class="composer-bottom">
+              <span id="composer-status" class="composer-status" role="status">Checking availability...</span>
+              <button id="send" class="icon-button send" type="submit" aria-label="Send question" title="Send question" disabled>
+                <svg aria-hidden="true"><use href="/static/icons.svg#arrow-up"></use></svg>
+              </button>
+              <button id="stop" class="icon-button send" type="button" aria-label="Stop waiting for this answer" title="Stop waiting" hidden>
+                <svg aria-hidden="true"><use href="/static/icons.svg#square"></use></svg>
+              </button>
+            </div>
+          </form>
+          <p class="education-note">For education. Answers may be incomplete; discuss care decisions with your healthcare team.</p>
+        </div>
+      </main>
+
+      <footer class="footer">
+        <p>Possible stroke symptoms? Call emergency services immediately.</p>
+      </footer>
+    </div>
   </body>
 </html>
