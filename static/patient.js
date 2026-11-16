@@ -489,11 +489,14 @@ window.addEventListener("storage", (event) => {
   // key is null when another tab called localStorage.clear().
   // Deleting a conversation that was never rewritten in the new format only removes the old key.
   if (event.key !== ThreadStore.KEY && event.key !== ThreadStore.LEGACY_KEY && event.key !== null) return;
-  if (ui.threadsDialog.open) renderThreadList();
-  if (!activeThreadId) return;
-  if (activeThreadSaved && !findThread(activeThreadId)) startNewChat();
-  else if (activeRequest) pendingSync = true;
-  else queueRenderThread();
+  // Look once the other tab's write has finished, so a migration still freeing space is not read as a deletion.
+  withHistoryLock(() => {
+    if (ui.threadsDialog.open) renderThreadList();
+    if (!activeThreadId) return;
+    if (activeThreadSaved && !findThread(activeThreadId)) startNewChat();
+    else if (activeRequest) pendingSync = true;
+    else renderThread();
+  });
 });
 
 document.querySelectorAll("[data-question]").forEach((button) => {
