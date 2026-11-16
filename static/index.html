@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/static/patient.css" />
     <link rel="stylesheet" href="/static/evidence.css" />
     <script src="/static/evidence.js" defer></script>
+    <script src="/static/threads.js" defer></script>
     <script src="/static/patient.js" defer></script>
   </head>
   <body>
@@ -16,11 +17,35 @@
         <svg class="brand-icon" aria-hidden="true"><use href="/static/icons.svg#heart-pulse"></use></svg>
         <span>Stroke Companion</span>
       </a>
-      <button id="new-session" class="quiet-button" type="button" aria-label="Start fresh" title="Start fresh">
-        <svg aria-hidden="true"><use href="/static/icons.svg#plus"></use></svg>
-        <span>Start fresh</span>
-      </button>
+      <div class="topbar-actions">
+        <button id="show-threads" class="quiet-button" type="button" aria-haspopup="dialog" aria-label="Your conversations" title="Your conversations">
+          <svg aria-hidden="true"><use href="/static/icons.svg#messages-square"></use></svg>
+          <span>Conversations</span>
+        </button>
+        <button id="new-session" class="quiet-button" type="button" aria-label="New conversation" title="New conversation">
+          <svg aria-hidden="true"><use href="/static/icons.svg#plus"></use></svg>
+          <span>New</span>
+        </button>
+      </div>
     </header>
+
+    <dialog id="threads-dialog" class="threads-dialog" aria-labelledby="threads-title">
+      <div class="threads-head">
+        <h2 id="threads-title">Your conversations</h2>
+        <button class="icon-button dialog-close" type="button" aria-label="Close" title="Close">
+          <svg aria-hidden="true"><use href="/static/icons.svg#x"></use></svg>
+        </button>
+      </div>
+      <p class="threads-note">Saved only in this browser. Anyone using this device can see them.</p>
+      <ul id="thread-list" class="thread-list" aria-labelledby="threads-title"></ul>
+      <p id="threads-empty" class="threads-empty" hidden>No saved conversations yet.</p>
+      <div class="threads-foot">
+        <button id="delete-all" class="quiet-button danger-button" type="button">
+          <svg aria-hidden="true"><use href="/static/icons.svg#trash-2"></use></svg>
+          <span>Delete all</span>
+        </button>
+      </div>
+    </dialog>
 
     <main id="main">
       <div id="availability" class="availability" hidden>

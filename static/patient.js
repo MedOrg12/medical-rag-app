@@ -11,20 +11,29 @@ const ui = {
   availability: document.querySelector("#availability"),
   availabilityMessage: document.querySelector("#availability-message"),
   checkStatus: document.querySelector("#check-status"),
+  newSession: document.querySelector("#new-session"),
+  showThreads: document.querySelector("#show-threads"),
+  threadsDialog: document.querySelector("#threads-dialog"),
+  threadList: document.querySelector("#thread-list"),
+  threadsEmpty: document.querySelector("#threads-empty"),
+  deleteAll: document.querySelector("#delete-all"),
 };
 
-const HISTORY_KEY = "stroke-companion:thread:v1";
-const HISTORY_LIMIT = 50;
+// The conversation a tab shows survives a reload of that tab; other tabs keep their own.
+const ACTIVE_KEY = "stroke-companion:active-thread";
 
 let ready = false;
 let activeRequest = null;
 let answerSequence = 0;
-// Another tab changed the thread while this tab was busy; redraw once the request ends.
+// Another tab changed the open conversation while this tab was busy; redraw once the request ends.
 let pendingSync = false;
-// Bumped on every reset so saves queued before it are dropped.
-let historyGeneration = 0;
+// null until the first question of a new conversation.
+let activeThreadId = null;
+// Set once the open conversation is in storage, so its absence there means it was deleted.
+let activeThreadSaved = false;
 
 // Saved entries are { id, createdAt, question, payload }; payload stays null until an answer arrives.
+// In memory each entry also carries the threadId of its conversation.
 const articleEntries = new WeakMap();
 
 function icon(name, className = "") {
@@ -45,54 +54,49 @@ function resizeQuestion() {
   updateControls();
 }
 
-function loadThread() {
+// localStorage throws in some private modes; treat that as nothing saved.
+function storage() {
   try {
-    const stored = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
-    if (!Array.isArray(stored)) return [];
-    return stored
-      .filter((entry) => entry && typeof entry.id === "string" && typeof entry.question === "string" && entry.question.trim())
-      .map((entry) => ({
-        id: entry.id,
-        createdAt: Number(entry.createdAt) || 0,
-        question: entry.question,
-        payload: entry.payload && typeof entry.payload === "object" ? entry.payload : null,
-      }))
-      .slice(-HISTORY_LIMIT);
+    return localStorage;
   } catch {
-    return [];
+    return null;
   }
 }
 
-function writeThread(entries) {
-  while (true) {
-    try {
-      if (entries.length) localStorage.setItem(HISTORY_KEY, JSON.stringify(entries));
-      else localStorage.removeItem(HISTORY_KEY);
-      return;
-    } catch (error) {
-      // Drop the oldest exchanges when storage is full; give up if storage is unavailable.
-      if (error?.name !== "QuotaExceededError" || entries.length <= 1) return;
-      entries = entries.slice(1);
-    }
-  }
+function loadThreads() {
+  const store = storage();
+  return store ? ThreadStore.read(store) : [];
+}
+
+function findThread(id) {
+  return id ? loadThreads().find((thread) => thread.id === id) || null : null;
 }
 
 // Serialize read-modify-write cycles across tabs where the Web Locks API is available.
 function withHistoryLock(callback) {
-  if (navigator.locks?.request) navigator.locks.request(HISTORY_KEY, callback).catch(() => {});
+  if (navigator.locks?.request) navigator.locks.request(ThreadStore.KEY, callback).catch(() => {});
   else callback();
 }
 
-// Merge into the stored thread so exchanges saved by other tabs are kept.
-function saveEntry(entry) {
-  const generation = historyGeneration;
-  const saved = { id: entry.id, createdAt: entry.createdAt, question: entry.question, payload: entry.payload };
+function setActiveThread(id, saved = Boolean(id)) {
+  activeThreadId = id;
+  activeThreadSaved = saved;
+  try {
+    if (id) sessionStorage.setItem(ACTIVE_KEY, id);
+    else sessionStorage.removeItem(ACTIVE_KEY);
+  } catch {
+    // The open conversation is just not remembered across reloads.
+  }
+}
+
+// Merge into the stored conversation so exchanges saved by other tabs are kept.
+function saveEntry(entry, create = false) {
   withHistoryLock(() => {
-    if (generation !== historyGeneration) return;
-    const entries = loadThread().filter((stored) => stored.id !== saved.id);
-    entries.push(saved);
-    entries.sort((a, b) => a.createdAt - b.createdAt);
-    writeThread(entries.slice(-HISTORY_LIMIT));
+    const store = storage();
+    if (!store) return;
+    const saved = ThreadStore.saveEntry(store, entry.threadId, entry, { create });
+    if (saved && entry.threadId === activeThreadId) activeThreadSaved = true;
+    if (ui.threadsDialog.open) renderThreadList();
   });
 }
 
@@ -227,9 +231,10 @@ async function ask(question, existingArticle = null) {
   const article = existingArticle || createAnswer();
   let entry = articleEntries.get(article);
   if (!entry) {
-    entry = { id: newEntryId(), createdAt: Date.now(), question, payload: null };
+    if (!activeThreadId) setActiveThread(newEntryId(), false);
+    entry = { id: newEntryId(), threadId: activeThreadId, createdAt: Date.now(), question, payload: null };
     articleEntries.set(article, entry);
-    saveEntry(entry);
+    saveEntry(entry, true);
   }
   if (existingArticle) {
     if (ui.question.value.trim() === question) {
@@ -253,7 +258,7 @@ async function ask(question, existingArticle = null) {
     });
     if (!response.ok) throw new Error("Request failed");
     const payload = await response.json();
-    // The thread was reset while waiting ("Start fresh" or another tab); drop the result.
+    // The conversation was left or deleted while waiting; drop the result.
     if (activeRequest !== controller) return;
     renderAnswer(article, payload);
     entry.payload = payload;
@@ -282,7 +287,9 @@ async function ask(question, existingArticle = null) {
 
 function renderThread() {
   pendingSync = false;
-  const entries = loadThread();
+  const thread = findThread(activeThreadId);
+  if (!thread && activeThreadSaved) setActiveThread(null);
+  const entries = thread ? thread.entries : [];
   ui.messages.replaceChildren();
   ui.messages.hidden = !entries.length;
   ui.welcome.hidden = Boolean(entries.length);
@@ -290,6 +297,7 @@ function renderThread() {
   for (const entry of entries) {
     appendQuestion(entry.question);
     const article = createAnswer();
+    entry.threadId = thread.id;
     articleEntries.set(article, entry);
     try {
       if (!entry.payload) throw new Error("Unfinished answer");
@@ -310,13 +318,81 @@ function queueRenderThread() {
   });
 }
 
-// When following another tab's reset, leave storage alone so exchanges saved since are kept.
-function startFresh(clearStorage = true) {
+// Leaving a conversation stops its pending answer; the question stays saved and can be retried.
+function leaveThread() {
   activeRequest?.abort();
   activeRequest = null;
   pendingSync = false;
-  historyGeneration++;
-  if (clearStorage) withHistoryLock(() => writeThread([]));
+}
+
+function openThread(id) {
+  leaveThread();
+  setActiveThread(id);
+  renderThread();
+  ui.status.textContent = ready ? "Ready for your question" : "Temporarily unavailable";
+  updateControls();
+}
+
+function formatUpdated(timestamp) {
+  const date = new Date(timestamp);
+  if (!timestamp || Number.isNaN(date.getTime())) return "";
+  return new Date().toDateString() === date.toDateString()
+    ? `Today, ${date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`
+    : date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function renderThreadList() {
+  const threads = loadThreads();
+  ui.threadList.replaceChildren();
+  ui.threadList.hidden = !threads.length;
+  ui.threadsEmpty.hidden = Boolean(threads.length);
+  ui.deleteAll.hidden = !threads.length;
+  for (const thread of threads) {
+    const item = document.createElement("li");
+    item.className = "thread-item";
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "thread-open";
+    open.dataset.threadId = thread.id;
+    if (thread.id === activeThreadId) open.setAttribute("aria-current", "true");
+    const title = document.createElement("span");
+    title.className = "thread-title";
+    title.textContent = thread.title;
+    const meta = document.createElement("span");
+    meta.className = "thread-meta";
+    const count = thread.entries.length;
+    meta.textContent = [formatUpdated(thread.updatedAt), `${count} ${count === 1 ? "question" : "questions"}`].filter(Boolean).join(" · ");
+    open.append(title, meta);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-button thread-delete";
+    remove.dataset.deleteThread = thread.id;
+    remove.title = "Delete conversation";
+    remove.setAttribute("aria-label", `Delete conversation: ${thread.title}`);
+    remove.innerHTML = icon("trash-2");
+    item.append(open, remove);
+    ui.threadList.append(item);
+  }
+}
+
+function focusThreadList() {
+  (ui.threadList.querySelector('[aria-current="true"]') || ui.threadList.querySelector(".thread-open") || ui.threadsDialog.querySelector(".dialog-close")).focus();
+}
+
+function deleteThread(id) {
+  if (id === activeThreadId) startNewChat();
+  withHistoryLock(() => {
+    const store = storage();
+    if (store) ThreadStore.remove(store, id);
+    if (!ui.threadsDialog.open) return;
+    renderThreadList();
+    focusThreadList();
+  });
+}
+
+function startNewChat() {
+  leaveThread();
+  setActiveThread(null);
   ui.messages.replaceChildren();
   ui.messages.hidden = true;
   ui.welcome.hidden = false;
@@ -343,16 +419,52 @@ ui.question.addEventListener("keydown", (event) => {
 ui.stop.addEventListener("click", () => activeRequest?.abort());
 ui.checkStatus.addEventListener("click", checkAvailability);
 
-document.querySelector("#new-session").addEventListener("click", () => {
-  startFresh();
+ui.newSession.addEventListener("click", () => {
+  startNewChat();
   ui.question.focus();
 });
 
-// Follow changes made in other tabs; a reset there also stops this tab's pending answer.
+ui.showThreads.addEventListener("click", () => {
+  renderThreadList();
+  ui.threadsDialog.showModal();
+  focusThreadList();
+});
+
+ui.threadsDialog.addEventListener("click", (event) => {
+  // A click on the backdrop lands on the dialog element itself.
+  if (event.target === ui.threadsDialog || event.target.closest(".dialog-close")) {
+    ui.threadsDialog.close();
+    return;
+  }
+  const open = event.target.closest("[data-thread-id]");
+  if (open) {
+    ui.threadsDialog.close();
+    if (open.dataset.threadId !== activeThreadId) openThread(open.dataset.threadId);
+    ui.question.focus();
+    return;
+  }
+  const remove = event.target.closest("[data-delete-thread]");
+  if (remove) deleteThread(remove.dataset.deleteThread);
+});
+
+ui.deleteAll.addEventListener("click", () => {
+  if (!confirm("Delete all saved conversations from this browser?")) return;
+  startNewChat();
+  withHistoryLock(() => {
+    const store = storage();
+    if (store) ThreadStore.removeAll(store);
+    renderThreadList();
+    focusThreadList();
+  });
+});
+
+// Follow changes made in other tabs; deleting the open conversation there also stops this tab's pending answer.
 window.addEventListener("storage", (event) => {
   // key is null when another tab called localStorage.clear().
-  if (event.key !== HISTORY_KEY && event.key !== null) return;
-  if (event.key === null || event.newValue === null) startFresh(false);
+  if (event.key !== ThreadStore.KEY && event.key !== null) return;
+  if (ui.threadsDialog.open) renderThreadList();
+  if (!activeThreadId) return;
+  if (activeThreadSaved && !findThread(activeThreadId)) startNewChat();
   else if (activeRequest) pendingSync = true;
   else queueRenderThread();
 });
@@ -379,5 +491,13 @@ ui.messages.addEventListener("click", (event) => {
   source.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
 
+// Reopen this tab's conversation after a reload; a new tab opens the most recent one.
+let restoredId = null;
+try {
+  restoredId = sessionStorage.getItem(ACTIVE_KEY);
+} catch {
+  // Fall back to the most recent conversation.
+}
+setActiveThread(findThread(restoredId)?.id || loadThreads()[0]?.id || null);
 renderThread();
 checkAvailability();

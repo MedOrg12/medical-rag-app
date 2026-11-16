@@ -43,6 +43,7 @@ def test_patient_and_developer_views_are_separate(tmp_path) -> None:
     assert 'id="eval-run-button"' in developer.text
     assert 'id="ingest-button"' in developer.text
     assert client.get("/static/patient.js").status_code == 200
+    assert client.get("/static/threads.js").status_code == 200
     assert client.get("/static/dev.js").status_code == 200
     assert client.get("/static/dev.css").status_code == 200
     assert client.get("/static/icons.svg").status_code == 200

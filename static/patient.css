@@ -51,6 +51,27 @@ h1, h2, p { margin: 0; }
   font-weight: 550;
 }
 .quiet-button:hover { background: var(--soft); color: var(--ink); }
+.topbar-actions { display: flex; align-items: center; gap: 4px; }
+.threads-dialog { width: min(100% - 32px, 520px); max-height: min(100svh - 64px, 640px); padding: 0; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: #fff; box-shadow: 0 12px 40px #1b2b2733; }
+.threads-dialog[open] { display: flex; flex-direction: column; }
+.threads-dialog::backdrop { background: #1b2b2740; }
+.threads-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 4px 20px; }
+.threads-head h2 { font-size: 18px; font-weight: 650; }
+.dialog-close { color: var(--muted); background: transparent; }
+.dialog-close:hover { background: var(--soft); color: var(--ink); }
+.threads-note { padding: 0 20px 12px; color: var(--muted); font-size: 13px; }
+.thread-list { list-style: none; margin: 0; padding: 0 8px 8px; overflow-y: auto; }
+.thread-item { display: flex; align-items: center; gap: 4px; border-radius: 6px; }
+.thread-item:hover { background: var(--soft); }
+.thread-open { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 56px; padding: 8px 12px; border: 0; border-radius: 6px; background: transparent; color: var(--ink); text-align: left; }
+.thread-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 550; line-height: 1.4; }
+.thread-open[aria-current="true"] .thread-title { color: var(--accent); }
+.thread-open:focus-visible { outline-offset: -3px; }
+.thread-meta { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.thread-delete { color: var(--muted); background: transparent; }
+.thread-delete:hover, .danger-button:hover { color: var(--warning); }
+.threads-empty { padding: 4px 20px 20px; color: var(--muted); font-size: 15px; }
+.threads-foot { display: flex; justify-content: flex-end; padding: 8px 12px; border-top: 1px solid var(--line); }
 main { width: min(100% - 48px, 760px); min-height: calc(100svh - 145px); margin: 0 auto; display: flex; flex-direction: column; }
 .welcome { padding: 66px 0 40px; }
 .eyebrow { color: var(--accent); font-size: 14px; font-weight: 600; margin-bottom: 15px; }
@@ -146,7 +167,7 @@ textarea:focus-visible { outline: none; }
   .topbar { min-height: 72px; padding: 12px 16px; gap: 8px; }
   .brand { gap: 8px; font-size: 16px; }
   .brand-icon { width: 24px; height: 24px; }
-  #new-session { padding-inline: 8px; font-size: 12px; }
+  .topbar-actions .quiet-button { padding-inline: 8px; font-size: 12px; }
   main { width: calc(100% - 36px); min-height: calc(100svh - 149px); }
   .welcome { padding: 36px 0 24px; }
   h1 { font-size: 28px; }
@@ -160,7 +181,7 @@ textarea:focus-visible { outline: none; }
   .question-message { max-width: 95%; }
   .messages { padding-top: 26px; }
 }
-@media (max-width: 360px) {
-  #new-session { width: 44px; flex-shrink: 0; padding: 0; }
-  #new-session span { display: none; }
+@media (max-width: 420px) {
+  .topbar-actions .quiet-button { width: 44px; flex-shrink: 0; padding: 0; }
+  .topbar-actions .quiet-button span { display: none; }
 }
