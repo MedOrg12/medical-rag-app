@@ -316,6 +316,14 @@ function renderThread() {
   ui.messages.lastElementChild.scrollIntoView({ block: "end" });
 }
 
+function shownEntries() {
+  return [...ui.messages.querySelectorAll(".answer-message")].map((article) => articleEntries.get(article)).filter(Boolean);
+}
+
+function entriesSignature(entries) {
+  return entries.map((entry) => `${entry.id}:${entry.payload ? 1 : 0}`).join(",");
+}
+
 // Redraw after this tab's queued saves land, but never over an answer that is still loading.
 function queueRenderThread() {
   pendingSync = true;
@@ -493,8 +501,14 @@ window.addEventListener("storage", (event) => {
   withHistoryLock(() => {
     if (ui.threadsDialog.open) renderThreadList();
     if (!activeThreadId) return;
-    if (activeThreadSaved && !findThread(activeThreadId)) startNewChat();
-    else if (activeRequest) pendingSync = true;
+    const thread = findThread(activeThreadId);
+    if (!thread) {
+      if (activeThreadSaved) startNewChat();
+      return;
+    }
+    // Writes that change nothing on screen, such as to another conversation, must not redraw it.
+    if (entriesSignature(thread.entries) === entriesSignature(shownEntries())) return;
+    if (activeRequest) pendingSync = true;
     else renderThread();
   });
 });
