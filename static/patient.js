@@ -402,12 +402,14 @@ function deleteThread(id) {
   if (id === activeThreadId) startNewChat();
   withHistoryLock(() => {
     const store = storage();
+    const title = findThread(id)?.title;
     if (store) ThreadStore.remove(store, id);
     leaveIfDeleted();
     if (!ui.threadsDialog.open) return;
     renderThreadList();
     focusThreadList();
-    ui.threadsAnnounce.textContent = "Conversation deleted";
+    // A distinct message each time, since some screen readers skip repeated status text.
+    ui.threadsAnnounce.textContent = title ? `Deleted conversation: ${title}` : "Conversation deleted";
   });
 }
 
@@ -485,7 +487,8 @@ ui.deleteAll.addEventListener("click", () => {
 // Follow changes made in other tabs; deleting the open conversation there also stops this tab's pending answer.
 window.addEventListener("storage", (event) => {
   // key is null when another tab called localStorage.clear().
-  if (event.key !== ThreadStore.KEY && event.key !== null) return;
+  // Deleting a conversation that was never rewritten in the new format only removes the old key.
+  if (event.key !== ThreadStore.KEY && event.key !== ThreadStore.LEGACY_KEY && event.key !== null) return;
   if (ui.threadsDialog.open) renderThreadList();
   if (!activeThreadId) return;
   if (activeThreadSaved && !findThread(activeThreadId)) startNewChat();
